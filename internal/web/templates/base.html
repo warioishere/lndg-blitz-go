@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+  <script id="api" data-token="{{.csrf_token}}" src="/static/api.js"></script>
+  <script src="/static/sort_table.js"></script>
+  <script src="/static/helpers.js"></script>
+  <script>
+    window.GRAPH_LINKS = {{.graph_links}};
+    window.NETWORK = {{.network}};
+    window.NETWORK_LINKS = {{.network_links}};
+    window.DARKMODE = {{if .darkmode}}true{{else}}false{{end}};
+  </script>
+  <script src="/static/gui_base.js"></script>
+  <script src="/static/qrcode.js"></script>
+  <head>
+    <meta charset="utf-8">
+    {{block "meta" .}}{{end}}
+    <title>{{block "title" .}}LNDg{{end}}</title>
+    <link href="/static/w3style.css" rel="stylesheet" type="text/css">
+  </head>
+  <body {{if .darkmode}}class="dark-mode"{{end}}>
+    <div id="content">
+      {{if .messages}}
+      <div id="messages" class="w3-container w3-padding-small">
+        {{range .messages}}
+        <div class="w3-panel w3-orange w3-display-container w3-padding">
+          <span onclick="this.parentElement.style.display='none'" class="w3-button w3-hover-red w3-display-topright">X</span>
+          <h1 style="word-wrap:break-word">{{.message}}</h1>
+        </div>
+        {{end}}
+      </div>
+      {{end}}
+      <div class="w3-container">
+        <h1><a href="/">My Lnd Overview</a></h1>
+      </div>
+      {{block "content" .}}{{end}}
+    </div>
+  </body>
+  <footer>
+    <div id="footer">
+      <div class="w3-container w3-padding-small">
+        <center><button id="toggleTheme" onclick="toggleTheme()">{{if .darkmode}}Light{{else}}Dark{{end}} Theme</button></center>
+      </div>
+      <div class="w3-container w3-padding-small">
+        <center>LNDg v1.10.1</center>
+        <center><a href="/logout/">Logout</a></center>
+      </div>
+    </div>
+  </footer>
+</html>

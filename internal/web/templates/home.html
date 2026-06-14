@@ -1,0 +1,483 @@
+{{define "title"}}LNDg - Dashboard{{end}}
+{{define "content"}}
+<span style="position: absolute;top: 0;right: 0;padding: 5px;">Dashboard Last Updated: <span id='datetime'></span> <label title="Auto Page Refresh" class="switch"><input type="checkbox" {{if .refresh_not_false}}checked="true"{{end}}><span onclick="toggleAutoRefresh()" class="slider round"></span></label></span>
+<div class="w3-container w3-padding-small">
+  <script language="Javascript">
+    function qr_gen(addr){
+      var qrcode = new QRCode(byId('qrcode'), {text:addr, width:256, height:256})
+      byId('qrcode').style.display = 'block'
+    }
+    function qr_clear(){
+      byId('qrcode').replaceChildren()
+      byId('qrcode').style.display = 'none'
+    }
+    function qr_addr(addr){
+      var qrcode = new QRCode(byId(addr), {text:addr, width:256, height:256})
+    }
+    function toggleAutoRefresh() {
+      if(document.cookie.includes('refresh=false')){
+        document.cookie = `refresh=true;max-age=34560000`
+      }else{
+        document.cookie = `refresh=false;max-age=34560000`
+      }
+    }
+  </script>
+    <h3>
+      <span style="font-size: 12px;vertical-align: middle; padding-left: 18px; border:1px solid {{.node_info.color}}; background-color: {{.node_info.color}}" class="w3-circle" title="{{.node_info.color}}"></span>
+      <a style="margin-left:6px;" href="{{.graph_links}}/{{.network}}node/{{.node_info.identity_pubkey}}" target="_blank">{{.node_info.alias}}</a> | {{.node_info.identity_pubkey}}
+    </h3>
+  <h6>
+    <span id="lnd" class="w3-tag w3-round" title="{{.node_info.version}}">LND</span>
+    <span id="timechain" style="padding:1.5px 8px;" class="w3-round w3-border">---</span>
+  </h6>
+  <h6>
+    <span style="padding:1.5px 8px;" class="w3-round w3-border w3-border-grey">Public Capacity: <span id="public_capacity">0</span></span>
+    <span style="padding:1.5px 8px;" class="w3-round w3-border w3-border-grey">Active Channels: <span id="public_channels_count">0</span> / <span id="total_channels">0</span></span>
+    <span id="peers" style="padding:1.5px 8px;" class="w3-round w3-border w3-border-grey">0</span>
+    <span id="dbSize" style="padding:1.5px 8px;" class="w3-round w3-border w3-border-grey">---</span>
+    <span style="padding:1.5px 8px;" class="w3-round w3-border w3-border-grey">Total States Updates: <span id="updates">---</span></span>
+    <span style="padding:1.5px 8px;margin-left:4px" class="w3-round w3-border w3-border-grey"><a href="#sign">Sign a message</a></span>
+  </h6>
+  <h6 style="display: none" id="private_stats">
+    <span style="padding:1.5px 8px;" class="w3-round w3-border w3-border-grey">Private Capacity: <span id="private_capacity">0</span></span>
+    <span style="padding:1.5px 8px;" class="w3-round w3-border w3-border-grey">Locked Liquidity: <span id="private_liquidity">0</span></span>
+    <span style="padding:1.5px 8px;" class="w3-round w3-border w3-border-grey">Active Private Channels: <span id="private_active">0</span> / <span id="private_count">0</span></span>
+  </h6>
+  Addresses:
+  {{range .node_info.uris}}
+  <div class="w3-container" style="height:40px">
+    <text readonly style="word-wrap: break-word;vertical-align:top;">{{.}}</text>
+    <a style="display: inline-block;position:relative;width:15px;height:15px" href="#." data-value="{{.}}" onclick="toggle(this)" onmouseleave="qr_clear()" onmouseenter="qr_gen(this.dataset.value)">
+      <svg style="position:absolute;top:0;left:0;width:15px;height:15px" version="1.1" viewBox="0 0 16 16">
+        <path fill-rule="evenodd" d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z"></path>
+        <path fill-rule="evenodd" d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"></path>
+      </svg>
+      <svg style="position:absolute;top:0;left:0;width:15px;height:15px;visibility:hidden" version="1.1" viewBox="0 0 16 16">
+        <path style="fill:#3fb950;stroke:#3fb950;" fill-rule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"></path>
+      </svg>
+    </a>
+    <div style="display:none;position:absolute;top:30px;right:30px;padding:30px;z-index:11;background:white" id="qrcode"></div>
+  </div>
+  {{end}}
+</div>
+<div class="w3-row w3-container w3-padding-small" >
+  <table class="w3-col w3-small w3-table-all w3-centered w3-hoverable" style="min-width:300px;width:25%">
+    <tr>
+      <th title="Total Inbound/Total Outbound">Ratio: <span id="liq_ratio">0</span></h>
+      <th>Outbound</th>
+      <th>Inbound</th>
+      <th>Unsettled</th>
+    </tr>
+    <tr>
+      <th>Active</th>
+      <td id="active_outbound">0</td>
+      <td id="active_inbound">0</td>
+      <td id="active_unsettled">0</td>
+    </tr>
+    <tr>
+      <th>Inactive</th>
+      <td id="inactive_outbound">0</td>
+      <td id="inactive_inbound">0</td>
+      <td id="inactive_unsettled">0</td>
+    </tr>
+    <tr>
+      <th>Total</th>
+      <td id="total_outbound">0</td>
+      <td id="total_inbound">0</td>
+      <td id="total_unsettled">0</td>
+    </tr>
+  </table>
+  <table class="w3-col w3-small w3-table-all w3-centered w3-hoverable" style="min-width:1000px;width:75%">
+    <thead>
+      <tr>
+        <th class="w3-border-bottom w3-border-right"><a href="/balances" target="_blank">Balance</a>: <span id="total_balance">0</span></th>
+        <th id="onChain" class="w3-border-bottom w3-border-right">Onchain: 0</th>
+        <th id="confirmed" colspan="2" class="w3-border-bottom w3-border-right">Confirmed: 0</th>
+        <th id="unconfirmed" class="w3-border-bottom w3-border-right">Unconfirmed: 0</th>
+        <th id="limbo" class="w3-border-bottom w3-border-right" title="Amount in limbo from channel closing activities">Limbo: 0</th>
+        <th class="w3-border-bottom w3-border-right"><a href="/pending_htlcs" target="_blank">Pending HTLCs</a>: <span id="pending_htlcs">0</span></th>
+        <th class="w3-border-bottom">
+          <a style="cursor: pointer" onclick="Sync.POST('newaddress/', {body: {legacy:false}}, r => {showBannerMsg('Onchain Address:', r.data, true, r.data);qr_addr(r.data);})">New Onchain Address</a> | <a style="cursor: pointer" onclick="Sync.POST('newaddress/', {body: {legacy:true}}, r => {showBannerMsg('Legacy Address:', r.data, true, r.data);qr_addr(r.data);})">Legacy</a>
+        </th>
+      </tr>
+    </thead>
+    <tr>
+      <th>Period</th>
+      <th>Routed</th>
+      <th>Fees Earned</th>
+      <th>Fees Paid</th>
+      <th>Onchain fees</th>
+      <th>Cost</th>
+      <th title="Profit made per outbound [profit per outbound including onchain fees]">Profit/Outbound</th>
+      <th title="Percentage of outbound routed in the last 7 days">Outbound Utilization</th>
+    </tr>
+    <tr>
+      <td>1-Day</td>
+      <td id="routed_1day">0</td>
+      <td id="earned_1day">0</td>
+      <td id="fees_1day">0</td>
+      <td id="onchain_costs_1day">0</td>
+      <td id="percent_cost_1day">0</td>
+      <td id="profit_per_outbound_1d">0</td>
+      <td id="routed_1day_percent">0</td>
+    </tr>
+    <tr>
+      <td>7-Day</td>
+      <td id="routed_7day">0</td>
+      <td id="earned_7day">0</td>
+      <td id="fees_7day">0</td>
+      <td id="onchain_costs_7day">0</td>
+      <td id="percent_cost_7day">0</td>
+      <td id="profit_per_outbound_7d">0</td>
+      <td id="routed_7day_percent">0</td>
+    </tr>
+  </table>
+</div>
+<br/>
+<div class="w3-bar w3-border-top" style="background-color: transparent">
+  <a class="w3-bar-item w3-hover-blue" href="/income" target="_blank">P&L</a>
+  <a class="w3-bar-item w3-hover-blue" href="/closures" target="_blank">Closures</a>
+  <a class="w3-bar-item w3-hover-blue" href="/opens" target="_blank">New Peers</a>
+  <a class="w3-bar-item w3-hover-blue" href="/unprofitable_channels" target="_blank">Unprofitable Channels</a>
+  <a class="w3-bar-item w3-hover-blue" href="/peerevents" target="_blank">Peer Events</a>
+  <a class="w3-bar-item w3-hover-blue" href="/actions" target="_blank">AR Actions</a>
+  <a class="w3-bar-item w3-hover-blue" href="/fees" target="_blank">Fee Rates</a>
+  <a class="w3-bar-item w3-hover-blue" href="/full-fee-adj" target="_blank">Full-Fee Adj</a>
+  <a class="w3-bar-item w3-hover-blue" href="/amboss-fees" target="_blank">Amboss Fees</a>
+  <a class="w3-bar-item w3-hover-blue" href="/inbound-offset" target="_blank">Inbound Offset</a>
+  <a class="w3-bar-item w3-hover-blue" href="/auto-maxhtlc" target="_blank">Auto MaxHTLC</a>
+  <a class="w3-bar-item w3-hover-blue" href="/emergency-fees" target="_blank">Emergency Fees</a>
+  <a class="w3-bar-item w3-hover-blue" href="/autopilot" target="_blank">Autopilot</a>
+  <a class="w3-bar-item w3-hover-blue" href="/autofees" target="_blank">Outbound Fee Log</a>
+  <a class="w3-bar-item w3-hover-blue" href="/inbound-fee-log" target="_blank">Inbound Fee Log</a>
+  <a class="w3-bar-item w3-hover-blue" href="/fee-limit-protection" target="_blank">AF Fee Limit Protection</a>
+  <a class="w3-bar-item w3-hover-blue" href="/channels" target="_blank">Channel Performance</a>
+  <a class="w3-bar-item w3-hover-blue" href="/keysends" target="_blank">Keysends</a>
+  <a class="w3-bar-item w3-hover-blue" href="/rebalancing" target="_blank">Rebalancing</a>
+  <a class="w3-bar-item w3-hover-blue" href="/rebalanceroutes" target="_blank">Saved Routes</a>
+  <a class="w3-bar-item w3-hover-blue" href="/graphwatcher" target="_blank">Graph Watcher</a>
+  <a class="w3-bar-item w3-hover-blue" href="/towers" target="_blank">Towers</a>
+  <a class="w3-bar-item w3-hover-blue" href="/batch" target="_blank">Batching</a>
+  <a class="w3-bar-item w3-hover-blue" href="/trades" target="_blank">Trades</a>
+  <a class="w3-bar-item w3-hover-blue" href="/advanced" target="_blank">Advanced Settings</a>
+  <a class="w3-bar-item w3-hover-blue" href="/advanced_rebalancing" target="_blank">Advanced Rebalancing</a>
+  <a class="w3-bar-item w3-hover-blue" href="/logs/?tail=20" target="_blank">Logs</a>
+</div>
+<div id="active_channels_container" style="display:none" class="w3-container w3-padding-small">
+  <div class="w3-container w3-padding-small table" style="overflow:auto;max-height:1000px">
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <thead>
+        <tr>
+          <th onclick="sortTable(event.target, 0, 'String', 0, 'a')">Channel ID</th>
+          <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Peer Alias</th>
+          <th onclick="sortTable(event.target, 2, 'int')">Outbound Liquidity</th>
+          <th onclick="sortTable(event.target, 3, 'int', 0, 'label')">Capacity</th>
+          <th onclick="sortTable(event.target, 4, 'int')">Inbound Liquidity</th>
+          <th onclick="sortTable(event.target, 5, 'int')">Unsettled</th>
+          <th title="Your outgoing fee rate (ppm)" width=3% onclick="sortTable(event.target, 6, 'int')">oRate</th>
+          <th title="Your outgoing base rate (msat)" width=3% onclick="sortTable(event.target, 7, 'int')">oBase</th>
+          <th title="Outgoing routing volume in the last day" onclick="sortTable(event.target, 8, 'm')">o1D</th>
+          <th title="Incoming routing volume in the last day" onclick="sortTable(event.target, 9, 'm')">i1D</th>
+          <th title="Outgoing routing volume in the last 7 days" onclick="sortTable(event.target, 10, 'm')">o7D</th>
+          <th title="Incoming routing volume in the last 7 days" onclick="sortTable(event.target, 11, 'm')">i7D</th>
+          <th title="Peer's incoming fee rate (ppm)" width=3% onclick="sortTable(event.target, 12, 'int')">iRate</th>
+          <th title="Peer's incoming base rate (msat)" width=3% onclick="sortTable(event.target, 13, 'int')">iBase</th>
+          <th title="When AR is DISABLED for the channel, keep pushing OUT of the channel until its outbound liquidity falls below the oTarget%." width=4%>oTarget%</th>
+          <th title="When AR is ENABLED for the channel, keep pulling IN to the channel until its inbound liquidity falls below the iTarget%." width=4%>iTarget%</th>
+          <th title="When AR is ENABLED it will refill the channel with outbound liquidity." width=4%>AR</th>
+        </tr>
+      </thead>
+      <tbody id="active_channels"></tbody>
+    </table>
+  </div>
+</div>
+<div id="inactive_channels_container" style="display:none" class="w3-container w3-padding-small">
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <thead>
+      <tr>
+        <th onclick="sortTable(event.target, 0, 'String')">Channel ID</th>
+        <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Peer Alias</th>
+        <th onclick="sortTable(event.target, 2, ' (')" width=9%>Outbound Liquidity</th>
+        <th onclick="sortTable(event.target, 3, 'int', 0, 'label')">Capacity</th>
+        <th onclick="sortTable(event.target, 4, ' (')" width=9%>Inbound Liquidity</th>
+        <th onclick="sortTable(event.target, 5, ' (')" width=6%>Unsettled</th>
+        <th onclick="sortTable(event.target, 6, 'int')" width=4%>oRate</th>
+        <th onclick="sortTable(event.target, 7, 'int')" width=4%>oBase</th>
+        <th onclick="sortTable(event.target, 8, 'int')" width=4%>iRate</th>
+        <th onclick="sortTable(event.target, 9, 'int')" width=4%>iBase</th>
+        <th width=5%>Local Commit</th>
+        <th width=5%>Local Reserve</th>
+        <th width=5%>Downtime</th>
+        <th width=5%>Opener</th>
+        <th width=4%>iTarget%</th>
+        <th width=4%>AR</th>
+      </tr>
+    </thead>
+    <tbody id="inactive_channels"></tbody>
+  </table>
+</div>
+<div id="private_channels_container" style="display:none" class="w3-container w3-padding-small">
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <thead>
+      <tr>
+        <th>Channel ID</th>
+        <th>Peer Alias</th>
+        <th width=9%>Outbound Liquidity</th>
+        <th>Capacity</th>
+        <th width=9%>Inbound Liquidity</th>
+        <th width=6%>Unsettled</th>
+        <th width=4%>oRate</th>
+        <th width=4%>oBase</th>
+        <th width=4%>oLife</th>
+        <th width=4%>iLife</th>
+        <th width=5%>Local Commit</th>
+        <th width=5%>Local Reserve</th>
+        <th width=5%>Opener</th>
+        <th width=5%>Status</th>
+      </tr>
+    </thead>
+    <tbody id="private_channels"></tbody>
+  </table>
+</div>
+<div id="pending_open_container" style="display:none" class="w3-container w3-padding-small">
+  <div class="w3-container w3-padding-small table" style="overflow:auto;max-height:1000px">
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <thead>
+        <tr>
+          <th>Peer Alias</th>
+          <th width=20%>Channel Point</th>
+          <th>Capacity</th>
+          <th>Local Balance</th>
+          <th>Remote Balance</th>
+          <th>AF</th>
+          <th>Fee Rate</th>
+          <th>Base Fee</th>
+          <th>CLTV</th>
+          <th>Amt</th>
+          <th>Max Cost%</th>
+          <th>oTarget%</th>
+          <th>iTarget%</th>
+          <th>AR</th>
+        </tr>
+      </thead>
+      <tbody id="pending_open"></tbody>
+    </table>
+  </div>
+</div>
+<div id="pending_closed_container" style="display:none" class="w3-container w3-padding-small">
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <thead>
+      <tr>
+        <th>Channel ID</th>
+        <th>Peer Alias</th>
+        <th>Capacity</th>
+        <th>Local Balance</th>
+        <th>Remote Balance</th>
+        <th>Balance In Limbo</th>
+        <th>Local Commit Fee</th>
+        <th width=20%>Closing TX</th>
+      </tr>
+    </thead>
+    <tbody id="pending_closed"></tbody>
+  </table>
+</div>
+<div id="pending_force_closed_container" style="display:none" class="w3-container w3-padding-small">
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <thead>
+      <tr>
+        <th>Channel ID</th>
+        <th>Peer Alias</th>
+        <th>Capacity</th>
+        <th>Local Balance</th>
+        <th>Remote Balance</th>
+        <th>Balance In Limbo</th>
+        <th>Maturity</th>
+        <th width=20%>Closing TX</th>
+      </tr>
+    </thead>
+    <tbody id="pending_force_closed"></tbody>
+  </table>
+</div>
+<div id="waiting_for_close_container" style="display:none" class="w3-container w3-padding-small">
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <thead>
+      <tr>
+        <th>Channel ID</th>
+        <th>Peer Alias</th>
+        <th>Capacity</th>
+        <th>Local Balance</th>
+        <th>Remote Balance</th>
+        <th>Balance In Limbo</th>
+        <th>Local Commit Fee</th>
+        <th width=20%>Closing TX</th>
+      </tr>
+    </thead>
+    <tbody id="waiting_for_close"></tbody>
+  </table>
+</div>
+<div id="routed_container" style="display:none" class="w3-container w3-padding-small">
+  <table id="forwardsTable" class="w3-table-all w3-centered w3-hoverable">
+    <thead>
+      <tr>
+        <th>Timestamp</th>
+        <th>Channel In Id</th>
+        <th>Channel In Alias</th>
+        <th colspan="2">Amount In</th>
+        <th colspan="2">Amount Out</th>
+        <th>Channel Out Alias</th>
+        <th>Channel Out Id</th>
+        <th>Fees Earned</th>
+        <th>PPM Earned</th>
+      </tr>
+    </thead>
+    <tbody id="routed">
+    </tbody>
+    <tfoot id="loadMoreForwards">
+      <tr style="background-color:transparent;cursor:pointer;">
+        <td colspan="11">
+          <a onclick="loadForwards()">Load More</a>
+        </td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+{{template "rebalances_table.html" (dict "count" 10 "load_count" 10 "title" "<a href=\"/rebalances\" target=\"_blank\">Rebalance Requests</a>")}}
+<div id="payments_container" style="display:none" class="w3-container w3-padding-small">
+  <table id="paymentsTable" class="w3-table-all w3-centered w3-hoverable">
+    <thead>
+      <tr>
+        <th>Timestamp</th>
+        <th>Value</th>
+        <th>Fee Paid</th>
+        <th>PPM Paid</th>
+        <th>Status</th>
+        <th>Chan Out Alias</th>
+        <th>Chan Out ID</th>
+        <th>Hash</th>
+        <th>Rebalance</th>
+        <th>Keysend</th>
+      </tr>
+    </thead>
+    <tbody id="payments"></tbody>
+    <tfoot id="loadMorePayments">
+      <tr style="background-color:transparent;cursor:pointer;">
+        <td colspan="10">
+          <a onclick="loadPayments()">Load More</a>
+        </td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+<div id="invoices_container" style="display:none" class="w3-container w3-padding-small">
+  <table id="invoicesTable" class="w3-table-all w3-centered w3-hoverable">
+    <thead>
+      <tr>
+        <th>Created</th>
+        <th>Settled</th>
+        <th>Value</th>
+        <th>Amount Paid</th>
+        <th>State</th>
+        <th>Channel In Alias</th>
+        <th>Channel In</th>
+        <th>Hash</th>
+        <th><a href="/keysends" target="_blank">Keysend</a></th>
+      </tr>
+    </thead>
+    <tbody id="invoices"></tbody>
+    <tfoot id="loadMoreInvoices">
+      <tr style="background-color:transparent;cursor:pointer;">
+        <td colspan="9">
+          <a onclick="loadInvoices()">Load More</a>
+        </td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+<div id="failed_htlcs_container" style="display:none" class="w3-container w3-padding-small">
+  <table id="failedhtlcsTable" class="w3-table-all w3-centered w3-hoverable">
+    <thead>
+      <tr>
+        <th>Timestamp</th>
+        <th>Chan In ID</th>
+        <th>Chan In Alias</th>
+        <th colspan="2">Forward Amount</th>
+        <th colspan="2">Actual Outbound</th>
+        <th>Chan Out Alias</th>
+        <th>Chan Out ID</th>
+        <th>Potential Fee</th>
+        <th>HTLC Failure</th>
+        <th>Failure Detail</th>
+      </tr>
+    </thead>
+    <tbody id="failed_htlcs"></tbody>
+    <tfoot id="loadMoreFailedHTLCs">
+      <tr style="background-color:transparent;cursor:pointer;">
+        <td colspan="12">
+          <a onclick="loadFailedHTLCs()">Load More</a>
+        </td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+{{template "local_settings.html" (dict "settings" .local_settings "title" "Auto-Rebalancer" "url" "rebalancing")}}
+<div class="w3-container w3-padding-small">
+  <h2>Connect to a Peer</h2>
+  <div class="w3-container w3-padding-small">
+    <form action="/connectpeer/" method="post">
+      <input style="min-width:70%" placeholder="PK or PK@host:port" id="peer_id" type="text" name="peer_id">
+      <input type="submit" value="OK">
+    </form>
+  </div>
+</div>
+<div class="w3-container w3-padding-small">
+  <h2>Open a Channel</h2>
+  <div class="w3-container w3-padding-small">
+    <form action="/openchannel/" method="post">
+      <span class="input" style="width:55%">
+        <input style="width:100%" placeholder="Public Key" id="peer_pubkey" type="text" name="peer_pubkey">
+      </span>
+      <span class="input" data-unit="sats">
+        <input id="local_amt" placeholder="0" type="number" name="local_amt">
+      </span>
+      <span class="input" data-unit="sats/vbyte" title="Opening tx fee">
+        <input id="sat_per_byte" placeholder="0" type="number" min="1" name="sat_per_byte">
+      </span>
+      <input type="submit" value="OK">
+    </form>
+  </div>
+</div>
+<div class="w3-container w3-padding-small">
+  <h2>Close a Channel</h2>
+  <div class="w3-container w3-padding-small">
+    <form action="/closechannel/" method="post">
+      <span class="input">
+        <input placeholder="Channel ID" id="chan_id" type="text" name="chan_id" required>
+      </span>
+      <div class="input" data-unit="sats/vbyte" title="Requested closing fee rate (graceful closures only)">
+        <input id="target_fee" placeholder="0" type="number" min="1" name="target_fee" required>
+      </div>
+      <label style="top:-4px;position:relative" title="Force close the channel" for="force">FC</label>
+      <input onchange="this.checked ? (byId('target_fee').setAttribute('disabled', 'disabled'), byId('target_fee').removeAttribute('required')) : (byId('target_fee').removeAttribute('disabled'), byId('target_fee').setAttribute('required', 'required'))" class="w3-check" id="force" style="top:2px" title="Force Close?" type="checkbox" name="force">
+      <input type="submit" style="position:relative;top:-4px" value="OK">
+    </form>
+  </div>
+</div>
+<div class="w3-container w3-padding-small">
+  <h2>Create Invoice</h2>
+  <div class="w3-container w3-padding-small">
+    <span class="input" data-unit="sats">
+      <input placeholder="0" id="invoice_value" type="number" name="value">
+    </span>
+    <input type="submit" value="OK" onclick="Sync.POST('createinvoice/', {body:{value: document.getElementById('invoice_value').value }}, r => {showBannerMsg('Invoice:', r.data, true, r.data);qr_addr(r.data);})">
+  </div>
+</div>
+<div class="w3-container w3-padding-small">
+  <h2>Sign a Message</h2>
+  <div id="sign" class="w3-container w3-padding-small">
+    <input placeholder="Message" id="signmsg" style="min-width:800px" id="value" type="text" name="message">
+    <input type="submit" value="OK" onclick="Sync.POST('sign_message/', {body: {message:byId('signmsg').value}}, r => {showBannerMsg('Signature:', r.data, true, r.data);qr_addr(r.data);})">
+  </div>
+</div>
+<script src="/static/rebalances_table.js"></script>
+<script src="/static/home.js"></script>
+{{end}}

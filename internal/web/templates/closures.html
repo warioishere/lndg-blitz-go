@@ -1,0 +1,150 @@
+{{define "title"}}LNDg - Closures{{end}}
+{{define "content"}}
+{{if .pending_closed}}
+<div class="w3-container w3-padding-small">
+  <h2>Pending Close Channels</h2>
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <tr>
+      <th>Channel ID</th>
+      <th>Peer Alias</th>
+      <th width=20%>Channel Point</th>
+      <th>Capacity</th>
+      <th>Local Balance</th>
+      <th>Remote Balance</th>
+      <th>Balance In Limbo</th>
+      <th>Local Commit Fees</th>
+      <th width=20%>Closing TX</th>
+    </tr>
+    {{range $channel := .pending_closed}}
+    <tr>
+      <td><a href="/channel?={{str $channel.chan_id}}" target="_blank">{{str $channel.short_chan_id}}</a></td>
+      <td title="{{$channel.remote_node_pub}}"><a href="{{$.graph_links}}/{{$.network}}node/{{$channel.remote_node_pub}}" target="_blank">{{if eq (str $channel.alias) ""}}{{slice ":12" $channel.remote_node_pub}}{{else}}{{$channel.alias}}{{end}}</a></td>
+      <td><a href='{{$.network_links}}/{{$.network}}tx/{{slice ":-2" $channel.channel_point}}' target="_blank">{{$channel.channel_point}}</a></td>
+      <td>{{$channel.capacity | intcomma}}</td>
+      <td>{{$channel.local_balance | intcomma}}</td>
+      <td>{{$channel.remote_balance | intcomma}}</td>
+      <td>{{$channel.limbo_balance | intcomma}}</td>
+      <td>{{$channel.local_commit_fee_sat}}</td>
+      <td><a href='{{$.network_links}}/{{$.network}}tx/{{$channel.closing_txid}}' target="_blank">{{$channel.closing_txid}}</a></td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{end}}
+{{if .pending_force_closed}}
+<div class="w3-container w3-padding-small">
+  <h2>Pending Force Close Channels</h2>
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <tr>
+      <th>Channel ID</th>
+      <th>Peer Alias</th>
+      <th width=20%>Channel Point</th>
+      <th>Capacity</th>
+      <th>Local Balance</th>
+      <th>Remote Balance</th>
+      <th>Balance In Limbo</th>
+      <th>Maturity</th>
+      <th width=20%>Closing TX</th>
+    </tr>
+    {{range $channel := .pending_force_closed}}
+    <tr>
+      <td><a href="/channel?={{str $channel.chan_id}}" target="_blank">{{str $channel.short_chan_id}}</a></td>
+      <td title="{{$channel.remote_node_pub}}"><a href="{{$.graph_links}}/{{$.network}}node/{{$channel.remote_node_pub}}" target="_blank">{{if eq (str $channel.alias) ""}}{{slice ":12" $channel.remote_node_pub}}{{else}}{{$channel.alias}}{{end}}</a></td>
+      <td><a href='{{$.network_links}}/{{$.network}}tx/{{slice ":-2" $channel.channel_point}}' target="_blank">{{$channel.channel_point}}</a></td>
+      <td>{{$channel.capacity | intcomma}}</td>
+      <td>{{$channel.local_balance | intcomma}}</td>
+      <td>{{$channel.remote_balance | intcomma}}</td>
+      <td>{{$channel.limbo_balance | intcomma}}</td>
+      <td title="Blocks: {{$channel.blocks_til_maturity | intcomma}}">{{$channel.maturity_datetime | naturaltime}}</td>
+      <td><a href='{{$.network_links}}/{{$.network}}tx/{{$channel.closing_txid}}' target="_blank">{{$channel.closing_txid}}</a></td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{end}}
+{{if .waiting_for_close}}
+<div class="w3-container w3-padding-small">
+  <h2>Channels Waiting To Close</h2>
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <tr>
+      <th>Channel ID</th>
+      <th>Peer Alias</th>
+      <th width=20%>Channel Point</th>
+      <th>Capacity</th>
+      <th>Local Balance</th>
+      <th>Remote Balance</th>
+      <th>Balance In Limbo</th>
+      <th>Local Commit Fee</th>
+      <th width=20%>Closing TX</th>
+    </tr>
+    {{range $channel := .waiting_for_close}}
+    <tr>
+      <td><a href="/channel?={{str $channel.chan_id}}" target="_blank">{{str $channel.short_chan_id}}</a></td>
+      <td title="{{$channel.remote_node_pub}}"><a href="{{$.graph_links}}/{{$.network}}node/{{$channel.remote_node_pub}}" target="_blank">{{if eq (str $channel.alias) ""}}{{slice ":12" $channel.remote_node_pub}}{{else}}{{$channel.alias}}{{end}}</a></td>
+      <td><a href='{{$.network_links}}/{{$.network}}tx/{{slice ":-2" $channel.channel_point}}' target="_blank">{{$channel.channel_point}}</a></td>
+      <td>{{$channel.capacity | intcomma}}</td>
+      <td>{{$channel.local_balance | intcomma}}</td>
+      <td>{{$channel.remote_balance | intcomma}}</td>
+      <td>{{$channel.limbo_balance | intcomma}}</td>
+      <td>{{$channel.local_commit_fee_sat}}</td>
+      <td><a href='{{$.network_links}}/{{$.network}}tx/{{$channel.closing_txid}}' target="_blank">{{$channel.closing_txid}}</a></td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{end}}
+{{if .closures}}
+<div class="w3-container w3-padding-small">
+  <h2>Closures</h2>
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <tr>
+      <th>Channel ID</th>
+      <th>Alias</th>
+      <th>Capacity</th>
+      <th width=20%>Closing TXID</th>
+      <th>Settled Balance</th>
+      <th>Locked Balance</th>
+      <th>Close Height</th>
+      <th>Close Type</th>
+      <th>Opener</th>
+      <th>Closer</th>
+      <th>Resolutions</th>
+      <th>Costs <a href="/get_fees/">🗘</a></th>
+    </tr>
+    {{range $closure := .closures}}
+    <tr>
+      <td>{{if eq $closure.chan_id "0"}}---{{else}}<a href="/channel?={{$closure.chan_id}}" target="_blank">{{$closure.short_chan_id}}</a>{{end}}</td>
+      <td><a href="{{$.graph_links}}/{{$.network}}node/{{$closure.remote_pubkey}}" target="_blank">{{if eq (str $closure.alias) ""}}{{slice ":12" $closure.remote_pubkey}}{{else}}{{$closure.alias}}{{end}}</a></td>
+      <td title="{{$closure.funding_txid}}:{{$closure.funding_index}}">{{$closure.capacity | intcomma}}</td>
+      <td>{{if eq $closure.closing_tx "0000000000000000000000000000000000000000000000000000000000000000"}}---{{else}}<a href="{{$.network_links}}/{{$.network}}tx/{{$closure.closing_tx}}" target="_blank">{{$closure.closing_tx}}</a>{{end}}</td>
+      <td>{{$closure.settled_balance | intcomma}}</td>
+      <td>{{$closure.time_locked_balance | intcomma}}</td>
+      <td>{{$closure.close_height | intcomma}}</td>
+      <td>{{if eq $closure.close_type 0}}Cooperative{{else}}{{if eq $closure.close_type 1}}Local Force{{else}}{{if eq $closure.close_type 2}}Remote Force{{else}}{{if eq $closure.close_type 3}}Breach{{else}}{{if eq $closure.close_type 4}}Funding Cancelled{{else}}{{if eq $closure.close_type 5}}Abandoned{{else}}{{$closure.close_type}}{{end}}{{end}}{{end}}{{end}}{{end}}{{end}}</td>
+      <td>{{if eq $closure.open_initiator 0}}Unknown{{else}}{{if eq $closure.open_initiator 1}}Local{{else}}{{if eq $closure.open_initiator 2}}Remote{{else}}{{if eq $closure.open_initiator 3}}Both{{else}}{{$closure.open_initiator}}{{end}}{{end}}{{end}}{{end}}</td>
+      <td>{{if eq $closure.close_initiator 0}}Unknown{{else}}{{if eq $closure.close_initiator 1}}Local{{else}}{{if eq $closure.close_initiator 2}}Remote{{else}}{{if eq $closure.close_initiator 3}}Both{{else}}{{$closure.close_initiator}}{{end}}{{end}}{{end}}{{end}}</td>
+      <td>{{if gt $closure.resolution_count 0}}<a href="/resolutions?={{$closure.chan_id}}" target="_blank">Details</a>{{else}}---{{end}}</td>
+      <td>
+        {{if or (eq $closure.close_type 4) (eq $closure.close_type 5)}}
+        ---
+        {{else}}{{if and (eq $closure.open_initiator 2) (eq $closure.resolution_count 0)}}
+        ---
+        {{else}}
+        <form action="/update_closing/" method="post">
+          <input style="text-align:center" id="target" type="number" min="0" max="1000000" name="target" value="{{add "0" $closure.closing_costs}}">
+          <input type="hidden" name="funding_txid" value="{{$closure.funding_txid}}">
+          <input type="hidden" name="funding_index" value="{{$closure.funding_index}}">
+        </form>
+        {{end}}{{end}}
+      </td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{end}}
+{{if not .closures}}
+<div class="w3-container w3-padding-small">
+  <center><h1>No channel closures found!</h1></center>
+</div>
+{{end}}
+{{end}}

@@ -1,0 +1,36 @@
+{{define "title"}}LNDg - Keysends{{end}}
+{{define "content"}}
+{{if .keysends}}
+<div class="w3-container w3-padding-small">
+  <h2>Received Keysends</h2>
+  <table class="w3-table-all w3-centered w3-hoverable" style="word-break: break-all">
+    <tr>
+      <th width=5%>Revenue?</th>
+      <th width=10%>Settle Date</th>
+      <th width=10%>Channel In Alias</th>
+      <th width=5%>Amount</th>
+      <th>Message</th>
+    </tr>
+    {{range $keysend := .keysends}}
+    <tr>
+      <td {{if $keysend.is_revenue}}style="background-color: rgba(56,139,253,0.15)"{{end}}>
+        <form action="/update_keysend/" method="post">
+          <input type="submit" value="{{if $keysend.is_revenue}}Unmark{{else}}Mark{{end}}">
+          <input type="hidden" name="r_hash" value="{{$keysend.r_hash}}">
+        </form>
+      </td>
+      <td title="{{$keysend.settle_date | djangodatetime}}">{{$keysend.settle_date | naturaltime}}</td>
+      <td title="{{$keysend.chan_in}}">{{if eq (str $keysend.chan_in_alias) ""}}---{{else}}{{$keysend.chan_in_alias}}{{end}}</td>
+      <td title="{{$keysend.r_hash}}">{{$keysend.amt_paid | intcomma}}</td>
+      <td>{{$keysend.message}}{{if notNone $keysend.sender}} | Signed By: {{if notNone $keysend.sender_alias}}{{$keysend.sender_alias}}{{else}}{{$keysend.sender}}{{end}}{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{end}}
+{{if not .keysends}}
+<div class="w3-container w3-padding-small">
+  <center><h1>You dont have any keysend messages here yet!</h1></center>
+</div>
+{{end}}
+{{end}}

@@ -1,0 +1,31 @@
+{{define "title"}}LNDg - Resolutions{{end}}
+{{define "content"}}
+{{if .resolutions}}
+<div class="w3-container w3-padding-small">
+  <h2>Resolutions For Channel: {{.chan_id}}</h2>
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <tr>
+      <th>Resolution Type</th>
+      <th>Outcome</th>
+      <th>Outpoint</th>
+      <th>Amount</th>
+      <th>Sweep TX</th>
+    </tr>
+    {{range $resolution := .resolutions}}
+    <tr>
+      <td>{{if eq $resolution.resolution_type 0}}Unknown{{else}}{{if eq $resolution.resolution_type 1}}Anchor{{else}}{{if eq $resolution.resolution_type 2}}Incoming HTLC{{else}}{{if eq $resolution.resolution_type 3}}Outgoing HTLC{{else}}{{if eq $resolution.resolution_type 4}}Commit{{else}}{{$resolution.resolution_type}}{{end}}{{end}}{{end}}{{end}}{{end}}</td>
+      <td>{{if eq $resolution.outcome 0}}Unknown{{else}}{{if eq $resolution.outcome 1}}Claimed{{else}}{{if eq $resolution.outcome 2}}Unclaimed{{else}}{{if eq $resolution.outcome 3}}Abandoned{{else}}{{if eq $resolution.outcome 4}}First Stage{{else}}{{if eq $resolution.outcome 5}}Timeout{{else}}{{$resolution.outcome}}{{end}}{{end}}{{end}}{{end}}{{end}}{{end}}</td>
+      <td><a href="{{$.network_links}}/{{$.network}}tx/{{$resolution.outpoint_tx}}" target="_blank">{{$resolution.outpoint_tx}}:{{$resolution.outpoint_index}}</a></td>
+      <td>{{$resolution.amount_sat | intcomma}}</td>
+      <td>{{if ne $resolution.resolution_type 2}}<a href="{{$.network_links}}/{{$.network}}tx/{{$resolution.sweep_txid}}" target="_blank">{{$resolution.sweep_txid}}</a>{{else}}---{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{end}}
+{{if not .resolutions}}
+<div class="w3-container w3-padding-small">
+  <center><h1>No resolutions were found for this channel!</h1></center>
+</div>
+{{end}}
+{{end}}

@@ -1,0 +1,73 @@
+{{define "title"}}LNDg - Auto MaxHTLC{{end}}
+{{define "content"}}
+{{if .channels}}
+<div class="w3-container w3-padding-small">
+  <h2>Auto MaxHTLC</h2>
+  <div class="w3-container w3-padding-small" style="overflow-x: scroll">
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <tr>
+        <th onclick="sortTable(event.target, 0, 'String', 0, 'a')">Channel ID</th>
+        <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Peer Alias</th>
+        <th onclick="sortTable(event.target, 2, 'int')">Channel Capacity</th>
+        <th onclick="sortTable(event.target, 3, 'int')">Outbound Liquidity</th>
+        <th>Offset %</th>
+        <th>Liq Threshold</th>
+        <th>Upper Threshold</th>
+        <th>Override MaxHTLC</th>
+      </tr>
+      {{range $channel := .channels}}
+      <tr>
+        <td title="{{$channel.funding_txid}}:{{$channel.output_index}}"><a href="/channel?={{$channel.chan_id}}" target="_blank">{{$channel.short_chan_id}}</a></td>
+        <td title="{{$channel.remote_pubkey}}">{{if not $channel.private}}<a href="{{$.graph_links}}/{{$.network}}node/{{$channel.remote_pubkey}}" target="_blank">{{end}}{{if eq (str $channel.alias) ""}}{{slice ":12" $channel.remote_pubkey}}{{else}}{{$channel.alias}}{{end}}{{if not $channel.private}}</a>{{end}}</td>
+        <td>{{$channel.capacity | intcomma}}</td>
+        <td>{{$channel.outbound | intcomma}}</td>
+        <td>
+          <form action="/auto-maxhtlc/" method="post">
+            <input style="text-align:center" type="number" min="0" max="100" name="percent" value="{{if $channel.maxhtlc_percent}}{{$channel.maxhtlc_percent}}{{else}}{{$.mx_percent}}{{end}}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input type="hidden" name="mx_liq_threshold" value="{{default 0 $channel.mx_liq_threshold}}">
+            <input type="hidden" name="mx_liq_value" value="{{default 0 $channel.mx_liq_value}}">
+            <input type="hidden" name="mx_liq_upper" value="{{default 0 $channel.mx_liq_upper}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+          </form>
+        </td>
+        <td>
+          <form action="/auto-maxhtlc/" method="post">
+            <input style="text-align:center" type="number" min="0" name="mx_liq_threshold" value="{{default 0 $channel.mx_liq_threshold}}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input type="hidden" name="percent" value="{{if $channel.maxhtlc_percent}}{{$channel.maxhtlc_percent}}{{else}}{{$.mx_percent}}{{end}}">
+            <input type="hidden" name="mx_liq_value" value="{{default 0 $channel.mx_liq_value}}">
+            <input type="hidden" name="mx_liq_upper" value="{{default 0 $channel.mx_liq_upper}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+          </form>
+        </td>
+        <td>
+          <form action="/auto-maxhtlc/" method="post">
+            <input style="text-align:center" type="number" min="0" name="mx_liq_upper" value="{{default 0 $channel.mx_liq_upper}}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input type="hidden" name="percent" value="{{if $channel.maxhtlc_percent}}{{$channel.maxhtlc_percent}}{{else}}{{$.mx_percent}}{{end}}">
+            <input type="hidden" name="mx_liq_threshold" value="{{default 0 $channel.mx_liq_threshold}}">
+            <input type="hidden" name="mx_liq_value" value="{{default 0 $channel.mx_liq_value}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+          </form>
+        </td>
+        <td>
+          <form action="/auto-maxhtlc/" method="post">
+            <input style="text-align:center" type="number" min="0" name="mx_liq_value" value="{{default 0 $channel.mx_liq_value}}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input type="hidden" name="percent" value="{{if $channel.maxhtlc_percent}}{{$channel.maxhtlc_percent}}{{else}}{{$.mx_percent}}{{end}}">
+            <input type="hidden" name="mx_liq_threshold" value="{{default 0 $channel.mx_liq_threshold}}">
+            <input type="hidden" name="mx_liq_upper" value="{{default 0 $channel.mx_liq_upper}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+          </form>
+        </td>
+      </tr>
+      {{end}}
+    </table>
+  </div>
+</div>
+{{else}}
+<div class="w3-container w3-padding-small">
+  <center><h1>You dont have any channels to analyze yet!</h1></center>
+</div>
+{{end}}
+{{if .local_settings}}
+{{template "local_settings.html" (dict "settings" .local_settings "title" "Auto MaxHTLC")}}
+{{end}}
+{{end}}

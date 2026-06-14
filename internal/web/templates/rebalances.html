@@ -1,0 +1,8 @@
+{{define "title"}}LNDg - Rebalances{{end}}
+{{define "content"}}
+<script src="/static/rebalances_table.js"></script>
+{{template "rebalances_table.html" (dict "count" 20 "status" 1 "load_count" 20 "title" "Rebalance Requests" "last_hop_pubkey" $.last_hop_pubkey)}}
+{{template "rebalances_table.html" (dict "count" 20 "status" 0 "load_count" 20 "title" "Rebalance Requests" "last_hop_pubkey" $.last_hop_pubkey)}}
+{{template "rebalances_table.html" (dict "count" 20 "status" 2 "load_count" 20 "title" "Rebalance Requests" "last_hop_pubkey" $.last_hop_pubkey)}}
+{{template "rebalances_table.html" (dict "count" 50 "load_count" 50 "title" "Rebalance Requests" "last_hop_pubkey" $.last_hop_pubkey)}}
+{{end}}

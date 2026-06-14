@@ -1,0 +1,21 @@
+# Go build artifacts
+*.exe
+*.test
+*.out
+/bin/
+/migrate
+/web
+/controller
+/jobs
+/rebalancer
+/htlcstream
+/graphwatcher
+
+# Local config / secrets
+.env
+data/
+
+# Editor
+.vscode/
+.vs/
+.idea/

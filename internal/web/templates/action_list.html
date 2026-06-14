@@ -1,0 +1,61 @@
+{{define "title"}}LNDg - Actions{{end}}
+{{define "content"}}
+{{if .action_list}}
+<div class="w3-container w3-padding-small">
+  <h2>Suggested Action List</h2>
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <tr>
+      <th>Channel ID</th>
+      <th>Peer Alias</th>
+      <th>Outbound Liquidity</th>
+      <th width=10%>Capacity</th>
+      <th>Inbound Liquidity</th>
+      <th>Unsettled</th>
+      <th>oRate</th>
+      <th>oBase</th>
+      <th>o7D</th>
+      <th>i7D</th>
+      <th>iRate</th>
+      <th>iBase</th>
+      <th width=4%>AR</th>
+      <th>Action</th>
+    </tr>
+    {{range .action_list}}
+    <tr>
+      <td title="{{.funding_txid}}:{{.output_index}}"><a href="/channel?={{.chan_id}}" target="_blank">{{.short_chan_id}}</a></td>
+      <td title="{{.remote_pubkey}}"><a href="{{$.graph_links}}/{{$.network}}node/{{.remote_pubkey}}" target="_blank">{{if eq (str .alias) ""}}{{slice ":12" .remote_pubkey}}{{else}}{{.alias}}{{end}}</a></td>
+      <td>{{intcomma .local_balance}} <small class="w3-round w3-border-small w3-border-grey">{{.outbound_percent}}%</small></td>
+      <td>
+        <label>{{intcomma .capacity}}</label>
+        <div class="progress w3-round w3-grey">
+          <span class="value w3-round w3-blue" style="width:{{default "0" .outbound_percent}}%"></span>
+        </div>
+      </td>
+      <td>{{intcomma .remote_balance}} <small class="w3-round w3-border-small w3-border-grey">{{.inbound_percent}}%</small></td>
+      <td>{{intcomma .unsettled_balance}}</td>
+      <td>{{intcomma .local_fee_rate}}</td>
+      <td>{{intcomma .local_base_fee}}</td>
+      <td>{{intcomma .o7D}}M <small class="w3-round w3-border-small w3-border-grey">{{.routed_out_7day}}</small></td>
+      <td>{{intcomma .i7D}}M <small class="w3-round w3-border-small w3-border-grey">{{.routed_in_7day}}</small></td>
+      <td>{{intcomma .remote_fee_rate}}</td>
+      <td>{{intcomma .remote_base_fee}}</td>
+      <td>
+        <form action="/update_channel/" method="post">
+          <input type="submit" value="{{if .auto_rebalance}}Disable{{else}}Enable{{end}}">
+          <input type="hidden" name="chan_id" value="{{.chan_id}}">
+          <input type="hidden" name="update_target" value="5">
+          <input type="hidden" name="target" value="0">
+        </form>
+      </td>
+      <td title="{{.reason}}">{{.output}}</td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{end}}
+{{if not .action_list}}
+<div class="w3-container w3-padding-small">
+  <center><h1>Nothing to see here! Great job!</h1></center>
+</div>
+{{end}}
+{{end}}

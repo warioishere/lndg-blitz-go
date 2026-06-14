@@ -1,0 +1,94 @@
+{{define "title"}}LNDg - Fee Rates{{end}}
+{{define "content"}}
+{{if .channels}}
+<div class="w3-container w3-padding-small">
+  <h2>Suggested Fee Rates</h2>
+  <div class="w3-container w3-padding-small" style="overflow-x: scroll">
+    <table id="feeTable" class="w3-table-all w3-centered w3-hoverable">
+      <tr>
+        <th onclick="sortTable(event.target, 0, 'String', 0, 'a')">Channel ID</th>
+        <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Peer Alias</th>
+        <th onclick="sortTable(event.target, 2, 'int')">Outbound Liquidity</th>
+        <th onclick="sortTable(event.target, 3, 'int', 0, 'label')" width=10%>Capacity</th>
+        <th onclick="sortTable(event.target, 4, 'int')">Inbound Liquidity</th>
+        <th onclick="sortTable(event.target, 5, 'int')" title="The value represents net flow --> (routed out - routed in) / capacity">7Day Flow</th>
+        <th onclick="sortTable(event.target, 9, 'int')">oAdjustment</th>
+        <th onclick="sortTable(event.target, 10, 'int')" title="A suggested fee rate based on the flow pattern over the last 7 days">Suggested oRate</th>
+        <th onclick="sortTable(event.target, 11, 'int')">iAdjustment</th>
+        <th onclick="sortTable(event.target, 12, 'int')" title="A suggested fee rate based on the flow pattern over the last 7 days">Suggested iRate</th>
+        <th>oRate</th>
+        <th>iRate</th>
+        <th onclick="sortTable(event.target, 15, '%')">Max Cost</th>
+        <th onclick="sortTable(event.target, 16, 'int')">Peer oRate</th>
+        <th onclick="sortTable(event.target, 17, 'int')">Peer iRate</th>
+        <th>Updated</th>
+        <th width=92px>
+          <form title="Enable all channels" style="position: absolute;" action="/update_setting/" method="post">
+            <input type="submit" value="✅">
+            <input type="hidden" name="key" value="ALL-AF">
+            <input type="hidden" name="value" value="1">
+          </form>
+          <form title="Disable all channels" style="position: absolute;margin-left:40px" action="/update_setting/" method="post">
+            <input type="submit" value="❌">
+            <input type="hidden" name="key" value="ALL-AF">
+            <input type="hidden" name="value" value="0">
+          </form>
+        </th>
+      </tr>
+      {{range $channel := .channels}}
+      <tr>
+        <td title="{{$channel.funding_txid}}:{{$channel.output_index}}"><a href="/channel?={{$channel.chan_id}}" target="_blank">{{$channel.short_chan_id}}</a></td>
+        <td title="{{$channel.remote_pubkey}}">{{if not $channel.private}}<a href="{{$.graph_links}}/{{$.network}}node/{{$channel.remote_pubkey}}" target="_blank">{{end}}{{if eq (str $channel.alias) ""}}{{slice ":12" $channel.remote_pubkey}}{{else}}{{$channel.alias}}{{end}}{{if not $channel.private}}</a>{{end}}</td>
+        <td>{{$channel.local_balance | intcomma}} <small class="w3-round w3-border-small w3-border-grey">{{$channel.out_percent}}%</small></td>
+        <td>
+          <label>{{$channel.capacity | intcomma}}</label>
+          <div class="progress w3-round w3-grey">
+            <span class="value w3-round w3-blue" style="width:{{default "0" $channel.out_percent}}%"></span>
+          </div>
+        </td>
+        <td>{{$channel.remote_balance | intcomma}} <small class="w3-round w3-border-small w3-border-grey">{{$channel.in_percent}}%</small></td>
+        <td>{{if ne $channel.net_routed_7day 0.0}}{{str $channel.net_routed_7day}} <small class="w3-round w3-border-small w3-border-grey">{{if gt $channel.net_routed_7day 0.0}}OUT{{else}}IN{{end}}</small>{{else}}0{{end}}</td>
+        <td>{{str $channel.adjustment}}</td>
+        <td>{{$channel.new_rate | intcomma}}</td>
+        <td>{{$channel.inbound_adjustment | intcomma}}</td>
+        <td>{{$channel.new_inbound_rate | intcomma}}</td>
+        <td>
+          <form action="/update_channel/" method="post">
+            <input style="text-align:center" id="target" type="number" min="0" max="100000" name="target" value="{{$channel.local_fee_rate}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="1">
+          </form>
+        </td>
+        <td>
+          <form action="/update_channel/" method="post">
+            <input style="text-align:center" id="target" type="number" min="-100000" max="100000" name="target" value="{{$channel.local_inbound_fee_rate}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="13">
+          </form>
+        </td>
+        <td {{if $channel.auto_rebalance}}style="background-color: rgba(56,139,253,0.15)"{{end}}>{{$channel.ar_max_cost}}%</td>
+        <td>{{$channel.remote_fee_rate | intcomma}}</td>
+        <td>{{$channel.remote_inbound_fee_rate | intcomma}}</td>
+        <td {{if $channel.eligible}}style="background-color: rgba(248,81,73,0.15);"{{else}}style="background-color: rgba(56,139,253,0.15)"{{end}}>{{$channel.fees_updated | naturaltime}}</td>
+        <td {{if not $channel.auto_fees}}style="background-color: rgba(248,81,73,0.15);"{{else}}style="background-color: rgba(56,139,253,0.15)"{{end}}>
+          <form action="/update_channel/" method="post">
+            <input type="submit" value="{{if $channel.auto_fees}}Disable{{else}}Enable{{end}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="8">
+            <input type="hidden" name="target" value="0">
+          </form>
+        </td>
+      </tr>
+      {{end}}
+    </table>
+  </div>
+</div>
+{{else}}
+<div class="w3-container w3-padding-small">
+  <center><h1>You dont have any channels to analyze yet!</h1></center>
+</div>
+{{end}}
+{{if .local_settings}}
+{{template "local_settings.html" (dict "settings" .local_settings "title" "Auto-Fees")}}
+{{end}}
+{{end}}

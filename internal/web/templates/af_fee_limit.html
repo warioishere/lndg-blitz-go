@@ -1,0 +1,46 @@
+{{define "title"}}LNDg - AF Fee Limit Protection{{end}}
+{{define "content"}}
+<div class="w3-container w3-padding-small">
+  <h2>AF Fee Limit Protection</h2>
+  <div class="w3-container w3-padding-small" style="overflow-x: auto">
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <thead>
+        <tr>
+          <th>Channel ID</th>
+          <th>Peer Alias</th>
+          <th>Avg Rebalancing Cost (PPM)</th>
+          <th>Safety Distance</th>
+          <th>FLP Enabled</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{range $ch := .channels}}
+        <tr>
+          <td><a href="/channel?={{$ch.chan_id}}" target="_blank">{{$ch.chan_id}}</a></td>
+          <td>{{$ch.alias}}</td>
+          <td>{{if notNone $ch.avg_ppm}}{{$ch.avg_ppm | intcomma}}{{else}}N/A{{end}}</td>
+          <td>
+            <form action="/update_channel/" method="post" style="margin:0">
+              <input type="number" style="width:70px;text-align:center" name="target" value="{{$ch.flp_safety}}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+              <input type="hidden" name="chan_id" value="{{$ch.chan_id}}">
+              <input type="hidden" name="update_target" value="23">
+            </form>
+          </td>
+          <td>
+            <form action="/update_channel/" method="post" style="margin:0">
+              <input class="w3-check" type="checkbox" onchange="this.form.submit()" {{if $ch.flp_enabled}}checked{{end}}>
+              <input type="hidden" name="chan_id" value="{{$ch.chan_id}}">
+              <input type="hidden" name="update_target" value="22">
+              <input type="hidden" name="target" value="0">
+            </form>
+          </td>
+        </tr>
+      {{else}}
+        <tr><td colspan="5">No channels found</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{template "local_settings.html" (dict "settings" .local_settings "title" "Fee Limit Protection")}}
+{{end}}

@@ -1,0 +1,39 @@
+{{$status := .status}}
+<div id="rebalances_div_{{str $status}}" class="w3-container w3-padding-small">
+    <h2>{{if numEq $status 2}}Successful{{else}}{{if numEq $status 0}}Pending{{else}}{{if numEq $status 1}}In-Flight{{else}}Last{{end}}{{end}}{{end}} {{.title}}</h2>
+    <table id="rebalsTable_{{str $status}}" class="w3-table-all w3-centered w3-hoverable">
+      <tr>
+        <th>Requested</th>
+        <th>Start</th>
+        <th>Stop</th>
+        <th>Scheduled for</th>
+        <th>Elapsed</th>
+        <th>Value</th>
+        <th>Fee Limit</th>
+        <th>Target PPM</th>
+        <th>Fees Paid</th>
+        <th>Last Hop</th>
+        <th>Status</th>
+        <th>Hash</th>
+        <th>Action</th>
+      </tr>
+      <tbody id="rebalances_{{str $status}}">
+      </tbody>
+      <tfoot id="loadMoreRebals_{{str $status}}">
+        <tr style="background-color:transparent;cursor:pointer;">
+          <td colspan="13">
+            <a data-status="{{str $status}}" onclick="window['loadRebals_'+this.dataset.status]()">Load More</a>
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  <script>
+    initRebalancesTable({
+      status: {{str $status}},
+      count: {{str .count}},
+      load_count: {{str .load_count}},
+      payment_hash: {{str .payment_hash}},
+      last_hop_pubkey: {{str .last_hop_pubkey}}
+    });
+  </script>

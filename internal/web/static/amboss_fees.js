@@ -1,0 +1,416 @@
+// Storage key for saved channels
+const STORAGE_KEY = 'amboss_monitored_channels';
+const CHART_STORAGE_KEY = 'amboss_channel_charts';
+
+// Keep track of active charts
+let activeCharts = {};
+
+// Load channels from localStorage
+function loadChannels() {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  return stored ? JSON.parse(stored) : [];
+}
+
+// Save channels to localStorage
+function saveChannels(channels) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(channels));
+}
+
+// Add a new channel to monitor
+async function addChannelToMonitor() {
+  const channelId = document.getElementById('channel_id_input').value.trim();
+  const channelName = document.getElementById('channel_name_input').value.trim();
+  const loadingIndicator = document.getElementById('add_loading_indicator');
+  const errorMessage = document.getElementById('add_error_message');
+  const errorText = document.getElementById('add_error_text');
+
+  // Validate
+  if (!channelId) {
+    showAddError('Please enter a channel ID');
+    return;
+  }
+
+  if (!/^\d+$/.test(channelId)) {
+    showAddError('Channel ID must be numeric');
+    return;
+  }
+
+  // Check if already exists
+  const channels = loadChannels();
+  if (channels.some(c => c.id === channelId)) {
+    showAddError('Channel already in monitoring list');
+    return;
+  }
+
+  // Show loading
+  errorMessage.style.display = 'none';
+  loadingIndicator.style.display = 'inline';
+
+  try {
+    // Verify channel exists by fetching it
+    const response = await GET('amboss_channel_fees', {
+      data: {
+        channel_id: channelId,
+        time_period: '1w'
+      }
+    });
+
+    if (response.error) {
+      showAddError(response.error);
+      loadingIndicator.style.display = 'none';
+      return;
+    }
+
+    // Add to channels list
+    channels.push({
+      id: channelId,
+      name: channelName || `Channel ${channelId}`,
+      collapsed: false
+    });
+
+    saveChannels(channels);
+    loadingIndicator.style.display = 'none';
+
+    // Clear inputs
+    document.getElementById('channel_id_input').value = '';
+    document.getElementById('channel_name_input').value = '';
+
+    // Refresh display
+    renderChannels();
+
+  } catch (error) {
+    loadingIndicator.style.display = 'none';
+    showAddError('Failed to verify channel: ' + error.message);
+    console.error('Fetch error:', error);
+  }
+}
+
+// Remove a channel from monitoring
+function removeChannel(channelId) {
+  const channels = loadChannels();
+  const filtered = channels.filter(c => c.id !== channelId);
+  saveChannels(filtered);
+
+  // Destroy chart if exists
+  if (activeCharts[channelId]) {
+    activeCharts[channelId].destroy();
+    delete activeCharts[channelId];
+  }
+
+  renderChannels();
+}
+
+// Rename a channel
+function renameChannel(channelId, newName) {
+  const channels = loadChannels();
+  const channel = channels.find(c => c.id === channelId);
+  if (channel) {
+    channel.name = newName || `Channel ${channelId}`;
+    saveChannels(channels);
+    renderChannels();
+  }
+}
+
+// Toggle chart collapse/expand
+function toggleChart(channelId) {
+  const channels = loadChannels();
+  const channel = channels.find(c => c.id === channelId);
+  if (channel) {
+    channel.collapsed = !channel.collapsed;
+    saveChannels(channels);
+    renderChannels();
+  }
+}
+
+// Fetch and render chart for a specific channel
+async function fetchAndRenderChart(channelId) {
+  const chartDiv = document.getElementById(`chart_container_${channelId}`);
+  const loadingDiv = document.getElementById(`loading_${channelId}`);
+  const errorDiv = document.getElementById(`error_${channelId}`);
+
+  loadingDiv.style.display = 'block';
+  errorDiv.style.display = 'none';
+
+  try {
+    const response = await GET('amboss_channel_fees', {
+      data: {
+        channel_id: channelId,
+        time_period: '1w'
+      }
+    });
+
+    if (response.error) {
+      errorDiv.textContent = response.error;
+      errorDiv.style.display = 'block';
+      loadingDiv.style.display = 'none';
+      return;
+    }
+
+    if (!response.data || response.data.length === 0) {
+      errorDiv.textContent = 'No fee history data available';
+      errorDiv.style.display = 'block';
+      loadingDiv.style.display = 'none';
+      return;
+    }
+
+    loadingDiv.style.display = 'none';
+    renderFeeChart(channelId, response);
+
+  } catch (error) {
+    errorDiv.textContent = 'Failed to fetch: ' + error.message;
+    errorDiv.style.display = 'block';
+    loadingDiv.style.display = 'none';
+    console.error('Fetch error:', error);
+  }
+}
+
+// Render a single fee chart
+function renderFeeChart(channelId, data) {
+  const canvasId = `chart_${channelId}`;
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+
+  const ctx = canvas.getContext('2d');
+
+  // Destroy old chart
+  if (activeCharts[channelId]) {
+    activeCharts[channelId].destroy();
+  }
+
+  // Format timestamps
+  const labels = data.labels.map(ts => {
+    const date = new Date(ts);
+    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+  });
+
+  activeCharts[channelId] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'Fee Rate (milli-msat)',
+        data: data.data,
+        borderColor: 'rgba(33, 150, 243, 1)',
+        backgroundColor: 'rgba(33, 150, 243, 0.1)',
+        borderWidth: 2,
+        fill: true,
+        tension: 0.1,
+        pointRadius: 3,
+        pointHoverRadius: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: {
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          callbacks: {
+            label: function(context) {
+              return 'Fee Rate: ' + context.parsed.y.toLocaleString() + ' milli-msat';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          display: true,
+          grid: {
+            color: getGridColor()
+          },
+          ticks: {
+            maxRotation: 45,
+            minRotation: 45
+          }
+        },
+        y: {
+          display: true,
+          title: {
+            display: true,
+            text: 'Fee Rate (milli-msat)'
+          },
+          grid: {
+            color: getGridColor()
+          },
+          beginAtZero: true
+        }
+      }
+    }
+  });
+}
+
+// Render all saved channels
+function renderChannels() {
+  const container = document.getElementById('saved_channels_container');
+  const channels = loadChannels();
+
+  if (channels.length === 0) {
+    container.innerHTML = '<p style="color: #999;">No channels added yet. Add a channel above to get started.</p>';
+    return;
+  }
+
+  // Create 2-column grid layout
+  container.style.display = 'grid';
+  container.style.gridTemplateColumns = '1fr 1fr';
+  container.style.gap = '20px';
+  container.style.marginBottom = '20px';
+
+  container.innerHTML = channels.map(channel => `
+    <div
+      id="channel_card_${channel.id}"
+      draggable="true"
+      style="border: 1px solid #ddd; border-radius: 5px; overflow: hidden; cursor: move; transition: opacity 0.2s;"
+      ondragstart="handleDragStart(event, '${channel.id}')"
+      ondragover="handleDragOver(event)"
+      ondrop="handleDrop(event, '${channel.id}')"
+      ondragleave="handleDragLeave(event)"
+      ondragend="handleDragEnd(event)">
+
+      <!-- Channel Header -->
+      <div style="padding: 15px; display: flex; justify-content: space-between; align-items: center; user-select: none;">
+        <div style="flex: 1;">
+          <h3 style="margin: 0; cursor: pointer;" onclick="toggleChart('${channel.id}')">
+            <span style="margin-right: 5px; font-size: 12px; opacity: 0.5;">⋮⋮</span>
+            <span style="margin-right: 10px;">${channel.collapsed ? '▶' : '▼'}</span>
+            <input type="text"
+                   value="${channel.name}"
+                   style="border: none; background: none; font-size: 16px; font-weight: bold; width: 300px; cursor: text;"
+                   onblur="renameChannel('${channel.id}', this.value)"
+                   onkeypress="if(event.key==='Enter') { renameChannel('${channel.id}', this.value); this.blur(); }"
+                   onclick="event.stopPropagation();">
+          </h3>
+          <p style="margin: 5px 0; color: #666; font-size: 12px;">Channel ID: ${channel.id}</p>
+        </div>
+        <button onclick="removeChannel('${channel.id}')" class="w3-button w3-red" style="margin-left: 10px; white-space: nowrap;">Remove</button>
+      </div>
+
+      <!-- Chart Content (Collapsible) -->
+      <div style="display: ${channel.collapsed ? 'none' : 'block'}; padding: 15px;">
+        <div id="loading_${channel.id}" style="display: none; padding: 10px; color: #999;">Loading chart...</div>
+        <div id="error_${channel.id}" style="display: none; padding: 10px; background-color: #ffebee; color: #c62828; border-radius: 3px;"></div>
+        <div id="chart_container_${channel.id}">
+          <canvas id="chart_${channel.id}" style="max-height: 350px;"></canvas>
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  // Load charts for non-collapsed channels
+  channels.forEach(channel => {
+    if (!channel.collapsed) {
+      setTimeout(() => fetchAndRenderChart(channel.id), 100);
+    }
+  });
+}
+
+// Drag and drop handlers
+let draggedChannelId = null;
+
+function handleDragStart(event, channelId) {
+  draggedChannelId = channelId;
+  event.dataTransfer.effectAllowed = 'move';
+  event.target.closest('[draggable]').style.opacity = '0.5';
+}
+
+function handleDragOver(event) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  const card = event.target.closest('[draggable]');
+  if (card) {
+    card.style.borderTop = '3px solid #2196F3';
+  }
+}
+
+function handleDragLeave(event) {
+  const card = event.target.closest('[draggable]');
+  if (card) {
+    card.style.borderTop = '';
+  }
+}
+
+function handleDrop(event, targetChannelId) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const card = event.target.closest('[draggable]');
+  if (card) {
+    card.style.borderTop = '';
+  }
+
+  if (draggedChannelId && draggedChannelId !== targetChannelId) {
+    const channels = loadChannels();
+    const draggedIndex = channels.findIndex(c => c.id === draggedChannelId);
+    const targetIndex = channels.findIndex(c => c.id === targetChannelId);
+
+    if (draggedIndex !== -1 && targetIndex !== -1) {
+      // Swap channels
+      [channels[draggedIndex], channels[targetIndex]] = [channels[targetIndex], channels[draggedIndex]];
+      saveChannels(channels);
+      renderChannels();
+    }
+  }
+}
+
+function handleDragEnd(event) {
+  event.target.closest('[draggable]').style.opacity = '1';
+  draggedChannelId = null;
+}
+
+// Helper functions
+function showAddError(message) {
+  const errorText = document.getElementById('add_error_text');
+  errorText.textContent = message;
+  document.getElementById('add_error_message').style.display = 'block';
+}
+
+function getGridColor() {
+  return document.body.classList.contains('dark-mode') ?
+    'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+  // Render saved channels
+  renderChannels();
+
+  // Enter key handler for adding channel
+  document.getElementById('channel_id_input').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+      addChannelToMonitor();
+    }
+  });
+
+  document.getElementById('channel_name_input').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+      addChannelToMonitor();
+    }
+  });
+
+  // Theme change handler
+  const themeToggle = document.getElementById('toggleTheme');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', function() {
+      // Update all active charts
+      Object.values(activeCharts).forEach(chart => {
+        chart.options.scales.x.grid.color = getGridColor();
+        chart.options.scales.y.grid.color = getGridColor();
+        chart.update();
+      });
+    });
+  }
+
+  // Auto-update charts based on amb_update_hours
+  const enabled = window.AMB_ENABLED || 0;
+  const hours = window.AMB_UPDATE_HOURS || 0;
+  if (enabled && hours > 0) {
+    setInterval(function() {
+      const channels = loadChannels();
+      channels.forEach(channel => {
+        if (!channel.collapsed) {
+          fetchAndRenderChart(channel.id);
+        }
+      });
+    }, hours * 3600 * 1000);
+  }
+});

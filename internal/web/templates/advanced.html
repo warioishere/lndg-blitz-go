@@ -1,0 +1,247 @@
+{{define "title"}}LNDg - Advanced{{end}}
+{{define "content"}}
+{{if .channels}}
+<div class="w3-container w3-padding-small">
+  <h2>Advanced Channel Settings</h2>
+  <div class="w3-container w3-padding-small" style="overflow:auto;max-height:1000px">
+    <table id="advancedTable" class="w3-table-all w3-centered w3-hoverable">
+      <tr>
+        <th colspan="6"></th>
+        <td title="Update all channel outgoing fee rates">
+          <form action="/update_setting/" method="post">
+            <input style="text-align:center" id="value" type="number" min="0" max="100000" name="value" value="">
+            <input type="hidden" name="key" value="ALL-oRate">
+          </form>
+        </td>
+        <td title="Update all channel outgoing base fees">
+          <form action="/update_setting/" method="post">
+            <input style="text-align:center" id="value" type="number" min="0" max="100000000" name="value" value="">
+            <input type="hidden" name="key" value="ALL-oBase">
+          </form>
+        </td>
+        <td title="Update all channel inbound fee rates">
+          <form action="/update_setting/" method="post">
+            <input data-tag="inbound" style="text-align:center" id="value" type="number" min="-100000" max="100000" name="value" value="">
+            <input type="hidden" name="key" value="ALL-iRate">
+          </form>
+        </td>
+        <td title="Update all channel inbound base fees">
+          <form action="/update_setting/" method="post">
+            <input data-tag="inbound" style="text-align:center" id="value" type="number" min="-100000000" max="100000000" name="value" value="">
+            <input type="hidden" name="key" value="ALL-iBase">
+          </form>
+        </td>
+        <td title="Update all channel CLTVs">
+          <form action="/update_setting/" method="post">
+            <input style="text-align:center" id="value" type="number" min="18" max="1000" name="value" value="">
+            <input type="hidden" name="key" value="ALL-CLTV">
+          </form>
+        </td>
+        <td title="Update all channel min HTLCs">
+          <form action="/update_setting/" method="post">
+            <input style="text-align:center;width:100px" id="value" type="number" step="0.001" min="1" name="value" value="">
+            <input type="hidden" name="key" value="ALL-minHTLC">
+          </form>
+        </td>
+        <th colspan="5"></th>
+        <td title="Update all channel AR amount amounts">
+          <form action="/update_setting/" method="post">
+            <input style="text-align:center" id="value" type="number" min="0" max="100000000" name="value" value="">
+            <input type="hidden" name="key" value="ALL-Amts">
+          </form>
+        </td>
+        <td title="Update all channel AR max cost %s">
+          <form action="/update_setting/" method="post">
+            <input style="text-align:center" id="value" type="number" min="0" max="100" name="value" value="">
+            <input type="hidden" name="key" value="ALL-MaxCost">
+          </form>
+        </td>
+        <td title="Update all channel AR outbound liquidity amount %s">
+          <form action="/update_setting/" method="post">
+            <input style="text-align:center" id="value" type="number" min="0" max="100" name="value" value="">
+            <input type="hidden" name="key" value="ALL-oTarget">
+          </form>
+        </td>
+        <td title="Update all channel AR inbound liquidity amount %s">
+          <form action="/update_setting/" method="post">
+            <input style="text-align:center" id="value" type="number" min="0" max="100" name="value" value="">
+            <input type="hidden" name="key" value="ALL-iTarget">
+          </form>
+        </td>
+        <td title="Update all channel AR enable/disable targeting">
+          <form action="/update_setting/" method="post">
+            <input style="text-align:center" id="value" type="number" min="0" max="1" name="value" value="">
+            <input type="hidden" name="key" value="ALL-AR">
+          </form>
+        </td>
+      </tr>
+      <tr>
+        <th onclick="sortTable(event.target, 0, 'String', 1, 'a')">Channel ID</th>
+        <th onclick="sortTable(event.target, 1, 'String', 1, 'a')">Peer Alias</th>
+        <th onclick="sortTable(event.target, 2, 'int', 1, 'small')">Outbound Liquidity</th>
+        <th onclick="sortTable(event.target, 3, 'int', 1, 'label')">Capacity</th>
+        <th onclick="sortTable(event.target, 4, 'int', 1, 'small')">Inbound Liquidity</th>
+        <th>Channel State</th>
+        <th>oRate</th>
+        <th>oBase</th>
+        <th>iRate</th>
+        <th>iBase</th>
+        <th>oCLTV</th>
+        <th>minHTLC</th>
+        <th>maxHTLC</th>
+        <th onclick="sortTable(event.target, 13, 'int', 1)">Peer iRate</th>
+        <th onclick="sortTable(event.target, 14, 'int', 1)">Peer iBase</th>
+        <th onclick="sortTable(event.target, 15, 'int', 1)">Peer oRate</th>
+        <th onclick="sortTable(event.target, 16, 'int', 1)">Peer oBase</th>
+        <th title="When AR is ENABLED for the channel, the size of the rebalance attempts that should be tried during attempts to refill the channel.">Target Amt</th>
+        <th title="When AR is ENABLED, the maximum percentage amount of the local fee rate that can be used for the max rebalancing cost.">Max Cost %</th>
+        <th title="When AR is NOT ENABLED for the channel, keep pushing OUT the channel until its outbound liquidity falls below the oTarget%.">oTarget%</th>
+        <th title="When AR is ENABLED for the channel, keep pulling IN to the channel until its inbound liquidity falls below the iTarget%.">iTarget%</th>
+        <th title="When AR is ENABLED it will refill the channel with outbound liquidity.">AR</th>
+        <th onclick="sortTable(event.target, 22, 'String', 1)">Active</th>
+      </tr>
+      {{range $channel := .channels}}
+      <tr>
+        <td title="{{$channel.funding_txid}}:{{$channel.output_index}}"><a href="/channel?={{$channel.chan_id}}" target="_blank">{{$channel.short_chan_id}}</a></td>
+        <td title="{{$channel.remote_pubkey}}">{{if not $channel.private}}<a href="{{$.graph_links}}/{{$.network}}node/{{$channel.remote_pubkey}}" target="_blank">{{end}}{{if eq (str $channel.alias) ""}}{{slice ":12" $channel.remote_pubkey}}{{else}}{{$channel.alias}}{{end}}{{if not $channel.private}}</a>{{end}}</td>
+        <td>{{$channel.local_balance | intcomma}} <small class="w3-round w3-border-small w3-border-grey">{{$channel.out_percent}}%</small></td>
+        <td>
+          <label>{{$channel.capacity | intcomma}}</label>
+          <div class="progress w3-round w3-grey">
+            <span class="value w3-round w3-blue" style="width:{{default "0" $channel.out_percent}}%"></span>
+          </div>
+        </td>
+        <td>{{$channel.remote_balance | intcomma}} <small class="w3-round w3-border-small w3-border-grey">{{$channel.in_percent}}%</small></td>
+        <td {{if $channel.local_disabled}}style="background-color: rgba(248,81,73,0.15);"{{else}}{{if $channel.private}}style="background-color: rgba(110,118,129,0.4)"{{end}}{{end}}>
+          {{if and $channel.is_active (not $channel.private)}}
+            <form action="/update_channel/" method="post">
+              <input type="submit" value="{{if not $channel.local_disabled}}Disable{{else}}Enable{{end}}">
+              <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+              <input type="hidden" name="update_target" value="7">
+              <input type="hidden" name="target" value="{{if not $channel.local_disabled}}0{{else}}1{{end}}">
+            </form>
+          {{else}}
+            ---
+          {{end}}
+        </td>
+        <td {{if $channel.local_disabled}}style="background-color: rgba(248,81,73,0.15);"{{else}}{{if $channel.private}}style="background-color: rgba(110,118,129,0.4)"{{end}}{{end}}>
+          <form action="/update_channel/" method="post">
+            <input style="text-align:center" id="target" type="number" min="0" max="100000" name="target" value="{{$channel.local_fee_rate}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="1">
+          </form>
+        </td>
+        <td {{if $channel.local_disabled}}style="background-color: rgba(248,81,73,0.15);"{{else}}{{if $channel.private}}style="background-color: rgba(110,118,129,0.4)"{{end}}{{end}}>
+          <form action="/update_channel/" method="post">
+            <input style="text-align:center" id="target" type="number" min="0" max="100000000" name="target" value="{{$channel.local_base_fee}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="0">
+          </form>
+        </td>
+        <td {{if $channel.local_disabled}}style="background-color: rgba(248,81,73,0.15);"{{else}}{{if $channel.private}}style="background-color: rgba(110,118,129,0.4)"{{end}}{{end}}>
+          <form action="/update_channel/" method="post">
+            <input data-tag="inbound" style="text-align:center" id="target" type="number" min="-100000" max="100000" name="target" value="{{$channel.local_inbound_fee_rate}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="13">
+          </form>
+        </td>
+        <td {{if $channel.local_disabled}}style="background-color: rgba(248,81,73,0.15);"{{else}}{{if $channel.private}}style="background-color: rgba(110,118,129,0.4)"{{end}}{{end}}>
+          <form action="/update_channel/" method="post">
+            <input data-tag="inbound" style="text-align:center" id="target" type="number" min="-100000000" max="100000000" name="target" value="{{$channel.local_inbound_base_fee}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="12">
+          </form>
+        </td>
+        <td {{if $channel.local_disabled}}style="background-color: rgba(248,81,73,0.15);"{{else}}{{if $channel.private}}style="background-color: rgba(110,118,129,0.4)"{{end}}{{end}}>
+          <form action="/update_channel/" method="post">
+            <input style="text-align:center" id="target" type="number" min="18" max="1000" name="target" value="{{$channel.local_cltv}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="9">
+          </form>
+        </td>
+        <td {{if $channel.local_disabled}}style="background-color: rgba(248,81,73,0.15);"{{else}}{{if $channel.private}}style="background-color: rgba(110,118,129,0.4)"{{end}}{{end}}>
+          <form action="/update_channel/" method="post">
+            <input style="text-align:center;width:100px" id="target" type="number" step="0.001" min="1" name="target" value="{{str $channel.local_min_htlc}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="10">
+          </form>
+        </td>
+        <td {{if $channel.local_disabled}}style="background-color: rgba(248,81,73,0.15);"{{else}}{{if $channel.private}}style="background-color: rgba(110,118,129,0.4)"{{end}}{{end}}>
+          <form action="/update_channel/" method="post">
+            <input style="text-align:center;width:150px" id="target" type="number" step="0.001" min="1" name="target" value="{{str $channel.local_max_htlc}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="11">
+          </form>
+        </td>
+        <td {{if $channel.remote_disabled}}style="background-color: rgba(248,81,73,0.15);"{{end}}>{{$channel.remote_inbound_fee_rate | intcomma}}</td>
+        <td {{if $channel.remote_disabled}}style="background-color: rgba(248,81,73,0.15);"{{end}}>{{$channel.remote_inbound_base_fee | intcomma}}</td>
+        <td title="Fee Ratio: {{$channel.fee_ratio}}%" {{if $channel.remote_disabled}}style="background-color: rgba(248,81,73,0.15);"{{end}}>{{$channel.remote_fee_rate | intcomma}}</td>
+        <td {{if $channel.remote_disabled}}style="background-color: rgba(248,81,73,0.15);"{{end}}>{{$channel.remote_base_fee | intcomma}}</td>
+        <td>
+          <form action="/update_channel/" method="post">
+            <input style="text-align:center" id="target" type="number" min="1" max="100000000" name="target" value="{{$channel.ar_amt_target}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="2">
+          </form>
+        </td>
+        <td>
+          <form action="/update_channel/" method="post">
+            <input style="text-align:center" id="target" type="number" min="1" max="100" name="target" value="{{$channel.ar_max_cost}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="6">
+          </form>
+        </td>
+        <td {{if not $channel.auto_rebalance}}style="background-color: rgba(46,160,67,0.15)"{{else}}style="background-color: rgba(248,81,73,0.15)"{{end}}>
+            <form action="/update_channel/" method="post">
+              <input style="text-align:center" id="target" type="number" min="1" max="100" name="target" value="{{$channel.ar_out_target}}">
+              <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+              <input type="hidden" name="update_target" value="4">
+            </form>
+        </td>
+        <td {{if $channel.auto_rebalance}}style="background-color: rgba(46,160,67,0.15)"{{else}}style="background-color: rgba(248,81,73,0.15)"{{end}}>
+            <form action="/update_channel/" method="post">
+              <input style="text-align:center" id="target" type="number" min="1" max="100" name="target" value="{{$channel.ar_in_target}}">
+              <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+              <input type="hidden" name="update_target" value="3">
+            </form>
+        </td>
+        <td>
+          <form action="/update_channel/" method="post">
+            <input type="submit" value="{{if $channel.auto_rebalance}}Disable{{else}}Enable{{end}}">
+            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
+            <input type="hidden" name="update_target" value="5">
+            <input type="hidden" name="target" value="0">
+          </form>
+        </td>
+        <td title="{{if $channel.is_active}}Uptime: {{slice ":-4" ($channel.last_update | naturaltime)}}{{else}}Downtime: {{slice ":-4" ($channel.last_update | naturaltime)}}{{end}}">{{pybool $channel.is_active}}</td>
+      </tr>
+      {{end}}
+    </table>
+  </div>
+</div>
+{{end}}
+{{if not .channels}}
+<div class="w3-container w3-padding-small">
+  <center><h1>You dont have any channels to setup yet!</h1></center>
+</div>
+{{end}}
+{{if .local_settings}}
+{{template "local_settings.html" (dict "settings" .local_settings "title" "Update Local")}}
+{{end}}
+{{if notNone .node_cache_entries}}
+<div class="w3-container w3-padding-small">
+  <small>Node cache: {{.node_cache_entries}} entries (~{{str .node_cache_mb}} MB RAM)</small>
+</div>
+{{end}}
+<script>
+  document.addEventListener('DOMContentLoaded', async () => {
+    const node_info = await GET('node_info', {data: {limit:1}})
+    if (parseFloat(node_info.version.substring(0, 4)) <= 0.17){
+      let inputs = document.querySelectorAll('input[data-tag="inbound"]')
+      inputs.forEach(function(input) {
+          input.disabled = true
+      })
+    }
+  })
+</script>
+{{end}}

@@ -1,0 +1,58 @@
+{{define "title"}}LNDg - Amboss Fees{{end}}
+{{define "content"}}
+<script src="/static/charts.js"></script>
+<!-- Saved Channel Fee History Section -->
+<div class="w3-container w3-padding-small">
+  <hr/>
+  <h2>Channel Fee History</h2>
+
+  <!-- Add New Channel Form -->
+  <div style="margin-bottom: 20px; padding: 15px; border-radius: 5px;">
+    <h3 style="margin-top: 0;">Add Channel to Monitor</h3>
+    <div style="margin-bottom: 15px;">
+      <label for="channel_id_input">Channel ID:</label>
+      <input type="text"
+             id="channel_id_input"
+             placeholder="Enter channel ID (e.g., 850718599698046976)"
+             style="width: 350px; margin-left: 10px; margin-right: 10px;">
+
+      <label for="channel_name_input">Custom Name:</label>
+      <input type="text"
+             id="channel_name_input"
+             placeholder="Enter channel name (e.g., My Exchange Channel)"
+             style="width: 300px; margin-left: 10px; margin-right: 10px;">
+
+      <button onclick="addChannelToMonitor()" class="w3-button w3-blue">Add Channel</button>
+      <span id="add_loading_indicator" style="margin-left: 10px; display: none;">Adding...</span>
+    </div>
+
+    <div id="add_error_message" class="w3-panel w3-red" style="display: none; margin-top: 10px;">
+      <p id="add_error_text"></p>
+    </div>
+  </div>
+
+  <!-- Saved Channels List -->
+  <div id="saved_channels_container"></div>
+</div>
+
+{{if .local_settings}}
+{{template "local_settings.html" (dict "settings" .local_settings "title" "Amboss")}}
+{{end}}
+<script>
+  // Server-Werte (vgl. base.html): die grossen Inline-Skripte sind nach
+  // static/amboss_fees.js ausgelagert (html/template kann JS-Template-Literals
+  // nicht inline escapen) und lesen diese Config.
+  window.AMB_ENABLED = {{default 0 .amb_enabled}};
+  window.AMB_UPDATE_HOURS = {{default 0 .amb_update_hours}};
+</script>
+<script>
+  document.addEventListener('DOMContentLoaded', function(){
+    const enabled = window.AMB_ENABLED || 0;
+    const hours = window.AMB_UPDATE_HOURS || 0;
+    if(enabled && hours > 0){
+      setInterval(function(){ window.location.href = '/amboss-fees?fetch=1'; }, hours * 3600 * 1000);
+    }
+  });
+</script>
+<script src="/static/amboss_fees.js"></script>
+{{end}}

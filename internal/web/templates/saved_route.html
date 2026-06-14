@@ -1,0 +1,80 @@
+{{define "title"}}LNDg - Saved Route{{end}}
+{{define "content"}}
+<div class="w3-container w3-padding-small">
+  <h2>Saved Route</h2>
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <tr>
+      <th>Attempt Id</th>
+      <th>Step</th>
+      <th>Alias</th>
+      <th>Pubkey</th>
+    </tr>
+    {{range $hop := .route}}
+    <tr>
+      <td>{{$hop.attempt_id}}</td>
+      <td>{{$hop.step}}</td>
+      <td>{{if $hop.alias}}{{$hop.alias}}{{else}}---{{end}}</td>
+      <td>{{$hop.pubkey}}</td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{if .rebalances}}
+<div class="w3-container w3-padding-small">
+  <h2>Linked Rebalance</h2>
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <tr>
+      <th>Requested</th>
+      <th>Start</th>
+      <th>Stop</th>
+      <th>Value</th>
+      <th>Fee Limit</th>
+      <th>Fees Paid</th>
+      <th>Hash</th>
+    </tr>
+    {{range $reb := .rebalances}}
+    <tr>
+      <td title="{{$reb.requested | djangodatetime}}">{{$reb.requested | naturaltime}}</td>
+      <td title="{{$reb.start | djangodatetime}}">{{if $reb.start}}{{$reb.start | naturaltime}}{{else}}---{{end}}</td>
+      <td title="{{$reb.stop | djangodatetime}}">{{if $reb.stop}}{{$reb.stop | naturaltime}}{{else}}---{{end}}</td>
+      <td>{{$reb.value | intcomma}}</td>
+      <td>{{$reb.fee_limit | intcomma}}</td>
+      <td>{{if $reb.fees_paid}}{{$reb.fees_paid | intcomma}}{{else}}---{{end}}</td>
+      <td><a href="/route?={{$reb.payment_hash}}" target="_blank">{{$reb.payment_hash}}</a></td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{end}}
+{{if .invoices}}
+<div class="w3-container w3-padding-small">
+  <h2>Linked Invoice</h2>
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <tr>
+      <th>Created</th>
+      <th>Settled</th>
+      <th width=25%>Payment Hash</th>
+      <th>Value</th>
+      <th>Amount Paid</th>
+      <th>State</th>
+      <th>Channel In Alias</th>
+      <th width=10%>Channel In</th>
+      <th><a href="/keysends" target="_blank">Keysend</a></th>
+    </tr>
+    {{range $invoice := .invoices}}
+    <tr>
+      <td title="{{$invoice.creation_date | djangodatetime}}">{{$invoice.creation_date | naturaltime}}</td>
+      <td title="{{$invoice.settle_date | djangodatetime}}">{{if eq $invoice.state 1}}{{$invoice.settle_date | naturaltime}}{{else}}---{{end}}</td>
+      <td><a href="/route?={{$invoice.r_hash}}" target="_blank">{{$invoice.r_hash}}</td>
+      <td>{{$invoice.value | add "0" | intcomma}}</td>
+      <td>{{if eq $invoice.state 1}}{{$invoice.amt_paid | intcomma}}{{else}}---{{end}}</td>
+      <td>{{if eq $invoice.state 0}}Open{{else}}{{if eq $invoice.state 1}}Settled{{else}}{{if eq $invoice.state 2}}Canceled{{else}}{{$invoice.state}}{{end}}{{end}}{{end}}</td>
+      <td>{{if eq $invoice.state 1}}{{if eq (str $invoice.chan_in_alias) ""}}---{{else}}{{$invoice.chan_in_alias}}{{end}}{{else}}---{{end}}</td>
+      <td>{{if and (eq $invoice.state 1) (notNone $invoice.chan_in)}}<a href="/channel?={{$invoice.chan_in}}" target="_blank">{{$invoice.chan_in}}</a>{{else}}---{{end}}</td>
+      <td title="{{$invoice.message}}">{{if notNone $invoice.keysend_preimage}}<a href="/keysends?={{$invoice.r_hash}}" target="_blank">Yes</a>{{else}}No{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{end}}
+{{end}}

@@ -1,0 +1,210 @@
+{{define "title"}}LNDg - Saved Routes{{end}}
+{{define "content"}}
+<div class="w3-container w3-padding-small">
+  <h2>Saved Routes</h2>
+  <div class="w3-bar w3-border-bottom w3-margin-bottom">
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Overview')">Overview</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Routes')">Routes</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Probing')">Probing</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Reputation')">Node Reputation</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Settings')">Settings</button>
+  </div>
+
+  <!-- Overview Tab -->
+  <div id="Overview" class="tabcontent" style="display:none">
+    <div class="w3-row-padding">
+      <div class="w3-half w3-margin-bottom">
+        <div class="w3-card w3-padding">
+          <h4>Routes</h4>
+          <table class="w3-table">
+            <tr><td>Total saved routes</td><td id="stat-total-routes" class="w3-right-align">--</td></tr>
+            <tr><td>Probed (untested)</td><td id="stat-probed" class="w3-right-align">--</td></tr>
+            <tr><td>Tested (with real data)</td><td id="stat-tested" class="w3-right-align">--</td></tr>
+            <tr><td>Added in last 24h</td><td id="stat-recent" class="w3-right-align">--</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="w3-half w3-margin-bottom">
+        <div class="w3-card w3-padding">
+          <h4>Node Reputation</h4>
+          <table class="w3-table">
+            <tr><td>Tracked nodes</td><td id="stat-total-nodes" class="w3-right-align">--</td></tr>
+            <tr><td>Poor reputation (&lt;30%)</td><td id="stat-poor-nodes" class="w3-right-align">--</td></tr>
+            <tr><td>Last probe time</td><td id="stat-last-probe" class="w3-right-align">--</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Routes Tab -->
+  <div id="Routes" class="tabcontent" style="display:none">
+    <input class="w3-input w3-border w3-margin-bottom" id="routeSearch" type="text" placeholder="Search by alias or pubkey..." oninput="filterRoutes()">
+    <button class="w3-button w3-red w3-margin-bottom" onclick="deleteSelected()">Delete Selected</button>
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <thead>
+        <tr>
+          <th><input onclick="[...document.getElementsByClassName('route-select')].forEach(el => el.checked = this.checked)" class="w3-check" type="checkbox"/></th>
+          <th>Target Pubkey</th>
+          <th>Outgoing Chan ID</th>
+          <th>Fee PPM</th>
+          <th>Source</th>
+          <th>Success Ratio</th>
+          <th>Weighted Ratio</th>
+          <th>Successes</th>
+          <th>Failures</th>
+          <th>Last Success</th>
+          <th>Last Failure</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="routesTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Probing Tab -->
+  <div id="Probing" class="tabcontent" style="display:none">
+    <div class="w3-row-padding">
+      <div class="w3-half w3-margin-bottom">
+        <div class="w3-card w3-padding">
+          <h4>Probe Status</h4>
+          <table class="w3-table">
+            <tr><td>Probing</td><td id="probe-status" class="w3-right-align">--</td></tr>
+            <tr><td>Last probe</td><td id="probe-last" class="w3-right-align">--</td></tr>
+            <tr><td>Next probe due</td><td id="probe-next" class="w3-right-align">--</td></tr>
+            <tr><td>Probe interval</td><td id="probe-interval" class="w3-right-align">--</td></tr>
+            <tr><td>Probe amount</td><td class="w3-right-align">per-channel</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="w3-half w3-margin-bottom">
+        <div class="w3-card w3-padding">
+          <h4>Probe Results</h4>
+          <table class="w3-table">
+            <tr><td>Routes discovered by probing</td><td id="probe-routes" class="w3-right-align">--</td></tr>
+            <tr><td>Unique targets probed</td><td id="probe-targets" class="w3-right-align">--</td></tr>
+            <tr><td>Probed routes success rate</td><td id="probe-success-rate" class="w3-right-align">--</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+    <button class="w3-button w3-blue w3-margin-bottom" id="probeNowBtn" onclick="probeNow()">Probe Now</button>
+    <button class="w3-button w3-red w3-margin-bottom" id="cleanupBtn" onclick="cleanupUntested()">Clean Up Untested Routes</button>
+    <h4>Probe History</h4>
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Targets</th>
+          <th>New Routes</th>
+          <th>Existing</th>
+          <th>Errors</th>
+          <th>Duration</th>
+        </tr>
+      </thead>
+      <tbody id="probeLogTable"></tbody>
+    </table>
+    <div id="probeDetailPanel" class="w3-margin-top" style="display:none">
+      <h4>Probe Details — <span id="probeDetailTime"></span></h4>
+      <table class="w3-table-all w3-centered w3-hoverable">
+        <thead>
+          <tr>
+            <th>Target</th>
+            <th>Out Chans Tried</th>
+            <th>New Routes</th>
+            <th>Existing</th>
+            <th>Errors</th>
+          </tr>
+        </thead>
+        <tbody id="probeDetailTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Node Reputation Tab -->
+  <div id="Reputation" class="tabcontent" style="display:none">
+    <div class="w3-row" style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+      <input class="w3-input w3-border" id="repSearch" type="text" placeholder="Search by alias or pubkey..." oninput="filterReputation()" style="flex:1">
+      <form action="/reset_node_reputation/" method="post" onsubmit="return confirm('Delete all node reputation records?');" style="margin:0">
+        <button type="submit" class="w3-button w3-red">Reset Node Reputation</button>
+      </form>
+    </div>
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <thead>
+        <tr>
+          <th>Node</th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('success_count')">Successes <span id="rep-sort-success_count"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('failure_count')">Failures <span id="rep-sort-failure_count"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('weighted_ratio')">Score <span id="rep-sort-weighted_ratio"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('last_success')">Last Success <span id="rep-sort-last_success"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('last_failure')">Last Failure <span id="rep-sort-last_failure"></span></th>
+        </tr>
+      </thead>
+      <tbody id="reputationTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Settings Tab -->
+  <div id="Settings" class="tabcontent" style="display:none">
+    <div class="w3-row-padding">
+      <div class="w3-half">
+        <div class="w3-card w3-padding w3-margin-bottom">
+          <h4>Route Settings</h4>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            <label for="route_limit"><b>Routes to try</b> (1-50):</label>
+            <input class="w3-input w3-border" id="route_limit" name="value" type="number" min="1" max="50" value="{{.route_limit}}">
+            <input type="hidden" name="key" value="RR-RouteLimit">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            <label for="collect_routes"><b>Collect Routes:</b></label>
+            <select class="w3-select w3-border" id="collect_routes" name="value">
+              <option value="1" {{if .collect_routes}}selected{{end}}>On</option>
+              <option value="0" {{if not .collect_routes}}selected{{end}}>Off</option>
+            </select>
+            <input type="hidden" name="key" value="RR-CollectRoutes">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form action="/update_setting/" method="post">
+            <label for="use_saved"><b>Use Saved Routes:</b></label>
+            <select class="w3-select w3-border" id="use_saved" name="value">
+              <option value="1" {{if .use_saved_routes}}selected{{end}}>On</option>
+              <option value="0" {{if not .use_saved_routes}}selected{{end}}>Off</option>
+            </select>
+            <input type="hidden" name="key" value="RR-UseSavedRoutes">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+        </div>
+      </div>
+      <div class="w3-half">
+        <div class="w3-card w3-padding w3-margin-bottom">
+          <h4>Probe Settings</h4>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            <label for="qr_enabled"><b>Enable Probing:</b></label>
+            <select class="w3-select w3-border" id="qr_enabled" name="value">
+              <option value="1" {{if .qr_enabled}}selected{{end}}>On</option>
+              <option value="0" {{if not .qr_enabled}}selected{{end}}>Off</option>
+            </select>
+            <input type="hidden" name="key" value="QR-Enabled">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            <label for="qr_update_hours"><b>Probe interval</b> (hours, 0.5-168):</label>
+            <input class="w3-input w3-border" id="qr_update_hours" name="value" type="number" min="0.5" max="168" step="0.5" value="{{.qr_update_hours}}">
+            <input type="hidden" name="key" value="QR-UpdateHours">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form action="/update_setting/" method="post">
+            <label for="qr_max_per_target"><b>Max probes per target</b> (1-20):</label>
+            <input class="w3-input w3-border" id="qr_max_per_target" name="value" type="number" min="1" max="20" value="{{.qr_max_per_target}}">
+            <input type="hidden" name="key" value="QR-MaxPerTarget">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/rebalance_routes.js"></script>
+{{end}}
