@@ -150,10 +150,12 @@ func (s *Server) handleChanPolicy(w http.ResponseWriter, r *http.Request) {
 			returnResp.Set("inbound_base_fee", *body.InboundBaseFee)
 		}
 		if body.InboundFeeRate != nil {
-			if err := s.execChanPolicy(ctx, w, `UPDATE gui_channels SET local_inbound_fee_rate=$2 WHERE chan_id=$1`, ch.ChanID, int32(*body.InboundFeeRate)); err != nil {
+			// same as the UI: an explicitly set rate wins over the offset automation
+			if err := s.execChanPolicy(ctx, w, `UPDATE gui_channels SET local_inbound_fee_rate=$2, inbound_offset=0 WHERE chan_id=$1`, ch.ChanID, int32(*body.InboundFeeRate)); err != nil {
 				return
 			}
 			returnResp.Set("inbound_fee_rate", *body.InboundFeeRate)
+			returnResp.Set("cleared_inbound_offset", ch.InboundOffset != 0)
 		}
 		if body.Cltv != nil {
 			if err := s.execChanPolicy(ctx, w, `UPDATE gui_channels SET local_cltv=$2 WHERE chan_id=$1`, ch.ChanID, int32(*body.Cltv)); err != nil {

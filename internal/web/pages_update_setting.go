@@ -183,15 +183,20 @@ func (s *Server) handleUpdateSetting(w http.ResponseWriter, r *http.Request) {
 		if fail(err) {
 			return
 		}
+		clearedOffsets := 0
 		for _, ch := range channels {
 			var inbound *lnrpc.InboundFee
 			var col string
 			if key == "ALL-iRate" {
 				inbound = &lnrpc.InboundFee{BaseFeeMsat: ch.localInboundBaseFee, FeeRatePpm: int32(target)}
-				col = "local_inbound_fee_rate"
+				// same as the per channel update: a manual rate wins over the offset
+				col = "local_inbound_fee_rate=$2, inbound_offset=0"
+				if ch.inboundOffset != 0 {
+					clearedOffsets++
+				}
 			} else {
 				inbound = &lnrpc.InboundFee{BaseFeeMsat: int32(target), FeeRatePpm: ch.localInboundFeeRate}
-				col = "local_inbound_base_fee"
+				col = "local_inbound_base_fee=$2"
 			}
 			if _, err := s.lnd.Lightning.UpdateChannelPolicy(ctx, &lnrpc.PolicyUpdateRequest{
 				Scope:       &lnrpc.PolicyUpdateRequest_ChanPoint{ChanPoint: channelPoint(ch.fundingTxid, ch.outputIndex)},
@@ -200,12 +205,15 @@ func (s *Server) handleUpdateSetting(w http.ResponseWriter, r *http.Request) {
 			}); fail(err) {
 				return
 			}
-			if _, err := s.db.Exec(ctx, `UPDATE gui_channels SET `+col+`=$2 WHERE chan_id=$1`, ch.chanID, int32(target)); fail(err) {
+			if _, err := s.db.Exec(ctx, `UPDATE gui_channels SET `+col+` WHERE chan_id=$1`, ch.chanID, int32(target)); fail(err) {
 				return
 			}
 		}
 		if key == "ALL-iRate" {
 			f.add("Inbound fee rate for all open channels updated to a value of: " + strconv.Itoa(target))
+			if clearedOffsets > 0 {
+				f.add("Inbound offset cleared on " + strconv.Itoa(clearedOffsets) + " channel(s), the manual rate now wins.")
+			}
 		} else {
 			f.add("Inbound base fee for all channels updated to a value of: " + strconv.Itoa(target))
 		}

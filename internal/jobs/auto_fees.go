@@ -90,9 +90,13 @@ func autoFeesBody(ctx context.Context, q autoFeesQuerier, client policyClient, i
 
 		if inboundEnabled && versionFloat(info.Version) >= 0.18 {
 			inboundFeeRate := int(row.NewInboundRate) // int() trunkiert
+			// if we are using a discount, then discount our base fee to mirror outbound.
+			// a positive rate is a manual override, keep the base fee set alongside it.
 			inboundBaseFee := int32(0)
-			if inboundFeeRate != 0 {
+			if inboundFeeRate < 0 {
 				inboundBaseFee = -channel.LocalBaseFee
+			} else if inboundFeeRate > 0 {
+				inboundBaseFee = channel.LocalInboundBaseFee
 			}
 			if _, e := client.UpdateChannelPolicy(ctx, &lnrpc.PolicyUpdateRequest{
 				Scope:         &lnrpc.PolicyUpdateRequest_ChanPoint{ChanPoint: cp},

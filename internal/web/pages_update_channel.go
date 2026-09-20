@@ -111,10 +111,15 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 			}); fail(err) {
 				return
 			}
-			if !upd(`UPDATE gui_channels SET local_inbound_fee_rate=$2 WHERE chan_id=$1`, chanID, int32(tfr)) {
+			// a manual rate wins over the offset automation, which would otherwise
+			// recompute this channel on the next outbound fee change or offset job
+			if !upd(`UPDATE gui_channels SET local_inbound_fee_rate=$2, inbound_offset=0 WHERE chan_id=$1`, chanID, int32(tfr)) {
 				return
 			}
 			f.add(fmt.Sprintf("Inbound fee rate for channel %s (%s) updated to a value of: %d", alias, chanID, tfr))
+			if ch.InboundOffset != 0 {
+				f.add(fmt.Sprintf("Inbound offset for channel %s (%s) cleared, the manual rate now wins.", alias, chanID))
+			}
 		} else {
 			f.add("LND version too low to set inbound fees, update to v0.18+")
 		}
