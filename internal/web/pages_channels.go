@@ -53,7 +53,7 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	channels, err := s.queryMaps(ctx, `SELECT chan_id, short_chan_id, remote_pubkey, COALESCE(alias,'') AS alias,
                 funding_txid, output_index, capacity, local_balance, remote_balance,
                 pending_outbound, pending_inbound, num_updates, initiator
-            FROM gui_channels WHERE is_open = true AND private = false`)
+            FROM gui_channels WHERE is_open = true AND private = false ORDER BY chan_id`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -63,6 +63,9 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Float columns are summed exactly (::numeric): pandas' sums carry no float
+	// error, Postgres' float8 sum does, and int() of 1780.9999999999995 is off by one.
+
 	// Forwards (30d base, 7d via FILTER) grouped by out or in channel.
 	fwdSQL := func(col string) string {
 		return `SELECT ` + col + ` AS cid,
@@ -70,10 +73,10 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
                 count(*) AS cnt30,
                 COALESCE(sum(amt_out_msat) FILTER (WHERE forward_date >= $1),0)::bigint AS amt7,
                 COALESCE(sum(amt_out_msat),0)::bigint AS amt30,
-                COALESCE(sum(fee) FILTER (WHERE forward_date >= $1),0)::float8 AS fee7,
-                COALESCE(sum(fee),0)::float8 AS fee30,
-                COALESCE(sum(inbound_fee) FILTER (WHERE forward_date >= $1),0)::float8 AS ifee7,
-                COALESCE(sum(inbound_fee),0)::float8 AS ifee30
+                COALESCE(sum(fee::numeric) FILTER (WHERE forward_date >= $1),0)::float8 AS fee7,
+                COALESCE(sum(fee::numeric),0)::float8 AS fee30,
+                COALESCE(sum(inbound_fee::numeric) FILTER (WHERE forward_date >= $1),0)::float8 AS ifee7,
+                COALESCE(sum(inbound_fee::numeric),0)::float8 AS ifee30
             FROM gui_forwards WHERE forward_date >= $2 GROUP BY ` + col
 	}
 	outFwd := map[string]chFwdAgg{}
@@ -112,8 +115,8 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	payRows, err := s.queryMaps(ctx, `SELECT chan_out AS cid,
                 count(*) FILTER (WHERE creation_date >= $1) AS cnt7,
                 count(*) AS cnt30,
-                COALESCE(sum(value) FILTER (WHERE creation_date >= $1),0)::float8 AS val7,
-                COALESCE(sum(value),0)::float8 AS val30
+                COALESCE(sum(value::numeric) FILTER (WHERE creation_date >= $1),0)::float8 AS val7,
+                COALESCE(sum(value::numeric),0)::float8 AS val30
             FROM gui_payments WHERE status = 2 AND rebal_chan IS NOT NULL AND creation_date >= $2 GROUP BY chan_out`, cut7, cut30)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -137,8 +140,8 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
                 count(*) AS cnt30,
                 COALESCE(sum(i.amt_paid) FILTER (WHERE i.settle_date >= $1),0)::bigint AS amt7,
                 COALESCE(sum(i.amt_paid),0)::bigint AS amt30,
-                COALESCE(sum(p.fee) FILTER (WHERE i.settle_date >= $1 AND p.creation_date >= $1),0)::float8 AS cost7,
-                COALESCE(sum(p.fee),0)::float8 AS cost30
+                COALESCE(sum(p.fee::numeric) FILTER (WHERE i.settle_date >= $1 AND p.creation_date >= $1),0)::float8 AS cost7,
+                COALESCE(sum(p.fee::numeric),0)::float8 AS cost30
             FROM gui_invoices i JOIN gui_payments p ON p.payment_hash = i.r_hash
             WHERE i.state = 1 AND p.status = 2 AND p.rebal_chan IS NOT NULL AND p.creation_date >= $2
             GROUP BY i.chan_in`, cut7, cut30)

@@ -62,7 +62,7 @@ func (s *Server) handlePendingHtlcs(w http.ResponseWriter, r *http.Request) {
 
 	const sql = `SELECT *, (expiration_height - $1) AS blocks_til_expiration,
             ((expiration_height - $1)*10)/60 AS hours_til_expiration
-        FROM gui_pendinghtlcs WHERE incoming = $2 ORDER BY expiration_height`
+        FROM gui_pendinghtlcs WHERE incoming = $2 ORDER BY expiration_height, id`
 	incoming, err := s.queryMaps(ctx, sql, blockHeight, true)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

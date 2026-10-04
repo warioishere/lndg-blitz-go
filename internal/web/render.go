@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"reflect"
 	"strings"
@@ -75,7 +76,7 @@ func (m *orderedMap) MarshalJSON() ([]byte, error) {
 		}
 		buf.Write(keyJSON)
 		buf.WriteByte(':')
-		valJSON, err := json.Marshal(m.values[k])
+		valJSON, err := marshalValue(m.values[k])
 		if err != nil {
 			return nil, err
 		}
@@ -83,6 +84,34 @@ func (m *orderedMap) MarshalJSON() ([]byte, error) {
 	}
 	buf.WriteByte('}')
 	return buf.Bytes(), nil
+}
+
+// marshalValue writes floats as Python's json.dumps does ("84912.0",
+// "1e-05"); everything else as encoding/json. NaN/Inf keep failing, as in DRF.
+func marshalValue(v any) ([]byte, error) {
+	var f float64
+	switch n := v.(type) {
+	case float64:
+		f = n
+	case float32:
+		f = float64(n)
+	case pgtype.Float8:
+		if !n.Valid {
+			return []byte("null"), nil
+		}
+		f = n.Float64
+	case pgtype.Float4:
+		if !n.Valid {
+			return []byte("null"), nil
+		}
+		f = float64(n.Float32)
+	default:
+		return json.Marshal(v)
+	}
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return json.Marshal(f)
+	}
+	return []byte(pyFloatString(f)), nil
 }
 
 // drfDateTime serializes a timestamptz column as a naive UTC ISO-8601 string,

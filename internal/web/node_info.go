@@ -325,8 +325,8 @@ func int4Val(v pgtype.Int4) any {
 }
 
 // channelDBSize returns the channel database file size in gigabytes, rounded
-// half-to-even at 3 decimal places. Returns 0 if the file cannot be stat'd.
-func channelDBSize(path string) float64 {
+// to 3 decimal places; the integer 0, as in Python, if the file cannot be stat'd.
+func channelDBSize(path string) any {
 	fi, err := os.Stat(expandHome(path))
 	if err != nil {
 		return 0

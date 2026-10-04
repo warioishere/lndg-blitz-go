@@ -124,7 +124,7 @@ func (s *Server) renderError(w http.ResponseWriter, r *http.Request, errMsg stri
 func (s *Server) handlePayments(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.queryMaps(r.Context(),
 		`SELECT *, ROUND((fee*1000000)/value)::bigint AS ppm FROM gui_payments `+
-			`WHERE status <> 3 ORDER BY creation_date DESC LIMIT 150`)
+			`WHERE status <> 3 ORDER BY creation_date DESC, index DESC LIMIT 150`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -135,7 +135,7 @@ func (s *Server) handlePayments(w http.ResponseWriter, r *http.Request) {
 // handleInvoices renders the invoices page with the last 150 settled invoices (state=1).
 func (s *Server) handleInvoices(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.queryMaps(r.Context(),
-		`SELECT * FROM gui_invoices WHERE state = 1 ORDER BY creation_date DESC LIMIT 150`)
+		`SELECT * FROM gui_invoices WHERE state = 1 ORDER BY creation_date DESC, index DESC LIMIT 150`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

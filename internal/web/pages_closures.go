@@ -96,7 +96,7 @@ func (s *Server) handleClosures(w http.ResponseWriter, r *http.Request) {
 	closures, err := s.queryMaps(ctx,
 		`SELECT c.*, COALESCE(ch.alias, '') AS alias, COALESCE(ch.short_chan_id, '') AS short_chan_id
             FROM gui_closures c LEFT JOIN gui_channels ch ON c.chan_id = ch.chan_id
-            ORDER BY c.close_height DESC`)
+            ORDER BY c.close_height DESC, c.id`)
 	if err != nil {
 		s.renderError(w, r, err.Error())
 		return

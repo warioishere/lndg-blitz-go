@@ -79,14 +79,15 @@ func (s *Server) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 		return out
 	}
 
+	// Float columns are summed exactly (::numeric), as pandas does; see channels.
 	// --- Forwards (routing) per time window, split by out/in. amt = sum(amt_out_msat). ---
 	fwdSQL := func(col string) string {
 		return `SELECT
             count(*) AS c0, count(*) FILTER (WHERE forward_date>=$2) AS c1, count(*) FILTER (WHERE forward_date>=$3) AS c2, count(*) FILTER (WHERE forward_date>=$4) AS c3,
             COALESCE(sum(amt_out_msat),0)::bigint AS a0, COALESCE(sum(amt_out_msat) FILTER (WHERE forward_date>=$2),0)::bigint AS a1, COALESCE(sum(amt_out_msat) FILTER (WHERE forward_date>=$3),0)::bigint AS a2, COALESCE(sum(amt_out_msat) FILTER (WHERE forward_date>=$4),0)::bigint AS a3,
-            COALESCE(sum(fee),0)::float8 AS f0, COALESCE(sum(fee) FILTER (WHERE forward_date>=$2),0)::float8 AS f1, COALESCE(sum(fee) FILTER (WHERE forward_date>=$3),0)::float8 AS f2, COALESCE(sum(fee) FILTER (WHERE forward_date>=$4),0)::float8 AS f3,
+            COALESCE(sum(fee::numeric),0)::float8 AS f0, COALESCE(sum(fee::numeric) FILTER (WHERE forward_date>=$2),0)::float8 AS f1, COALESCE(sum(fee::numeric) FILTER (WHERE forward_date>=$3),0)::float8 AS f2, COALESCE(sum(fee::numeric) FILTER (WHERE forward_date>=$4),0)::float8 AS f3,
             COALESCE(sum(amt_out_msat) FILTER (WHERE forward_date>=$3 AND amt_out_msat>=1000000),0)::bigint AS a7f,
-            COALESCE(sum(fee) FILTER (WHERE forward_date>=$3 AND amt_out_msat>=1000000),0)::float8 AS f7f
+            COALESCE(sum(fee::numeric) FILTER (WHERE forward_date>=$3 AND amt_out_msat>=1000000),0)::float8 AS f7f
             FROM gui_forwards WHERE ` + col + ` = $1`
 	}
 	outRow, err := one(fwdSQL("chan_id_out"), chanID, c30, c7, c1)
@@ -130,7 +131,7 @@ func (s *Server) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 	// --- Rebalance OUT (Payments chan_out=chan, status2, rebal) ---
 	payRow, err := one(`SELECT
             count(*) AS c0, count(*) FILTER (WHERE creation_date>=$2) AS c1, count(*) FILTER (WHERE creation_date>=$3) AS c2, count(*) FILTER (WHERE creation_date>=$4) AS c3,
-            COALESCE(sum(value),0)::float8 AS v0, COALESCE(sum(value) FILTER (WHERE creation_date>=$2),0)::float8 AS v1, COALESCE(sum(value) FILTER (WHERE creation_date>=$3),0)::float8 AS v2, COALESCE(sum(value) FILTER (WHERE creation_date>=$4),0)::float8 AS v3
+            COALESCE(sum(value::numeric),0)::float8 AS v0, COALESCE(sum(value::numeric) FILTER (WHERE creation_date>=$2),0)::float8 AS v1, COALESCE(sum(value::numeric) FILTER (WHERE creation_date>=$3),0)::float8 AS v2, COALESCE(sum(value::numeric) FILTER (WHERE creation_date>=$4),0)::float8 AS v3
             FROM gui_payments WHERE status=2 AND chan_out=$1 AND rebal_chan IS NOT NULL`, chanID, c30, c7, c1)
 	if fail(err) {
 		return
@@ -159,10 +160,10 @@ func (s *Server) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 
 	// --- Costs (Invoice value>=1000 JOIN Payment value>=1000 rebal_chan=chan) ---
 	costRow, err := one(`SELECT
-            COALESCE(sum(p.fee),0)::float8 AS c0,
-            COALESCE(sum(p.fee) FILTER (WHERE i.settle_date>=$2),0)::float8 AS c1,
-            COALESCE(sum(p.fee) FILTER (WHERE i.settle_date>=$3),0)::float8 AS c2,
-            COALESCE(sum(p.fee) FILTER (WHERE i.settle_date>=$4),0)::float8 AS c3
+            COALESCE(sum(p.fee::numeric),0)::float8 AS c0,
+            COALESCE(sum(p.fee::numeric) FILTER (WHERE i.settle_date>=$2),0)::float8 AS c1,
+            COALESCE(sum(p.fee::numeric) FILTER (WHERE i.settle_date>=$3),0)::float8 AS c2,
+            COALESCE(sum(p.fee::numeric) FILTER (WHERE i.settle_date>=$4),0)::float8 AS c3
             FROM gui_invoices i JOIN gui_payments p ON p.payment_hash = i.r_hash
             WHERE i.state=1 AND i.chan_in=$1 AND i.value>=1000 AND p.status=2 AND p.rebal_chan=$1 AND p.value>=1000`, chanID, c30, c7, c1)
 	if fail(err) {

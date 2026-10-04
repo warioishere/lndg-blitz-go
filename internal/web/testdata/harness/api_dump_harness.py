@@ -29,7 +29,7 @@ def value_for(f, i, model):
         n = f.max_length or 20
         return (f'{f.name[:6]}{model.__name__[:4]}{i}')[:n]
     if t in ('IntegerField', 'BigIntegerField', 'PositiveIntegerField', 'SmallIntegerField'): return 7 + i
-    if t == 'FloatField': return 2.5 + i
+    if t == 'FloatField': return 2.5 if i == 0 else 3.0  # whole floats render as 3.0
     if t == 'BooleanField': return i == 0
     if t == 'DateTimeField': return datetime(2026, 3, 4, 5, 6, 7, 123456 if i == 0 else 0)
     if t == 'JSONField': return [{'k': i}]

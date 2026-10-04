@@ -175,6 +175,8 @@ func templateFuncs() template.FuncMap {
 		"pyEq":           pyEq,
 		"numEq":          numEq,
 		"reversed":       reversed,
+		// a string literal written in a Django template is already safe
+		"safe": func(s string) template.HTML { return template.HTML(s) },
 	}
 }
 

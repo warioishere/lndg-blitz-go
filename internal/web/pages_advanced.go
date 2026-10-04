@@ -8,14 +8,15 @@ import (
 	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
-// advancedSQL selects open channels with outbound_percent/inbound_percent computed
-// as ((bal+pending)*1000)/capacity using integer division in Postgres, ordered by
-// is_active descending then outbound_percent ascending.
+// advancedSQL selects open channels with outbound_percent/inbound_percent as
+// ((bal+pending)*1000)/capacity, truncated like Django's int conversion. Django
+// orders in SQL on SUM(bigint) = numeric, i.e. the exact quotient, so the sort
+// uses that one.
 const advancedSQL = `SELECT *,
         ((local_balance+pending_outbound)*1000)/capacity AS outbound_percent,
         ((remote_balance+pending_inbound)*1000)/capacity AS inbound_percent
     FROM gui_channels WHERE is_open = true
-    ORDER BY is_active DESC, outbound_percent ASC`
+    ORDER BY is_active DESC, ((local_balance+pending_outbound)*1000)::numeric/capacity, chan_id`
 
 // handleAdvanced renders the Advanced Channel Settings table with per-row computed
 // fields (out/in_percent, fee_ratio, local_min/max_htlc, pending-adjusted balances)

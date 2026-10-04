@@ -85,3 +85,48 @@ func TestMigrationsApply(t *testing.T) {
 	// Idempotency: a second call to Migrate returns ErrNoChange and no error.
 	require.NoError(t, Migrate(migrateURL))
 }
+
+// A database set up by the Django app (gui migrations through 0061) is taken
+// over: 000001 is marked as applied, later migrations run.
+func TestMigrateTakesOverDjangoDatabase(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping container-based test in -short mode")
+	}
+	url, cleanup := startPostgres(t)
+	defer cleanup()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, "postgres"+url[len("pgx5"):])
+	require.NoError(t, err)
+	defer conn.Close(ctx)
+
+	// stand-in for `manage.py migrate` up to gui 0061: the 000001 schema plus
+	// Django's migration table, with one row of data that must survive
+	schema, err := migrationsFS.ReadFile("migrations/000001_initial_schema.up.sql")
+	require.NoError(t, err)
+	_, err = conn.Exec(ctx, string(schema))
+	require.NoError(t, err)
+	_, err = conn.Exec(ctx, `CREATE TABLE django_migrations (id serial, app varchar(255), name varchar(255), applied timestamptz);
+		INSERT INTO django_migrations (app, name, applied) VALUES ('gui', '0060_probelog', now());
+		INSERT INTO gui_localsettings (key, value) VALUES ('AR-Enabled', '1')`)
+	require.NoError(t, err)
+
+	err = Migrate(url)
+	require.ErrorContains(t, err, "older than gui 0061", "an older Django schema is refused")
+
+	_, err = conn.Exec(ctx, `INSERT INTO django_migrations (app, name, applied) VALUES ('gui', '0061_graphprobelog_restore_probelog', now())`)
+	require.NoError(t, err)
+	require.NoError(t, Migrate(url))
+	require.NoError(t, Migrate(url), "second run: nothing to do")
+
+	var version int
+	var dirty bool
+	require.NoError(t, conn.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty))
+	assert.Equal(t, 2, version)
+	assert.False(t, dirty)
+	var value string
+	require.NoError(t, conn.QueryRow(ctx, `SELECT value FROM gui_localsettings WHERE key='AR-Enabled'`).Scan(&value))
+	assert.Equal(t, "1", value, "data kept")
+	var hasCol bool
+	require.NoError(t, conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='gui_payments' AND column_name='source_fee_rate')`).Scan(&hasCol))
+	assert.True(t, hasCol, "000002 applied")
+}

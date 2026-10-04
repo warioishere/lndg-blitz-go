@@ -51,6 +51,6 @@
 </script>
 <script src="/static/rebalancing.js"></script>
 <script src="/static/rebalances_table.js"></script>
-{{template "rebalances_table.html" (dict "count" 20 "load_count" 10 "title" "<a href=\"/rebalances\" target=\"_blank\">Rebalance Requests</a>" "payment_hash" "" "last_hop_pubkey" "")}}
+{{template "rebalances_table.html" (dict "count" 20 "load_count" 10 "title" (safe "<a href=\"/rebalances\" target=\"_blank\">Rebalance Requests</a>") "payment_hash" "" "last_hop_pubkey" "")}}
 {{template "local_settings.html" (dict "settings" .local_settings "title" "Auto-Rebalancer")}}
 {{end}}
