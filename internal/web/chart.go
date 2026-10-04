@@ -1,14 +1,18 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // chartSQL aggregates daily cost, revenue, and on-chain fees from payments,
 // invoices, forwards, on-chain transactions, and channel closures. Each source
 // is unioned into a single result set, then grouped by day (truncated to UTC).
-// $1 = offset (timestamptz), $2 = time_interval_per_block in seconds (float8).
+// $1 = offset (timestamptz), $2 = time_interval_per_block in seconds (float8);
+// both NULL without on-chain records, which leaves the closures out.
 const chartSQL = `
 SELECT dt, sum(cost) AS cost, sum(revenue) AS revenue, sum(onchain) AS onchain
 FROM (
@@ -30,39 +34,43 @@ FROM (
   UNION
   SELECT date_trunc('day', ($1::timestamptz + (close_height * ($2 * interval '1 second'))) AT TIME ZONE 'UTC'),
          0.0::float8, 0.0::float8, COALESCE(sum(closing_costs), 0)
-    FROM gui_closures GROUP BY 1
+    FROM gui_closures WHERE $1::timestamptz IS NOT NULL GROUP BY 1
 ) t
 GROUP BY dt ORDER BY dt`
 
 // handleChart returns a list of {dt, cost, revenue, onchain} per day.
-// Requires at least one on-chain record to estimate block timing for closure dates;
-// returns 500 if no on-chain data is available.
+// Closure dates are estimated from the block timing of the first and last
+// on-chain records, so closures are only included when there is one.
 func (s *Server) handleChart(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Estimate block time from the first and last on-chain records for closure date calculations.
+	var offset, intervalSecs any
 	var firstDate, lastDate time.Time
 	var firstBlock, lastBlock int32
-	if err := s.db.QueryRow(ctx,
+	err := s.db.QueryRow(ctx,
 		`SELECT time_stamp, block_height FROM gui_onchain ORDER BY time_stamp ASC LIMIT 1`).
-		Scan(&firstDate, &firstBlock); err != nil {
+		Scan(&firstDate, &firstBlock)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
 		return
-	}
-	if err := s.db.QueryRow(ctx,
-		`SELECT time_stamp, block_height FROM gui_onchain ORDER BY time_stamp DESC LIMIT 1`).
-		Scan(&lastDate, &lastBlock); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
-		return
+	default:
+		if err := s.db.QueryRow(ctx,
+			`SELECT time_stamp, block_height FROM gui_onchain ORDER BY time_stamp DESC LIMIT 1`).
+			Scan(&lastDate, &lastBlock); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
+			return
+		}
+		interval := 10 * time.Minute
+		if lastBlock > firstBlock {
+			interval = lastDate.Sub(firstDate) / time.Duration(lastBlock-firstBlock)
+		}
+		offset = firstDate.Add(-time.Duration(firstBlock) * interval)
+		intervalSecs = interval.Seconds()
 	}
 
-	interval := 10 * time.Minute
-	if lastBlock > firstBlock {
-		interval = lastDate.Sub(firstDate) / time.Duration(lastBlock-firstBlock)
-	}
-	offset := firstDate.Add(-time.Duration(firstBlock) * interval)
-
-	rows, err := s.db.Query(ctx, chartSQL, offset, interval.Seconds())
+	rows, err := s.db.Query(ctx, chartSQL, offset, intervalSecs)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
 		return
@@ -79,7 +87,7 @@ func (s *Server) handleChart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		results = append(results, newOrderedMap().
-			Set("dt", isoformatLocal(dt)).
+			Set("dt", isoformatUTC(dt)).
 			Set("cost", cost).
 			Set("revenue", revenue).
 			Set("onchain", onchain))

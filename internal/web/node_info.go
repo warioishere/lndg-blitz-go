@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // handleNodeInfo returns node status including pending channels and wallet balance.
@@ -38,7 +38,7 @@ func (s *Server) handleNodeInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limbo := pending.GetTotalLimboBalance()
-	var pendingOpen, pendingClosed, pendingForceClosed, waitingForClose any
+	var pendingOpen, pendingForceClosed, waitingForClose any
 	var pendingOpenBalance, pendingClosingBalance int64
 
 	if len(pending.GetPendingOpenChannels()) > 0 {
@@ -119,28 +119,6 @@ func (s *Server) handleNodeInfo(w http.ResponseWriter, r *http.Request) {
 		pendingOpen = items
 	}
 
-	// pending_closing_channels is deprecated and always empty in modern LND versions.
-	if len(pending.GetPendingClosingChannels()) > 0 {
-		items := make([]any, 0)
-		for _, cc := range pending.GetPendingClosingChannels() {
-			ch := cc.GetChannel()
-			item := newOrderedMap().
-				Set("remote_node_pub", ch.GetRemoteNodePub()).
-				Set("channel_point", ch.GetChannelPoint()).
-				Set("capacity", ch.GetCapacity()).
-				Set("local_balance", ch.GetLocalBalance()).
-				Set("remote_balance", ch.GetRemoteBalance()).
-				Set("local_chan_reserve_sat", ch.GetLocalChanReserveSat()).
-				Set("remote_chan_reserve_sat", ch.GetRemoteChanReserveSat()).
-				Set("initiator", int32(ch.GetInitiator())).
-				Set("commitment_type", int32(ch.GetCommitmentType())).
-				Set("closing_txid", cc.GetClosingTxid())
-			s.addPendingChannelDetails(ctx, item, ch.GetChannelPoint())
-			items = append(items, item)
-		}
-		pendingClosed = items
-	}
-
 	if len(pending.GetPendingForceClosingChannels()) > 0 {
 		items := make([]any, 0)
 		for _, fc := range pending.GetPendingForceClosingChannels() {
@@ -162,7 +140,7 @@ func (s *Server) handleNodeInfo(w http.ResponseWriter, r *http.Request) {
 				Set("limbo_balance", fc.GetLimboBalance()).
 				Set("maturity_height", fc.GetMaturityHeight()).
 				Set("blocks_til_maturity", blocks).
-				Set("maturity_datetime", isoformatLocal(maturity))
+				Set("maturity_datetime", isoformatUTC(maturity))
 			s.addPendingChannelDetails(ctx, item, ch.GetChannelPoint())
 			items = append(items, item)
 		}
@@ -218,7 +196,6 @@ func (s *Server) handleNodeInfo(w http.ResponseWriter, r *http.Request) {
 		Set("block", newOrderedMap().Set("hash", info.GetBlockHash()).Set("height", info.GetBlockHeight())).
 		Set("balance", balance).
 		Set("pending_open", pendingOpen).
-		Set("pending_closed", pendingClosed).
 		Set("pending_force_closed", pendingForceClosed).
 		Set("waiting_for_close", waitingForClose).
 		Set("db_size", channelDBSize(s.cfg.LND_DATABASE_PATH))
@@ -273,15 +250,15 @@ type db_GuiPendingchannel struct {
 	AutoFees      pgtype.Bool
 }
 
-// peerAlias returns the alias of a peer from gui_peers, or def if not found.
-func (s *Server) peerAlias(ctx context.Context, pubkey, def string) string {
+// peerAlias returns the alias of a peer from gui_peers (nil when the column
+// is NULL), or missing when the peer does not exist.
+func (s *Server) peerAlias(ctx context.Context, pubkey string, missing any) any {
 	var alias pgtype.Text
-	err := s.db.QueryRow(ctx, `SELECT alias FROM gui_peers WHERE pubkey=$1`, pubkey).Scan(&alias)
-	if err != nil {
-		return def
+	if err := s.db.QueryRow(ctx, `SELECT alias FROM gui_peers WHERE pubkey=$1`, pubkey).Scan(&alias); err != nil {
+		return missing
 	}
 	if !alias.Valid {
-		return ""
+		return nil
 	}
 	return alias.String
 }
@@ -347,15 +324,6 @@ func int4Val(v pgtype.Int4) any {
 	return nil
 }
 
-// isoformatLocal formats a locally computed time as an ISO 8601 string without
-// UTC conversion. Used for datetime.now()-based values displayed in local time.
-func isoformatLocal(t time.Time) string {
-	if t.Nanosecond() == 0 {
-		return t.Format("2006-01-02T15:04:05")
-	}
-	return t.Format("2006-01-02T15:04:05.000000")
-}
-
 // channelDBSize returns the channel database file size in gigabytes, rounded
 // half-to-even at 3 decimal places. Returns 0 if the file cannot be stat'd.
 func channelDBSize(path string) float64 {
@@ -364,7 +332,7 @@ func channelDBSize(path string) float64 {
 		return 0
 	}
 	gb := float64(fi.Size()) * 0.000000001
-	return math.RoundToEven(gb*1000) / 1000
+	return pyround.Round(gb, 3)
 }
 
 func expandHome(p string) string {

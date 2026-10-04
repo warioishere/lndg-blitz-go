@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"math"
+	"math/big"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -280,11 +281,25 @@ func numberString(v any) string {
 	}
 }
 
-// pyFloatString formats a float using the shortest round-trip representation,
-// but preserves ".0" for whole-number floats (e.g. 12.0 -> "12.0" rather than "12").
+// pyFloatString formats a float like Python's str(): shortest round-trip
+// digits, ".0" on whole numbers, exponent form below 1e-4 and from 1e16,
+// inf/nan in lower case.
 func pyFloatString(f float64) string {
+	switch {
+	case math.IsNaN(f):
+		return "nan"
+	case math.IsInf(f, 1):
+		return "inf"
+	case math.IsInf(f, -1):
+		return "-inf"
+	}
+	if e := strconv.FormatFloat(f, 'e', -1, 64); f != 0 {
+		if exp, _ := strconv.Atoi(e[strings.IndexByte(e, 'e')+1:]); exp < -4 || exp >= 16 {
+			return e
+		}
+	}
 	s := strconv.FormatFloat(f, 'f', -1, 64)
-	if !strings.ContainsAny(s, ".eEnN") {
+	if !strings.Contains(s, ".") {
 		s += ".0"
 	}
 	return s
@@ -458,12 +473,28 @@ func clampIndex(i, n int) int {
 	return i
 }
 
-// floatformat rounds to N decimal places using round-half-to-even (banker's rounding).
+// floatformat is Django's floatformat for arg >= 0: the value's shortest
+// decimal form (Python's str()) rounded half up to arg places, no "-0".
 func floatformat(arg int, v any) string {
-	f, _ := toFloat64(v)
-	factor := math.Pow(10, float64(arg))
-	rounded := math.RoundToEven(f*factor) / factor
-	return strconv.FormatFloat(rounded, 'f', arg, 64)
+	f, ok := toFloat64(v)
+	if !ok || math.IsInf(f, 0) || math.IsNaN(f) {
+		return numberString(v)
+	}
+	d, _ := new(big.Rat).SetString(strconv.FormatFloat(f, 'g', -1, 64))
+	scaled := d.Mul(d, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(arg)), nil)))
+	neg := scaled.Sign() < 0
+	scaled.Abs(scaled).Add(scaled, big.NewRat(1, 2))
+	n := new(big.Int).Quo(scaled.Num(), scaled.Denom()).String()
+	if len(n) <= arg {
+		n = strings.Repeat("0", arg-len(n)+1) + n
+	}
+	if arg > 0 {
+		n = n[:len(n)-arg] + "." + n[len(n)-arg:]
+	}
+	if neg && strings.Trim(n, "0.") != "" {
+		n = "-" + n
+	}
+	return n
 }
 
 func toFloat64(v any) (float64, bool) {
@@ -494,35 +525,95 @@ func dictGet(d any, key string) any {
 	return nil
 }
 
-// naturaltime returns a human-readable relative time string
-// (now / N minutes ago / N hours ago / N days ago).
+// naturaltime is Django humanize's naturaltime: under a day "now",
+// "a minute ago", "3 hours ago" and so on, beyond that timesince's two
+// adjacent units ("1 day, 5 hours ago"); "from now" for future times.
+// Count and unit are joined by a non-breaking space, as in Django.
 func naturaltime(v any) string {
 	t, ok := v.(time.Time)
 	if !ok {
 		return numberString(v)
 	}
-	d := time.Since(t)
-	if d < 0 {
-		return "now"
+	now := time.Now().UTC()
+	t = t.UTC()
+	earlier, later, suffix := t, now, " ago"
+	if t.After(now) {
+		earlier, later, suffix = now, t, " from now"
 	}
+	secs := int64(later.Sub(earlier) / time.Second)
 	switch {
-	case d < time.Minute:
+	case secs >= 86400:
+		return timesince(earlier, later) + suffix
+	case secs == 0:
 		return "now"
-	case d < time.Hour:
-		m := int(d.Minutes())
-		return plural(m, "minute") + " ago"
-	case d < 24*time.Hour:
-		h := int(d.Hours())
-		return plural(h, "hour") + " ago"
+	case secs < 60:
+		return countUnit(secs, "a second", "seconds") + suffix
+	case secs < 3600:
+		return countUnit(secs/60, "a minute", "minutes") + suffix
 	default:
-		days := int(d.Hours() / 24)
-		return plural(days, "day") + " ago"
+		return countUnit(secs/3600, "an hour", "hours") + suffix
 	}
 }
 
-func plural(n int, unit string) string {
+func countUnit(n int64, one, many string) string {
 	if n == 1 {
-		return "1 " + unit
+		return one
 	}
-	return strconv.Itoa(n) + " " + unit + "s"
+	return strconv.FormatInt(n, 10) + "\u00a0" + many
+}
+
+// timesince is django.utils.timesince with depth 2 for d before now: years
+// and months counted on the calendar (via a pivot date), then weeks, days,
+// hours, minutes; up to two adjacent non-zero units.
+func timesince(d, now time.Time) string {
+	unit := func(n int, name string) string {
+		if n != 1 {
+			name += "s"
+		}
+		return strconv.Itoa(n) + "\u00a0" + name
+	}
+	if now.Sub(d) < time.Second {
+		return unit(0, "minute")
+	}
+	totalMonths := (now.Year()-d.Year())*12 + int(now.Month()) - int(d.Month())
+	clock := func(t time.Time) time.Duration { return t.Sub(t.Truncate(24 * time.Hour)) }
+	if d.Day() > now.Day() || (d.Day() == now.Day() && clock(d) > clock(now)) {
+		totalMonths--
+	}
+	years, months := totalMonths/12, totalMonths%12
+	pivot := d
+	if years != 0 || months != 0 {
+		py, pm := d.Year()+years, int(d.Month())+months
+		if pm > 12 {
+			pm -= 12
+			py++
+		}
+		monthDays := [12]int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+		pivot = time.Date(py, time.Month(pm), min(monthDays[pm-1], d.Day()), d.Hour(), d.Minute(), d.Second(), 0, time.UTC)
+	}
+	remaining := now.Sub(pivot).Seconds()
+	partials := []int{years, months}
+	for _, chunk := range []float64{604800, 86400, 3600, 60} {
+		n := math.Floor(remaining / chunk)
+		partials = append(partials, int(n))
+		remaining -= chunk * n
+	}
+	names := []string{"year", "month", "week", "day", "hour", "minute"}
+	var parts []string
+	for i, n := range partials {
+		if n == 0 {
+			if len(parts) > 0 {
+				break
+			}
+			continue
+		}
+		parts = append(parts, unit(n, names[i]))
+		if len(parts) == 2 {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return unit(0, "minute")
+	}
+	return strings.Join(parts, ", ")
 }

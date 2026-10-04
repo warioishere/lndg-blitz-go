@@ -114,6 +114,7 @@ func probeWithBinarySearch(ctx context.Context, routerstub probeRouterClient, so
 	amount := targetAmountSat
 	var bestHex *string
 	var bestFeePpm *float64
+	feeRetried := false
 
 search:
 	for step := 0; step < maxSteps; step++ {
@@ -124,12 +125,14 @@ search:
 		if perr != nil {
 			break
 		}
-		built, berr := routerstub.BuildRoute(ctx, &routerrpc.BuildRouteRequest{
+		bctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		built, berr := routerstub.BuildRoute(bctx, &routerrpc.BuildRouteRequest{
 			OutgoingChanId: outChanID,
 			AmtMsat:        amount * 1000,
 			HopPubkeys:     hopPubkeys,
 			FinalCltvDelta: cltvDelta,
 		})
+		cancel()
 		if berr != nil {
 			break
 		}
@@ -174,9 +177,10 @@ search:
 			amount = (good + bad) / 2
 		case "fee":
 			// Retry the same amount once; if the fee failure persists, abort.
-			if step >= maxSteps-1 {
+			if feeRetried {
 				break search
 			}
+			feeRetried = true
 			continue
 		default:
 			break search

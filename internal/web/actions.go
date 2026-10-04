@@ -31,8 +31,9 @@ func (s *Server) mountActions(api chi.Router) {
 	api.Get("/chart", s.handleChart)
 	api.Post("/sign_message/", s.handleSignMessage)
 	api.Post("/sign_message", s.handleSignMessage)
-	api.Get("/amboss_channel_fees/", s.handleAmbossChannelFeeHistory)
-	api.Get("/amboss_channel_fees", s.handleAmbossChannelFeeHistory)
+	// a plain Django view, not DRF: checks the method itself
+	api.HandleFunc("/amboss_channel_fees/", s.handleAmbossChannelFeeHistory)
+	api.HandleFunc("/amboss_channel_fees", s.handleAmbossChannelFeeHistory)
 
 	// Mutating endpoints (POST).
 	postAction(api, "connectpeer", s.handleConnectPeer)

@@ -53,7 +53,7 @@ func (s *Server) handleIncome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bh := int64(info.GetBlockHeight())
-	now := time.Now()
+	now := time.Now().UTC() // UTC: N days = N*24h like timedelta
 	cut := [4]time.Time{now.AddDate(0, 0, -90), now.AddDate(0, 0, -30), now.AddDate(0, 0, -7), now.AddDate(0, 0, -1)}
 
 	fail := func(e error) bool {

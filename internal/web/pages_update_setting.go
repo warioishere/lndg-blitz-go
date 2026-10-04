@@ -4,20 +4,18 @@ import (
 	"context"
 	"net/http"
 	"strconv"
-	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 )
 
-// fetchOpenFFAChannels loads all open channels with the fields required by
-// update_setting and full_fee_adj, ordered by chan_id.
-func (s *Server) fetchOpenFFAChannels(ctx context.Context) ([]ffaChannel, error) {
-	const cols = `chan_id, COALESCE(alias,''), remote_pubkey, local_fee_rate, local_base_fee, local_cltv,
-		inbound_offset, local_inbound_base_fee, local_inbound_fee_rate, funding_txid, output_index`
-	rows, err := s.db.Query(ctx, `SELECT `+cols+` FROM gui_channels WHERE is_open = true ORDER BY chan_id`)
-	if err != nil {
-		return nil, err
-	}
+// ffaColumns are the channel columns scanned into ffaChannel, in scan order.
+const ffaColumns = `chan_id, COALESCE(alias,''), remote_pubkey, local_fee_rate, local_base_fee, local_cltv,
+	inbound_offset, local_inbound_base_fee, local_inbound_fee_rate, funding_txid, output_index`
+
+// scanFFAChannels reads ffaColumns rows into ffaChannel values and closes rows.
+func scanFFAChannels(rows pgx.Rows) ([]ffaChannel, error) {
 	defer rows.Close()
 	var out []ffaChannel
 	for rows.Next() {
@@ -29,6 +27,16 @@ func (s *Server) fetchOpenFFAChannels(ctx context.Context) ([]ffaChannel, error)
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// fetchOpenFFAChannels loads all open channels with the fields required by
+// update_setting and full_fee_adj, ordered by chan_id.
+func (s *Server) fetchOpenFFAChannels(ctx context.Context) ([]ffaChannel, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+ffaColumns+` FROM gui_channels WHERE is_open = true ORDER BY chan_id`)
+	if err != nil {
+		return nil, err
+	}
+	return scanFFAChannels(rows)
 }
 
 // handleUpdateSetting is a multipurpose endpoint. ALL-* keys broadcast fee/policy
@@ -103,41 +111,15 @@ func (s *Server) handleUpdateSetting(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			processed[ch.chanID] = true
-			if _, err := s.lnd.Lightning.UpdateChannelPolicy(ctx, &lnrpc.PolicyUpdateRequest{
-				Scope:       &lnrpc.PolicyUpdateRequest_ChanPoint{ChanPoint: channelPoint(ch.fundingTxid, ch.outputIndex)},
-				BaseFeeMsat: int64(ch.localBaseFee), FeeRate: float64(target) / 1000000, TimeLockDelta: uint32(ch.localCltv),
-			}); fail(err) {
+			if err := s.applyOutboundFee(ctx, ch, float64(target)); fail(err) {
 				return
 			}
-			now := time.Now()
-			oldRate := ch.localFeeRate
-			if _, err := s.db.Exec(ctx, `UPDATE gui_channels SET local_fee_rate=$2, fees_updated=$3 WHERE chan_id=$1`, ch.chanID, int32(target), now); fail(err) {
-				return
-			}
-			if _, err := s.db.Exec(ctx, `INSERT INTO gui_autofees (timestamp, chan_id, peer_alias, setting, old_value, new_value) VALUES ($1,$2,$3,$4,$5,$6)`,
-				now, ch.chanID, ch.alias, "Manual", oldRate, int32(target)); fail(err) {
-				return
-			}
-			updatedSiblings, err := s.syncPeerOutboundFee(ctx, ch.remotePubkey, ch.chanID, int32(target))
+			siblings, updatedSiblings, err := s.syncPeerOutboundFee(ctx, ch.remotePubkey, ch.chanID, int32(target))
 			if fail(err) {
 				return
 			}
-			sibRows, err := s.db.Query(ctx, `SELECT chan_id FROM gui_channels WHERE remote_pubkey=$1 AND is_open=true AND chan_id<>$2`, ch.remotePubkey, ch.chanID)
-			if fail(err) {
-				return
-			}
-			for sibRows.Next() {
-				var sib string
-				if err := sibRows.Scan(&sib); err != nil {
-					sibRows.Close()
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
+			for _, sib := range siblings {
 				processed[sib] = true
-			}
-			sibRows.Close()
-			if fail(sibRows.Err()) {
-				return
 			}
 			totalSynced += updatedSiblings
 		}

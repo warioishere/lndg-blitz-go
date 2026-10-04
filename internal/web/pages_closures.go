@@ -49,26 +49,7 @@ func (s *Server) handleClosures(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var pendingClosed, pendingForceClosed, waitingForClose []map[string]any
-	for _, cc := range resp.GetPendingClosingChannels() {
-		ch := cc.GetChannel()
-		item := map[string]any{
-			"remote_node_pub":         ch.GetRemoteNodePub(),
-			"channel_point":           ch.GetChannelPoint(),
-			"capacity":                ch.GetCapacity(),
-			"local_balance":           ch.GetLocalBalance(),
-			"remote_balance":          ch.GetRemoteBalance(),
-			"local_chan_reserve_sat":  ch.GetLocalChanReserveSat(),
-			"remote_chan_reserve_sat": ch.GetRemoteChanReserveSat(),
-			"initiator":               int32(ch.GetInitiator()),
-			"commitment_type":         int32(ch.GetCommitmentType()),
-			"local_commit_fee_sat":    int64(0),
-			"limbo_balance":           int64(0),
-			"closing_txid":            cc.GetClosingTxid(),
-		}
-		s.setPendingDetails(ctx, item, ch.GetChannelPoint())
-		pendingClosed = append(pendingClosed, item)
-	}
+	var pendingForceClosed, waitingForClose []map[string]any
 	for _, fc := range resp.GetPendingForceClosingChannels() {
 		ch := fc.GetChannel()
 		blocks := fc.GetBlocksTilMaturity()
@@ -127,7 +108,6 @@ func (s *Server) handleClosures(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.renderTemplate(w, r, "closures.html", map[string]any{
-		"pending_closed":       pendingClosed,
 		"pending_force_closed": pendingForceClosed,
 		"waiting_for_close":    waitingForClose,
 		"closures":             closures,

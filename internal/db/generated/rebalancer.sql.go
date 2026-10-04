@@ -157,6 +157,7 @@ func (q *Queries) GetLastRebalanceForPubkey(ctx context.Context, lastHopPubkey s
 const getTargetChannelInfo = `-- name: GetTargetChannelInfo :one
 SELECT local_fee_rate, ar_max_cost FROM gui_channels
 WHERE is_open = true AND auto_rebalance = true AND remote_pubkey = $1
+ORDER BY chan_id
 LIMIT 1
 `
 
@@ -165,7 +166,9 @@ type GetTargetChannelInfoRow struct {
 	ArMaxCost    int32 `json:"ar_max_cost"`
 }
 
-// get_target_info: erstes is_open+auto_rebalance-Channel zu remote_pubkey.
+// get_target_info: erstes is_open+auto_rebalance-Channel zu remote_pubkey. ORDER BY
+// chan_id wie Djangos .first() (Primaerschluessel), sonst ist die Wahl bei mehreren
+// Channels zum selben Peer zufaellig.
 func (q *Queries) GetTargetChannelInfo(ctx context.Context, remotePubkey string) (GetTargetChannelInfoRow, error) {
 	row := q.db.QueryRow(ctx, getTargetChannelInfo, remotePubkey)
 	var i GetTargetChannelInfoRow

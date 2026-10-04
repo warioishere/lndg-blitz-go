@@ -83,14 +83,9 @@ func aggHtlcs(ctx context.Context, q aggQuerier, ids []int64, category string) e
 		newCount := hist.HtlcCount + h.Count
 		amountSum := hist.AmountSum + h.Amount
 		feeSum := int64(float64(hist.FeeSum) + h.Fee) // += float, save trunkiert
-		var liqAvg, pendingAvg int64
-		if newCount != 0 {
-			ratio := float64(h.Count) / float64(newCount)
-			liqAvg = int64(float64(hist.LiqAvg) + ratio*(h.Liq-float64(hist.LiqAvg)))
-			pendingAvg = int64(float64(hist.PendingAvg) + ratio*(h.Pending-float64(hist.PendingAvg)))
-		} else {
-			liqAvg, pendingAvg = hist.LiqAvg, hist.PendingAvg
-		}
+		ratio := float64(h.Count) / float64(newCount) // a group holds at least one HTLC
+		liqAvg := int64(float64(hist.LiqAvg) + ratio*(h.Liq-float64(hist.LiqAvg)))
+		pendingAvg := int64(float64(hist.PendingAvg) + ratio*(h.Pending-float64(hist.PendingAvg)))
 		balanceCount, downstreamCount, otherCount := hist.BalanceCount, hist.DownstreamCount, hist.OtherCount
 		switch category {
 		case "balance":

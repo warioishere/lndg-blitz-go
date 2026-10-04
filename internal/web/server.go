@@ -89,6 +89,10 @@ func (s *Server) routes() chi.Router {
 	// HTML pages and REST API under /api/.
 	s.mountPages(r)
 	r.Route("/api", func(api chi.Router) {
+		// DRF's answer to a method the view does not allow.
+		api.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"detail": `Method "` + r.Method + `" not allowed.`})
+		})
 		s.mountAPI(api)
 		s.mountActions(api)
 	})

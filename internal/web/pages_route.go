@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"errors"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // stringSlicesEqual compares two string slices element-by-element.
@@ -181,7 +181,7 @@ func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
 				sumAmtStep1 += amt
 			}
 		}
-		totalCost = math.RoundToEven(sumFee*1000) / 1000 // round(sum_fee, 3)
+		totalCost = pyround.Round(sumFee, 3) // round(sum_fee, 3)
 		if sumAmtStep1 != 0 {
 			totalPpm = int64(totalCost * 1000000 / sumAmtStep1)
 		}

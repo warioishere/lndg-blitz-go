@@ -27,18 +27,6 @@ func EmergencyFeeJob(ctx context.Context, q emergencyQuerier, client policyClien
 	if !enabled {
 		return nil
 	}
-	// Read the three required EP settings unconditionally. They are NOT NULL in
-	// the DB so the defaults are never used; the reads act as existence checks.
-	if _, err = getRequiredInt(ctx, q, "EP-DefaultTarget"); err != nil {
-		return err
-	}
-	if _, err = getRequiredFloat(ctx, q, "EP-IncreasePct"); err != nil {
-		return err
-	}
-	if _, err = getRequiredInt(ctx, q, "EP-Cooldown"); err != nil {
-		return err
-	}
-
 	channels, err := q.ListEpEnabledChannels(ctx)
 	if err != nil {
 		return err

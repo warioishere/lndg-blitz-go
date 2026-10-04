@@ -92,13 +92,6 @@ func TestComputeChannelMetricsAndGroups(t *testing.T) {
 	assert.Equal(t, 3.0, ch2.InboundAdjustment)
 }
 
-func TestRound1BankersRounding(t *testing.T) {
-	// Rounds half-to-even on 1 decimal place.
-	assert.InDelta(t, 0.2, round1(0.25), 1e-9) // 2.5 -> 2 (even)
-	assert.InDelta(t, 0.4, round1(0.35), 1e-9) // 3.5 -> 4 (even)
-	assert.InDelta(t, 0.2, round1(0.2), 1e-9)
-}
-
 func TestMaxTimeNaTSkip(t *testing.T) {
 	t0 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Hour)

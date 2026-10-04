@@ -23,13 +23,17 @@ type fakeUCQ struct {
 	peers       map[string]db.GuiPeer    // by pubkey
 	peerAliases map[string]pgtype.Text   // by pubkey
 	pending     map[string]db.GuiPendingchannel
-	openCount   int64
-	openNotIn   []db.GuiChannel // returned (pre-filtered) by ListOpenChannelsNotIn
+	// concurrentWrite makes SyncChannelLocalPolicy report 0 rows, as if a UI /
+	// auto-fees write changed the row after the sync loaded it.
+	concurrentWrite bool
 
 	pendingHTLCDeleted bool
 	insertedHTLCs      []db.InsertPendingHTLCParams
 	insertedChannels   []db.InsertChannelParams
 	updatedChannels    []db.UpdateChannelSyncParams
+	policySyncs        []db.SyncChannelLocalPolicyParams
+	filledDefaults     []db.FillChannelDefaultsParams
+	closeCalls         []db.CloseMissingChannelsParams
 	peerEvents         []db.InsertPeerEventParams
 	autofees           []db.InsertAutofeeParams
 	deletedPending     []db.DeletePendingChannelParams
@@ -88,19 +92,20 @@ func (f *fakeUCQ) UpdateChannelSync(ctx context.Context, arg db.UpdateChannelSyn
 	f.updatedChannels = append(f.updatedChannels, arg)
 	return nil
 }
-func (f *fakeUCQ) CountOpenChannels(ctx context.Context) (int64, error) { return f.openCount, nil }
-func (f *fakeUCQ) ListOpenChannelsNotIn(ctx context.Context, dollar_1 []string) ([]db.GuiChannel, error) {
-	in := map[string]bool{}
-	for _, c := range dollar_1 {
-		in[c] = true
+func (f *fakeUCQ) SyncChannelLocalPolicy(ctx context.Context, arg db.SyncChannelLocalPolicyParams) (int64, error) {
+	f.policySyncs = append(f.policySyncs, arg)
+	if f.concurrentWrite {
+		return 0, nil
 	}
-	var out []db.GuiChannel
-	for _, c := range f.openNotIn {
-		if !in[c.ChanID] {
-			out = append(out, c)
-		}
-	}
-	return out, nil
+	return 1, nil
+}
+func (f *fakeUCQ) FillChannelDefaults(ctx context.Context, arg db.FillChannelDefaultsParams) error {
+	f.filledDefaults = append(f.filledDefaults, arg)
+	return nil
+}
+func (f *fakeUCQ) CloseMissingChannels(ctx context.Context, arg db.CloseMissingChannelsParams) error {
+	f.closeCalls = append(f.closeCalls, arg)
+	return nil
 }
 func (f *fakeUCQ) GetPeer(ctx context.Context, pubkey string) (db.GuiPeer, error) {
 	if p, ok := f.peers[pubkey]; ok {
@@ -338,7 +343,6 @@ func TestUpdateChannels_ExistingFeeChange(t *testing.T) {
 	}
 	q.channels["555"] = existing
 	q.peerAliases[remotePub] = pgtype.Text{String: "bob", Valid: true}
-	q.openCount = 1
 	c := &fakeUCClient{
 		channels: []*lnrpc.Channel{basicChannel(chanID)},
 		blockHt:  800000,
@@ -351,12 +355,96 @@ func TestUpdateChannels_ExistingFeeChange(t *testing.T) {
 	require.Len(t, q.updatedChannels, 1)
 	upd := q.updatedChannels[0]
 	assert.Equal(t, "555", upd.ChanID)
-	// Ext autofee old=100 -> new=500.
+	// The external fee is persisted, guarded by the value the sync loaded.
+	require.Len(t, q.policySyncs, 1)
+	ps := q.policySyncs[0]
+	assert.Equal(t, int32(100), ps.OldLocalFeeRate)
+	assert.Equal(t, int32(500), ps.LocalFeeRate)
+	assert.True(t, ps.FeeChanged)
+	// Ext autofee old=100 -> new=500, logged because the write went through.
 	require.Len(t, q.autofees, 1)
 	assert.Equal(t, int32(100), q.autofees[0].OldValue)
 	assert.Equal(t, int32(500), q.autofees[0].NewValue)
 	// remote unchanged (250 -> 250) so no FeeRate peer event; is_active unchanged -> no Connection.
 	assert.Empty(t, q.peerEvents)
+}
+
+// TestUpdateChannels_ExistingFeeChange_ConcurrentWriteWins: when the row changed after
+// the sync loaded it (UI / auto-fees write), the policy is not written and no Ext is logged.
+func TestUpdateChannels_ExistingFeeChange_ConcurrentWriteWins(t *testing.T) {
+	q := newFakeUCQ()
+	chanID := uint64(555)
+	q.channels["555"] = db.GuiChannel{
+		RemotePubkey: remotePub, ChanID: "555", FundingTxid: "abcdef", Capacity: 1_000_000,
+		Alias: "bob", IsActive: true, IsOpen: true, LocalFeeRate: 100, LocalCltv: 40,
+		RemoteBaseFee: 1000, RemoteFeeRate: 250, RemoteCltv: 80,
+		ArOutTarget: 75, ArInTarget: 90, ArAmtTarget: 30000, ArMaxCost: 65, AutoFees: true,
+	}
+	q.peerAliases[remotePub] = pgtype.Text{String: "bob", Valid: true}
+	q.concurrentWrite = true
+	c := &fakeUCClient{
+		channels: []*lnrpc.Channel{basicChannel(chanID)},
+		blockHt:  800000,
+		version:  "0.18.0-beta",
+		chanInfo: map[uint64]*lnrpc.ChannelEdge{chanID: edge(chanID, 500, 250, false)},
+	}
+	require.NoError(t, UpdateChannels(context.Background(), q, c))
+	require.Len(t, q.policySyncs, 1)
+	assert.Empty(t, q.autofees)
+}
+
+// TestUpdateChannels_ExistingNoPolicyChange: LND reports what the DB holds -> no policy write.
+func TestUpdateChannels_ExistingNoPolicyChange(t *testing.T) {
+	q := newFakeUCQ()
+	chanID := uint64(555)
+	c := &fakeUCClient{
+		channels: []*lnrpc.Channel{basicChannel(chanID)},
+		blockHt:  800000,
+		version:  "0.18.0-beta",
+		chanInfo: map[uint64]*lnrpc.ChannelEdge{chanID: edge(chanID, 500, 250, false)},
+	}
+	// first run creates the channel with exactly what LND reports
+	require.NoError(t, UpdateChannels(context.Background(), q, c))
+	require.Len(t, q.insertedChannels, 1)
+	ins := q.insertedChannels[0]
+	q.channels["555"] = db.GuiChannel{
+		RemotePubkey: ins.RemotePubkey, ChanID: "555", FundingTxid: ins.FundingTxid, Capacity: ins.Capacity,
+		Alias: ins.Alias, IsActive: ins.IsActive, IsOpen: true,
+		LocalBaseFee: ins.LocalBaseFee, LocalFeeRate: ins.LocalFeeRate, LocalInboundBaseFee: ins.LocalInboundBaseFee,
+		LocalInboundFeeRate: ins.LocalInboundFeeRate, LocalCltv: ins.LocalCltv, LocalDisabled: ins.LocalDisabled,
+		LocalMinHtlcMsat: ins.LocalMinHtlcMsat, LocalMaxHtlcMsat: ins.LocalMaxHtlcMsat,
+		RemoteBaseFee: ins.RemoteBaseFee, RemoteFeeRate: ins.RemoteFeeRate, RemoteCltv: ins.RemoteCltv,
+		RemoteMinHtlcMsat: ins.RemoteMinHtlcMsat, RemoteMaxHtlcMsat: ins.RemoteMaxHtlcMsat,
+		ArOutTarget: 75, ArInTarget: 90, ArAmtTarget: 30000, ArMaxCost: 65, AutoFees: true,
+	}
+	q.autofees = nil
+	require.NoError(t, UpdateChannels(context.Background(), q, c))
+	assert.Empty(t, q.policySyncs)
+	assert.Empty(t, q.autofees)
+	assert.Empty(t, q.filledDefaults)
+}
+
+// TestUpdateChannels_FillsUnsetDefault: an existing channel with ar_out_target 0 gets
+// the AR-Outbound% default through the guarded FillChannelDefaults write.
+func TestUpdateChannels_FillsUnsetDefault(t *testing.T) {
+	q := newFakeUCQ()
+	chanID := uint64(555)
+	q.channels["555"] = db.GuiChannel{
+		RemotePubkey: remotePub, ChanID: "555", FundingTxid: "abcdef", Capacity: 1_000_000,
+		Alias: "bob", IsActive: true, IsOpen: true, LocalFeeRate: 500, RemoteCltv: 80,
+		ArOutTarget: 0, ArInTarget: 90, ArAmtTarget: 30000, ArMaxCost: 65, AutoFees: true,
+	}
+	q.peerAliases[remotePub] = pgtype.Text{String: "bob", Valid: true}
+	c := &fakeUCClient{
+		channels: []*lnrpc.Channel{basicChannel(chanID)},
+		blockHt:  800000,
+		version:  "0.18.0-beta",
+		chanInfo: map[uint64]*lnrpc.ChannelEdge{chanID: edge(chanID, 500, 250, false)},
+	}
+	require.NoError(t, UpdateChannels(context.Background(), q, c))
+	require.Len(t, q.filledDefaults, 1)
+	assert.Equal(t, int32(75), q.filledDefaults[0].ArOutTarget)
+	assert.Equal(t, int32(90), q.filledDefaults[0].ArInTarget)
 }
 
 // TestUpdateChannels_ExistingRemoteCltvMinusOne: remote_cltv == -1 triggers the
@@ -371,7 +459,6 @@ func TestUpdateChannels_ExistingRemoteCltvMinusOne(t *testing.T) {
 		ArOutTarget: 75, ArInTarget: 90, ArAmtTarget: 30000, ArMaxCost: 65, AutoFees: true,
 	}
 	q.peerAliases[remotePub] = pgtype.Text{String: "bob", Valid: true}
-	q.openCount = 1
 	c := &fakeUCClient{
 		channels: []*lnrpc.Channel{basicChannel(chanID)},
 		blockHt:  800000,
@@ -480,7 +567,6 @@ func TestUpdateChannels_ExpiringHTLCDisconnect(t *testing.T) {
 	}
 	q.peers[remotePub] = db.GuiPeer{Pubkey: remotePub, Alias: pgtype.Text{String: "bob", Valid: true}}
 	q.peerAliases[remotePub] = pgtype.Text{String: "bob", Valid: true}
-	q.openCount = 1
 	c := &fakeUCClient{
 		channels: []*lnrpc.Channel{ch},
 		blockHt:  800000, // expiration 800010 - 800000 = 10 <= 13
@@ -506,12 +592,6 @@ func TestUpdateChannels_ClosedChannelDetection(t *testing.T) {
 		ArOutTarget: 75, ArInTarget: 90, ArAmtTarget: 30000, ArMaxCost: 65, AutoFees: true,
 	}
 	q.peerAliases[remotePub] = pgtype.Text{String: "bob", Valid: true}
-	q.openCount = 2 // DB has 2 open, LND reports 1 -> 1 closed
-	closedChan := db.GuiChannel{
-		ChanID: "999", RemotePubkey: "03cccc", FundingTxid: "deadbeef", Capacity: 500_000,
-		IsActive: true, IsOpen: true, ArOutTarget: 75, ArInTarget: 90, ArAmtTarget: 15000, ArMaxCost: 65, AutoFees: false,
-	}
-	q.openNotIn = []db.GuiChannel{q.channels["666"], closedChan}
 	c := &fakeUCClient{
 		channels: []*lnrpc.Channel{basicChannel(chanID)},
 		blockHt:  800000,
@@ -519,16 +599,9 @@ func TestUpdateChannels_ClosedChannelDetection(t *testing.T) {
 		chanInfo: map[uint64]*lnrpc.ChannelEdge{chanID: edge(chanID, 500, 250, false)},
 	}
 	require.NoError(t, UpdateChannels(context.Background(), q, c))
-	// updates: chan 666 (synced) + chan 999 (closed).
-	var closed *db.UpdateChannelSyncParams
-	for i := range q.updatedChannels {
-		if q.updatedChannels[i].ChanID == "999" {
-			closed = &q.updatedChannels[i]
-		}
-	}
-	require.NotNil(t, closed)
-	assert.False(t, closed.IsOpen)
-	assert.False(t, closed.IsActive)
+	// every open channel not listed by LND is closed in one write, keyed on the listed ids.
+	require.Len(t, q.closeCalls, 1)
+	assert.Equal(t, []string{"666"}, q.closeCalls[0].ListedChanIds)
 }
 
 // TestUpdateChannels_ForwardingAlias: a pending HTLC with a forwarding_channel uses
@@ -562,4 +635,7 @@ func TestUpdateChannels_NoChannels(t *testing.T) {
 	assert.True(t, q.pendingHTLCDeleted)
 	assert.Empty(t, q.insertedChannels)
 	assert.Empty(t, q.updatedChannels)
+	// LND lists nothing -> every open channel in the DB gets closed.
+	require.Len(t, q.closeCalls, 1)
+	assert.Empty(t, q.closeCalls[0].ListedChanIds)
 }

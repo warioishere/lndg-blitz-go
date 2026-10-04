@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 )
@@ -49,10 +50,14 @@ func GetTxFees(ctx context.Context, q netLinksQuerier, network, txid string) (in
 	return fee, nil
 }
 
+// txFeeClient bounds the explorer request so an unresponsive server cannot
+// stall the data loop.
+var txFeeClient = &http.Client{Timeout: 10 * time.Second}
+
 // fetchTxFee fetches a transaction JSON from url and extracts the "fee" field.
 // Returns an error if the field is absent or cannot be decoded.
 func fetchTxFee(url string) (int, error) {
-	resp, err := http.Get(url)
+	resp, err := txFeeClient.Get(url)
 	if err != nil {
 		return 0, err
 	}

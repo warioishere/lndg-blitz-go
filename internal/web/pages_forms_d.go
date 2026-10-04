@@ -8,6 +8,7 @@ import (
 
 	lnd "github.com/warioishere/lndg-blitz-go/internal/lnd"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc/wtclientrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // handleAddTowerForm adds a watchtower by connection string (pubkey@host).
@@ -152,7 +153,7 @@ func (s *Server) handleRebalanceForm(w http.ResponseWriter, r *http.Request) {
 			targetAlias = pubkey
 		}
 	}
-	feeLimit := roundEven(feeLimitIn*float64(value)*0.000001, 3)
+	feeLimit := pyround.Round(feeLimitIn*float64(value)*0.000001, 3)
 	chanIDsStr := "[" + strings.Join(outgoing, ", ") + "]"
 	if _, err := s.db.Exec(ctx,
 		`INSERT INTO gui_rebalancer (requested, value, fee_limit, outgoing_chan_ids, last_hop_pubkey, target_alias, duration, status, manual)

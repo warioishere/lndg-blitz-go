@@ -13,6 +13,7 @@ import (
 
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // paymentsClient is the LND subset required by UpdatePayments.
@@ -90,8 +91,8 @@ func UpdatePayments(ctx context.Context, q paymentsQuerier, client paymentsClien
 		if e := q.InsertPayment(ctx, db.InsertPaymentParams{
 			CreationDate: ts(time.Unix(payment.CreationDate, 0)),
 			PaymentHash:  payment.PaymentHash,
-			Value:        roundTo(float64(payment.ValueMsat)/1000, 3),
-			Fee:          roundTo(float64(payment.FeeMsat)/1000, 3),
+			Value:        pyround.Round(float64(payment.ValueMsat)/1000, 3),
+			Fee:          pyround.Round(float64(payment.FeeMsat)/1000, 3),
 			Status:       int32(payment.Status),
 			Index:        int32(payment.PaymentIndex),
 		}); e != nil {
@@ -111,8 +112,8 @@ func updatePayment(ctx context.Context, q paymentsQuerier, client paymentsClient
 	if err := q.UpdatePaymentBasic(ctx, db.UpdatePaymentBasicParams{
 		PaymentHash:  payment.PaymentHash,
 		CreationDate: ts(time.Unix(payment.CreationDate, 0)),
-		Value:        roundTo(float64(payment.ValueMsat)/1000, 3),
-		Fee:          roundTo(float64(payment.FeeMsat)/1000, 3),
+		Value:        pyround.Round(float64(payment.ValueMsat)/1000, 3),
+		Fee:          pyround.Round(float64(payment.FeeMsat)/1000, 3),
 		Status:       int32(payment.Status),
 		Index:        int32(payment.PaymentIndex),
 	}); err != nil {
@@ -146,8 +147,8 @@ func updatePayment(ctx context.Context, q paymentsQuerier, client paymentsClient
 			if err := q.InsertPaymentHop(ctx, db.InsertPaymentHopParams{
 				AttemptID: int32(attempt.AttemptId), Step: int32(hopCount), ChanID: formatChanID(hop.ChanId),
 				Alias: alias, ChanCapacity: hop.ChanCapacity, NodePubkey: hop.PubKey,
-				Amt: roundTo(float64(hop.AmtToForwardMsat)/1000, 3), Fee: roundTo(fee, 3),
-				PaymentHashID: payment.PaymentHash, CostTo: roundTo(costTo, 3),
+				Amt: pyround.Round(float64(hop.AmtToForwardMsat)/1000, 3), Fee: pyround.Round(fee, 3),
+				PaymentHashID: payment.PaymentHash, CostTo: pyround.Round(costTo, 3),
 			}); err != nil {
 				return err
 			}
@@ -167,7 +168,7 @@ func updatePayment(ctx context.Context, q paymentsQuerier, client paymentsClient
 					ph := hex.EncodeToString(preimage)
 					keysendPreimage = &ph
 					if msg, ok := hop.CustomRecords[34349334]; ok {
-						m := truncRunes(string(msg), 1000)
+						m := keysendMessage(msg)
 						message = &m
 					} else {
 						message = nil

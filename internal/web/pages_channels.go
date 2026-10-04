@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // Aggregate row types for the channels page.
@@ -44,7 +46,7 @@ type chChannelCalc struct {
 // truncation and RoundToEven match the expected arithmetic. DB errors return 500.
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	now := time.Now()
+	now := time.Now().UTC() // UTC: N days = N*24h like timedelta
 	cut7 := now.AddDate(0, 0, -7)
 	cut30 := now.AddDate(0, 0, -30)
 
@@ -156,14 +158,17 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 		invAgg[cid] = a
 	}
 
-	// amtDiv computes int(sum/divisor)/10; when no entry exists it returns int64(0)
-	// rather than a float, which affects template truthiness checks.
-	amtDiv := func(sum float64, divisor float64, exists bool) any {
-		if !exists {
+	// amtDiv computes int(sum/divisor)/10 for a channel with entries in the
+	// window, int64(0) otherwise; amtColumns then gives each column one type,
+	// as pandas does (float as soon as one row is).
+	amtDiv := func(sum float64, divisor float64, count int64) any {
+		if count == 0 {
 			return int64(0)
 		}
 		return float64(int64(sum/divisor)) / 10.0
 	}
+	amtColumns := []string{"amt_routed_in_7day", "amt_routed_out_7day", "amt_routed_in_30day", "amt_routed_out_30day",
+		"amt_rebal_in_30day", "amt_rebal_out_30day", "amt_rebal_in_7day", "amt_rebal_out_7day"}
 
 	calcs := make([]chChannelCalc, 0, len(channels))
 	var sumProfits7, sumProfits30, sumLocal, sumCapacity, sumUpdates int64
@@ -183,8 +188,8 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 
 		out, hasOut := outFwd[chanID]
 		in, hasIn := inFwd[chanID]
-		pay, hasPay := payAgg[chanID]
-		inv, hasInv := invAgg[chanID]
+		pay := payAgg[chanID]
+		inv := invAgg[chanID]
 
 		// inbound_fee sums (int truncation); zero when no entry.
 		ifeeOut7 := int64(out.ifee7)
@@ -221,23 +226,23 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 			"output_index":         ch["output_index"],
 			"local_balance":        localBalance,
 			"remote_balance":       remoteBalance,
-			"mil_capacity":         roundEven(float64(capacity)/1000000, 1),
+			"mil_capacity":         pyround.Round(float64(capacity)/1000000, 1),
 			"routed_in_7day":       in.cnt7,
 			"routed_out_7day":      out.cnt7,
 			"routed_in_30day":      in.cnt30,
 			"routed_out_30day":     out.cnt30,
-			"amt_routed_in_7day":   amtDiv(float64(in.amt7), 100000000, hasIn),
-			"amt_routed_out_7day":  amtDiv(float64(out.amt7), 100000000, hasOut),
-			"amt_routed_in_30day":  amtDiv(float64(in.amt30), 100000000, hasIn),
-			"amt_routed_out_30day": amtDiv(float64(out.amt30), 100000000, hasOut),
+			"amt_routed_in_7day":   amtDiv(float64(in.amt7), 100000000, in.cnt7),
+			"amt_routed_out_7day":  amtDiv(float64(out.amt7), 100000000, out.cnt7),
+			"amt_routed_in_30day":  amtDiv(float64(in.amt30), 100000000, in.cnt30),
+			"amt_routed_out_30day": amtDiv(float64(out.amt30), 100000000, out.cnt30),
 			"rebal_in_30day":       inv.cnt30,
 			"rebal_out_30day":      pay.cnt30,
 			"rebal_in_7day":        inv.cnt7,
 			"rebal_out_7day":       pay.cnt7,
-			"amt_rebal_in_30day":   amtDiv(float64(inv.amt30), 100000, hasInv),
-			"amt_rebal_out_30day":  amtDiv(pay.val30, 100000, hasPay),
-			"amt_rebal_in_7day":    amtDiv(float64(inv.amt7), 100000, hasInv),
-			"amt_rebal_out_7day":   amtDiv(pay.val7, 100000, hasPay),
+			"amt_rebal_in_30day":   amtDiv(float64(inv.amt30), 100000, inv.cnt30),
+			"amt_rebal_out_30day":  amtDiv(pay.val30, 100000, pay.cnt30),
+			"amt_rebal_in_7day":    amtDiv(float64(inv.amt7), 100000, inv.cnt7),
+			"amt_rebal_out_7day":   amtDiv(pay.val7, 100000, pay.cnt7),
 			"revenue_7day":         revenue7,
 			"revenue_30day":        revenue30,
 			"revenue_assist_7day":  assist7,
@@ -261,9 +266,26 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 		sumUpdates += numUpdates
 	}
 
+	for _, col := range amtColumns {
+		float := false
+		for _, c := range calcs {
+			if _, ok := c.row[col].(float64); ok {
+				float = true
+				break
+			}
+		}
+		if float {
+			for _, c := range calcs {
+				if _, ok := c.row[col].(int64); ok {
+					c.row[col] = 0.0
+				}
+			}
+		}
+	}
+
 	// Node-level APY — divided by sum(local_balance).
-	apy7Node := roundEven((float64(sumProfits7)*5214.2857)/float64(sumLocal), 2)
-	apy30Node := roundEven((float64(sumProfits30)*1216.6667)/float64(sumLocal), 2)
+	apy7Node := pyround.NumPy((float64(sumProfits7)*5214.2857)/float64(sumLocal), 2)
+	apy30Node := pyround.NumPy((float64(sumProfits30)*1216.6667)/float64(sumLocal), 2)
 
 	nodeCapacity := sumCapacity
 	var outboundRatio float64
@@ -282,10 +304,10 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 
 		if nodeCapacity > 0 {
 			capf := float64(c.capacity)
-			c.row["apy_7day"] = roundEven((float64(c.profits7)*5214.2857)/(capf*outboundRatio), 2)
-			c.row["apy_30day"] = roundEven((float64(c.profits30)*1216.6667)/(capf*outboundRatio), 2)
-			c.row["cv_7day"] = roundEven((float64(c.revenue7)*5214.2857)/(capf*outboundRatio)+(float64(c.assist7)*5214.2857)/(capf*(1-outboundRatio)), 2)
-			c.row["cv_30day"] = roundEven((float64(c.revenue30)*1216.6667)/(capf*outboundRatio)+(float64(c.assist30)*1216.6667)/(capf*(1-outboundRatio)), 2)
+			c.row["apy_7day"] = pyround.Round((float64(c.profits7)*5214.2857)/(capf*outboundRatio), 2)
+			c.row["apy_30day"] = pyround.Round((float64(c.profits30)*1216.6667)/(capf*outboundRatio), 2)
+			c.row["cv_7day"] = pyround.Round((float64(c.revenue7)*5214.2857)/(capf*outboundRatio)+(float64(c.assist7)*5214.2857)/(capf*(1-outboundRatio)), 2)
+			c.row["cv_30day"] = pyround.Round((float64(c.revenue30)*1216.6667)/(capf*outboundRatio)+(float64(c.assist30)*1216.6667)/(capf*(1-outboundRatio)), 2)
 		} else {
 			c.row["apy_7day"] = 0.0
 			c.row["apy_30day"] = 0.0

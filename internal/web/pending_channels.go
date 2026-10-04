@@ -1,11 +1,8 @@
 package web
 
 import (
-	"context"
 	"net/http"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 )
@@ -22,7 +19,6 @@ func (s *Server) handlePendingChannels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hasAny := len(resp.GetPendingOpenChannels()) > 0 ||
-		len(resp.GetPendingClosingChannels()) > 0 ||
 		len(resp.GetPendingForceClosingChannels()) > 0 ||
 		len(resp.GetWaitingCloseChannels()) > 0 ||
 		resp.GetTotalLimboBalance() != 0
@@ -38,7 +34,7 @@ func (s *Server) handlePendingChannels(w http.ResponseWriter, r *http.Request) {
 		for _, oc := range resp.GetPendingOpenChannels() {
 			ch := oc.GetChannel()
 			items = append(items, newOrderedMap().
-				Set("alias", s.peerAliasOrNil(ctx, ch.GetRemoteNodePub())).
+				Set("alias", s.peerAlias(ctx, ch.GetRemoteNodePub(), nil)).
 				Set("remote_node_pub", ch.GetRemoteNodePub()).
 				Set("channel_point", ch.GetChannelPoint()).
 				Set("capacity", ch.GetCapacity()).
@@ -53,28 +49,6 @@ func (s *Server) handlePendingChannels(w http.ResponseWriter, r *http.Request) {
 				Set("fee_per_kw", oc.GetFeePerKw()))
 		}
 		target.Set("pending_open", items)
-	}
-
-	// pending_closing is deprecated and always empty in practice. ClosedChannel (proto v0.21)
-	// has no limbo_balance field; channel details are added separately via addPendingChannelDetails.
-	if len(resp.GetPendingClosingChannels()) > 0 {
-		items := make([]any, 0)
-		for _, cc := range resp.GetPendingClosingChannels() {
-			ch := cc.GetChannel()
-			item := newOrderedMap().
-				Set("remote_node_pub", ch.GetRemoteNodePub()).
-				Set("channel_point", ch.GetChannelPoint()).
-				Set("capacity", ch.GetCapacity()).
-				Set("local_balance", ch.GetLocalBalance()).
-				Set("remote_balance", ch.GetRemoteBalance()).
-				Set("local_chan_reserve_sat", ch.GetLocalChanReserveSat()).
-				Set("remote_chan_reserve_sat", ch.GetRemoteChanReserveSat()).
-				Set("initiator", int32(ch.GetInitiator())).
-				Set("commitment_type", int32(ch.GetCommitmentType()))
-			s.addPendingChannelDetails(ctx, item, ch.GetChannelPoint())
-			items = append(items, item)
-		}
-		target.Set("pending_closing", items)
 	}
 
 	if len(resp.GetPendingForceClosingChannels()) > 0 {
@@ -95,7 +69,7 @@ func (s *Server) handlePendingChannels(w http.ResponseWriter, r *http.Request) {
 				Set("limbo_balance", fc.GetLimboBalance()).
 				Set("maturity_height", fc.GetMaturityHeight()).
 				Set("blocks_til_maturity", fc.GetBlocksTilMaturity()).
-				Set("maturity_datetime", isoformatLocal(maturity))
+				Set("maturity_datetime", isoformatUTC(maturity))
 			s.addPendingChannelDetails(ctx, item, ch.GetChannelPoint())
 			items = append(items, item)
 		}
@@ -128,17 +102,4 @@ func (s *Server) handlePendingChannels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeSuccess(w, target)
-}
-
-// peerAliasOrNil returns the peer alias for the given pubkey, or nil if no
-// matching peer exists or the alias column is NULL.
-func (s *Server) peerAliasOrNil(ctx context.Context, pubkey string) any {
-	var alias pgtype.Text
-	if err := s.db.QueryRow(ctx, `SELECT alias FROM gui_peers WHERE pubkey=$1`, pubkey).Scan(&alias); err != nil {
-		return nil
-	}
-	if !alias.Valid {
-		return nil
-	}
-	return alias.String
 }

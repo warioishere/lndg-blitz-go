@@ -11,15 +11,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countOpenChannels = `-- name: CountOpenChannels :one
-SELECT count(*) FROM gui_channels WHERE is_open = true
+const closeMissingChannels = `-- name: CloseMissingChannels :exec
+UPDATE gui_channels SET is_active = false, is_open = false, last_update = $1
+WHERE is_open = true AND chan_id <> ALL($2::varchar[])
 `
 
-func (q *Queries) CountOpenChannels(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, countOpenChannels)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+type CloseMissingChannelsParams struct {
+	LastUpdate    pgtype.Timestamptz `json:"last_update"`
+	ListedChanIds []string           `json:"listed_chan_ids"`
+}
+
+// Channels still open in the DB but no longer listed by LND.
+func (q *Queries) CloseMissingChannels(ctx context.Context, arg CloseMissingChannelsParams) error {
+	_, err := q.db.Exec(ctx, closeMissingChannels, arg.LastUpdate, arg.ListedChanIds)
+	return err
 }
 
 const deleteAllPendingHTLCs = `-- name: DeleteAllPendingHTLCs :exec
@@ -42,6 +47,35 @@ type DeletePendingChannelParams struct {
 
 func (q *Queries) DeletePendingChannel(ctx context.Context, arg DeletePendingChannelParams) error {
 	_, err := q.db.Exec(ctx, deletePendingChannel, arg.FundingTxid, arg.OutputIndex)
+	return err
+}
+
+const fillChannelDefaults = `-- name: FillChannelDefaults :exec
+UPDATE gui_channels SET
+  ar_out_target = CASE WHEN ar_out_target = 0 THEN $1::integer ELSE ar_out_target END,
+  ar_in_target = CASE WHEN ar_in_target = 0 THEN $2::integer ELSE ar_in_target END,
+  ar_amt_target = CASE WHEN ar_amt_target = 0 THEN $3::bigint ELSE ar_amt_target END,
+  ar_max_cost = CASE WHEN ar_max_cost = 0 THEN $4::integer ELSE ar_max_cost END
+WHERE chan_id = $5
+`
+
+type FillChannelDefaultsParams struct {
+	ArOutTarget int32  `json:"ar_out_target"`
+	ArInTarget  int32  `json:"ar_in_target"`
+	ArAmtTarget int64  `json:"ar_amt_target"`
+	ArMaxCost   int32  `json:"ar_max_cost"`
+	ChanID      string `json:"chan_id"`
+}
+
+// Fills auto-rebalance defaults only where a value is still unset (0).
+func (q *Queries) FillChannelDefaults(ctx context.Context, arg FillChannelDefaultsParams) error {
+	_, err := q.db.Exec(ctx, fillChannelDefaults,
+		arg.ArOutTarget,
+		arg.ArInTarget,
+		arg.ArAmtTarget,
+		arg.ArMaxCost,
+		arg.ChanID,
+	)
 	return err
 }
 
@@ -293,101 +327,73 @@ func (q *Queries) InsertPendingHTLC(ctx context.Context, arg InsertPendingHTLCPa
 	return err
 }
 
-const listOpenChannelsNotIn = `-- name: ListOpenChannelsNotIn :many
-SELECT remote_pubkey, chan_id, funding_txid, output_index, capacity, local_balance, remote_balance, unsettled_balance, initiator, alias, local_base_fee, local_fee_rate, is_active, is_open, auto_rebalance, remote_base_fee, remote_fee_rate, local_commit, local_chan_reserve, ar_in_target, num_updates, ar_amt_target, ar_out_target, ar_max_cost, last_update, local_disabled, remote_disabled, htlc_count, pending_inbound, pending_outbound, private, total_received, total_sent, fees_updated, auto_fees, local_cltv, remote_cltv, local_max_htlc_msat, local_min_htlc_msat, remote_max_htlc_msat, remote_min_htlc_msat, short_chan_id, notes, close_address, push_amt, local_inbound_base_fee, local_inbound_fee_rate, remote_inbound_base_fee, remote_inbound_fee_rate, ar_source, ar_source_ppm_diff, inbound_offset, offset_updated, maxhtlc_percent, maxhtlc_updated, mx_liq_threshold, mx_liq_value, mx_liq_upper, ep_target, ep_updated, ep_enabled, ep_inc_pct, ep_cooldown, ep_live_threshold, ep_live_inc_pct, flp_enabled, flp_safety, htlc_boost_checked FROM gui_channels WHERE is_open = true AND chan_id <> ALL($1::varchar[])
+const syncChannelLocalPolicy = `-- name: SyncChannelLocalPolicy :execrows
+UPDATE gui_channels SET local_base_fee = $1, local_fee_rate = $2,
+  local_inbound_base_fee = $3, local_inbound_fee_rate = $4,
+  local_cltv = $5, local_min_htlc_msat = $6,
+  local_max_htlc_msat = $7, local_disabled = $8,
+  fees_updated = CASE WHEN $9::boolean THEN $10::timestamptz ELSE fees_updated END
+WHERE chan_id = $11
+  AND local_base_fee = $12 AND local_fee_rate = $13
+  AND local_inbound_base_fee = $14 AND local_inbound_fee_rate = $15
+  AND local_cltv = $16 AND local_min_htlc_msat = $17
+  AND local_max_htlc_msat = $18 AND local_disabled = $19
 `
 
-func (q *Queries) ListOpenChannelsNotIn(ctx context.Context, dollar_1 []string) ([]GuiChannel, error) {
-	rows, err := q.db.Query(ctx, listOpenChannelsNotIn, dollar_1)
+type SyncChannelLocalPolicyParams struct {
+	LocalBaseFee           int32              `json:"local_base_fee"`
+	LocalFeeRate           int32              `json:"local_fee_rate"`
+	LocalInboundBaseFee    int32              `json:"local_inbound_base_fee"`
+	LocalInboundFeeRate    int32              `json:"local_inbound_fee_rate"`
+	LocalCltv              int32              `json:"local_cltv"`
+	LocalMinHtlcMsat       int64              `json:"local_min_htlc_msat"`
+	LocalMaxHtlcMsat       int64              `json:"local_max_htlc_msat"`
+	LocalDisabled          bool               `json:"local_disabled"`
+	FeeChanged             bool               `json:"fee_changed"`
+	Now                    pgtype.Timestamptz `json:"now"`
+	ChanID                 string             `json:"chan_id"`
+	OldLocalBaseFee        int32              `json:"old_local_base_fee"`
+	OldLocalFeeRate        int32              `json:"old_local_fee_rate"`
+	OldLocalInboundBaseFee int32              `json:"old_local_inbound_base_fee"`
+	OldLocalInboundFeeRate int32              `json:"old_local_inbound_fee_rate"`
+	OldLocalCltv           int32              `json:"old_local_cltv"`
+	OldLocalMinHtlcMsat    int64              `json:"old_local_min_htlc_msat"`
+	OldLocalMaxHtlcMsat    int64              `json:"old_local_max_htlc_msat"`
+	OldLocalDisabled       bool               `json:"old_local_disabled"`
+}
+
+// Writes the policy LND reports only while the row still holds the values the sync
+// loaded; 0 rows means a UI / auto-fees write came in between and wins.
+func (q *Queries) SyncChannelLocalPolicy(ctx context.Context, arg SyncChannelLocalPolicyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, syncChannelLocalPolicy,
+		arg.LocalBaseFee,
+		arg.LocalFeeRate,
+		arg.LocalInboundBaseFee,
+		arg.LocalInboundFeeRate,
+		arg.LocalCltv,
+		arg.LocalMinHtlcMsat,
+		arg.LocalMaxHtlcMsat,
+		arg.LocalDisabled,
+		arg.FeeChanged,
+		arg.Now,
+		arg.ChanID,
+		arg.OldLocalBaseFee,
+		arg.OldLocalFeeRate,
+		arg.OldLocalInboundBaseFee,
+		arg.OldLocalInboundFeeRate,
+		arg.OldLocalCltv,
+		arg.OldLocalMinHtlcMsat,
+		arg.OldLocalMaxHtlcMsat,
+		arg.OldLocalDisabled,
+	)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer rows.Close()
-	items := []GuiChannel{}
-	for rows.Next() {
-		var i GuiChannel
-		if err := rows.Scan(
-			&i.RemotePubkey,
-			&i.ChanID,
-			&i.FundingTxid,
-			&i.OutputIndex,
-			&i.Capacity,
-			&i.LocalBalance,
-			&i.RemoteBalance,
-			&i.UnsettledBalance,
-			&i.Initiator,
-			&i.Alias,
-			&i.LocalBaseFee,
-			&i.LocalFeeRate,
-			&i.IsActive,
-			&i.IsOpen,
-			&i.AutoRebalance,
-			&i.RemoteBaseFee,
-			&i.RemoteFeeRate,
-			&i.LocalCommit,
-			&i.LocalChanReserve,
-			&i.ArInTarget,
-			&i.NumUpdates,
-			&i.ArAmtTarget,
-			&i.ArOutTarget,
-			&i.ArMaxCost,
-			&i.LastUpdate,
-			&i.LocalDisabled,
-			&i.RemoteDisabled,
-			&i.HtlcCount,
-			&i.PendingInbound,
-			&i.PendingOutbound,
-			&i.Private,
-			&i.TotalReceived,
-			&i.TotalSent,
-			&i.FeesUpdated,
-			&i.AutoFees,
-			&i.LocalCltv,
-			&i.RemoteCltv,
-			&i.LocalMaxHtlcMsat,
-			&i.LocalMinHtlcMsat,
-			&i.RemoteMaxHtlcMsat,
-			&i.RemoteMinHtlcMsat,
-			&i.ShortChanID,
-			&i.Notes,
-			&i.CloseAddress,
-			&i.PushAmt,
-			&i.LocalInboundBaseFee,
-			&i.LocalInboundFeeRate,
-			&i.RemoteInboundBaseFee,
-			&i.RemoteInboundFeeRate,
-			&i.ArSource,
-			&i.ArSourcePpmDiff,
-			&i.InboundOffset,
-			&i.OffsetUpdated,
-			&i.MaxhtlcPercent,
-			&i.MaxhtlcUpdated,
-			&i.MxLiqThreshold,
-			&i.MxLiqValue,
-			&i.MxLiqUpper,
-			&i.EpTarget,
-			&i.EpUpdated,
-			&i.EpEnabled,
-			&i.EpIncPct,
-			&i.EpCooldown,
-			&i.EpLiveThreshold,
-			&i.EpLiveIncPct,
-			&i.FlpEnabled,
-			&i.FlpSafety,
-			&i.HtlcBoostChecked,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return result.RowsAffected(), nil
 }
 
 const updateChannelSync = `-- name: UpdateChannelSync :exec
-UPDATE gui_channels SET remote_pubkey = $2, short_chan_id = $3, funding_txid = $4, output_index = $5, capacity = $6, local_balance = $7, remote_balance = $8, unsettled_balance = $9, local_commit = $10, local_chan_reserve = $11, num_updates = $12, initiator = $13, alias = $14, total_sent = $15, total_received = $16, private = $17, pending_outbound = $18, pending_inbound = $19, htlc_count = $20, local_base_fee = $21, local_inbound_base_fee = $22, inbound_offset = $23, local_disabled = $24, local_cltv = $25, local_min_htlc_msat = $26, local_max_htlc_msat = $27, remote_base_fee = $28, remote_fee_rate = $29, remote_inbound_base_fee = $30, remote_inbound_fee_rate = $31, remote_disabled = $32, remote_cltv = $33, remote_min_htlc_msat = $34, remote_max_htlc_msat = $35, push_amt = $36, close_address = $37, is_active = $38, is_open = $39, last_update = $40, auto_rebalance = $41, ar_amt_target = $42, ar_in_target = $43, ar_out_target = $44, ar_max_cost = $45, ar_source = $46, ar_source_ppm_diff = $47, auto_fees = $48, notes = $49 WHERE chan_id = $1
+UPDATE gui_channels SET remote_pubkey = $2, short_chan_id = $3, funding_txid = $4, output_index = $5, capacity = $6, local_balance = $7, remote_balance = $8, unsettled_balance = $9, local_commit = $10, local_chan_reserve = $11, num_updates = $12, initiator = $13, alias = $14, total_sent = $15, total_received = $16, private = $17, pending_outbound = $18, pending_inbound = $19, htlc_count = $20, remote_base_fee = $21, remote_fee_rate = $22, remote_inbound_base_fee = $23, remote_inbound_fee_rate = $24, remote_disabled = $25, remote_cltv = $26, remote_min_htlc_msat = $27, remote_max_htlc_msat = $28, push_amt = $29, close_address = $30, is_active = $31, is_open = $32, last_update = $33 WHERE chan_id = $1
 `
 
 type UpdateChannelSyncParams struct {
@@ -411,13 +417,6 @@ type UpdateChannelSyncParams struct {
 	PendingOutbound      int64              `json:"pending_outbound"`
 	PendingInbound       int64              `json:"pending_inbound"`
 	HtlcCount            int32              `json:"htlc_count"`
-	LocalBaseFee         int32              `json:"local_base_fee"`
-	LocalInboundBaseFee  int32              `json:"local_inbound_base_fee"`
-	InboundOffset        int32              `json:"inbound_offset"`
-	LocalDisabled        bool               `json:"local_disabled"`
-	LocalCltv            int32              `json:"local_cltv"`
-	LocalMinHtlcMsat     int64              `json:"local_min_htlc_msat"`
-	LocalMaxHtlcMsat     int64              `json:"local_max_htlc_msat"`
 	RemoteBaseFee        int32              `json:"remote_base_fee"`
 	RemoteFeeRate        int32              `json:"remote_fee_rate"`
 	RemoteInboundBaseFee int32              `json:"remote_inbound_base_fee"`
@@ -431,17 +430,10 @@ type UpdateChannelSyncParams struct {
 	IsActive             bool               `json:"is_active"`
 	IsOpen               bool               `json:"is_open"`
 	LastUpdate           pgtype.Timestamptz `json:"last_update"`
-	AutoRebalance        bool               `json:"auto_rebalance"`
-	ArAmtTarget          int64              `json:"ar_amt_target"`
-	ArInTarget           int32              `json:"ar_in_target"`
-	ArOutTarget          int32              `json:"ar_out_target"`
-	ArMaxCost            int32              `json:"ar_max_cost"`
-	ArSource             bool               `json:"ar_source"`
-	ArSourcePpmDiff      int32              `json:"ar_source_ppm_diff"`
-	AutoFees             bool               `json:"auto_fees"`
-	Notes                string             `json:"notes"`
 }
 
+// LND state only. Our own policy goes through SyncChannelLocalPolicy and UI-owned
+// settings are never written here, so a concurrent UI write is not reverted.
 func (q *Queries) UpdateChannelSync(ctx context.Context, arg UpdateChannelSyncParams) error {
 	_, err := q.db.Exec(ctx, updateChannelSync,
 		arg.ChanID,
@@ -464,13 +456,6 @@ func (q *Queries) UpdateChannelSync(ctx context.Context, arg UpdateChannelSyncPa
 		arg.PendingOutbound,
 		arg.PendingInbound,
 		arg.HtlcCount,
-		arg.LocalBaseFee,
-		arg.LocalInboundBaseFee,
-		arg.InboundOffset,
-		arg.LocalDisabled,
-		arg.LocalCltv,
-		arg.LocalMinHtlcMsat,
-		arg.LocalMaxHtlcMsat,
 		arg.RemoteBaseFee,
 		arg.RemoteFeeRate,
 		arg.RemoteInboundBaseFee,
@@ -484,15 +469,6 @@ func (q *Queries) UpdateChannelSync(ctx context.Context, arg UpdateChannelSyncPa
 		arg.IsActive,
 		arg.IsOpen,
 		arg.LastUpdate,
-		arg.AutoRebalance,
-		arg.ArAmtTarget,
-		arg.ArInTarget,
-		arg.ArOutTarget,
-		arg.ArMaxCost,
-		arg.ArSource,
-		arg.ArSourcePpmDiff,
-		arg.AutoFees,
-		arg.Notes,
 	)
 	return err
 }

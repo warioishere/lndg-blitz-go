@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -99,4 +100,17 @@ func TestAmbossAPIError(t *testing.T) {
 	code, body := ambossGet(t, srv, "/api/amboss_channel_fees/?channel_id=123")
 	require.Equal(t, http.StatusInternalServerError, code)
 	require.Equal(t, "Amboss API error: boom", body["error"])
+}
+
+// An HTTP error carries requests' raise_for_status() text.
+func TestHTTPAmbossFetcherStatusError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	f := newHTTPAmbossFetcher()
+	f.url = srv.URL
+	_, err := f.FetchChannelFeeHistory(context.Background(), "1", "key", "1w")
+	require.EqualError(t, err, "Error fetching Amboss channel fee history: 400 Client Error: Bad Request for url: "+srv.URL)
+	require.Equal(t, 10*time.Second, f.client.Timeout)
 }

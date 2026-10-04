@@ -2,24 +2,36 @@ package web
 
 import (
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 )
 
-// handleApiIncome returns all-time revenue statistics. GetInfo is called
-// unconditionally; an RPC failure returns an error response. Integer truncation
-// towards zero (int()) is used for ppm calculations to match the original behavior.
+// handleApiIncome returns revenue statistics, all-time or for the last N days
+// with "?=N" (Python parses the query string minus its first character).
+// Integer truncation towards zero (int()) is used for ppm calculations to match
+// the original behavior.
 func (s *Server) handleApiIncome(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if _, err := s.lnd.Lightning.GetInfo(ctx, &lnrpc.GetInfoRequest{}); err != nil {
+	info, err := s.lnd.Lightning.GetInfo(ctx, &lnrpc.GetInfoRequest{})
+	if err != nil {
 		writeAPIError(w, "Failed to get revenue stats! Error: "+grpcErrorMsg(err))
 		return
+	}
+	// $1 = date cutoff, $2 = close_height cutoff; NULL = no filter
+	var dayFilter, heightFilter any
+	if raw := r.URL.RawQuery; raw != "" {
+		if days, err := strconv.Atoi(raw[1:]); err == nil && days != 0 {
+			dayFilter = time.Now().UTC().AddDate(0, 0, -days)
+			heightFilter = int64(info.GetBlockHeight()) - int64(days)*144
+		}
 	}
 
 	var forwardCount, forwardSumOut int64
 	var forwardSumFee float64
 	if err := s.db.QueryRow(ctx,
-		`SELECT count(*), COALESCE(sum(amt_out_msat),0), COALESCE(sum(fee),0) FROM gui_forwards`).
+		`SELECT count(*), COALESCE(sum(amt_out_msat),0), COALESCE(sum(fee),0) FROM gui_forwards WHERE ($1::timestamptz IS NULL OR forward_date >= $1)`, dayFilter).
 		Scan(&forwardCount, &forwardSumOut, &forwardSumFee); err != nil {
 		writeAPIError(w, "Failed to get revenue stats! Error: "+err.Error())
 		return
@@ -27,7 +39,7 @@ func (s *Server) handleApiIncome(w http.ResponseWriter, r *http.Request) {
 
 	var invoiceCount, invoiceSumPaid int64
 	if err := s.db.QueryRow(ctx,
-		`SELECT count(*), COALESCE(sum(amt_paid),0) FROM gui_invoices WHERE state=1 AND is_revenue=true`).
+		`SELECT count(*), COALESCE(sum(amt_paid),0) FROM gui_invoices WHERE state=1 AND is_revenue=true AND ($1::timestamptz IS NULL OR settle_date >= $1)`, dayFilter).
 		Scan(&invoiceCount, &invoiceSumPaid); err != nil {
 		writeAPIError(w, "Failed to get revenue stats! Error: "+err.Error())
 		return
@@ -36,7 +48,7 @@ func (s *Server) handleApiIncome(w http.ResponseWriter, r *http.Request) {
 	var paymentCount int64
 	var paymentSumValue, paymentSumFee float64
 	if err := s.db.QueryRow(ctx,
-		`SELECT count(*), COALESCE(sum(value),0), COALESCE(sum(fee),0) FROM gui_payments WHERE status=2`).
+		`SELECT count(*), COALESCE(sum(value),0), COALESCE(sum(fee),0) FROM gui_payments WHERE status=2 AND ($1::timestamptz IS NULL OR creation_date >= $1)`, dayFilter).
 		Scan(&paymentCount, &paymentSumValue, &paymentSumFee); err != nil {
 		writeAPIError(w, "Failed to get revenue stats! Error: "+err.Error())
 		return
@@ -44,7 +56,7 @@ func (s *Server) handleApiIncome(w http.ResponseWriter, r *http.Request) {
 
 	var onchainCount, onchainSumFee int64
 	if err := s.db.QueryRow(ctx,
-		`SELECT count(*), COALESCE(sum(fee),0) FROM gui_onchain`).
+		`SELECT count(*), COALESCE(sum(fee),0) FROM gui_onchain WHERE ($1::timestamptz IS NULL OR time_stamp >= $1)`, dayFilter).
 		Scan(&onchainCount, &onchainSumFee); err != nil {
 		writeAPIError(w, "Failed to get revenue stats! Error: "+err.Error())
 		return
@@ -52,7 +64,7 @@ func (s *Server) handleApiIncome(w http.ResponseWriter, r *http.Request) {
 
 	var closuresSum, closuresCount int64
 	if err := s.db.QueryRow(ctx,
-		`SELECT COALESCE(sum(closing_costs),0), count(*) FROM gui_closures`).
+		`SELECT COALESCE(sum(closing_costs),0), count(*) FROM gui_closures WHERE ($1::bigint IS NULL OR close_height >= $1)`, heightFilter).
 		Scan(&closuresSum, &closuresCount); err != nil {
 		writeAPIError(w, "Failed to get revenue stats! Error: "+err.Error())
 		return

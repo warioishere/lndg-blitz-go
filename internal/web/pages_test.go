@@ -334,6 +334,14 @@ func TestLogsPageIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(body2), "rebalance succeeded")
 	require.NotContains(t, string(body2), "line one")
+
+	// no match: an empty list, which the live view's lines.map() needs
+	resp3, err := http.Get(ts.URL + "/logs/?format=json&grep=nothing-matches")
+	require.NoError(t, err)
+	defer resp3.Body.Close()
+	body3, err := io.ReadAll(resp3.Body)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"size":40,"lines":[]}`, string(body3))
 }
 
 func TestEmergencyFeesPageIntegration(t *testing.T) {

@@ -1,11 +1,15 @@
 package web
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/warioishere/lndg-blitz-go/internal/config"
 )
@@ -66,4 +70,53 @@ func TestBasicAuthDisabledWhenNoCredentials(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
+}
+
+// Django's form views redirect a GET; DRF answers a wrong method with a JSON
+// 405; the plain Django amboss view has its own 405 message.
+func TestMethodFallbacks(t *testing.T) {
+	ts := httptest.NewServer(NewServer(&config.Settings{}, nil).Handler())
+	defer ts.Close()
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+	for path, want := range map[string]string{
+		"/update_channel/": "/back", "/openchannel/": "/", "/batchopen/": "/batch",
+		"/reset_node_reputation/": "/back",
+	} {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		req.Header.Set("Referer", "/back")
+		resp, err := noRedirect.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+		require.Equal(t, http.StatusFound, resp.StatusCode, path)
+		require.Equal(t, want, resp.Header.Get("Location"), path)
+	}
+	resp, err := noRedirect.Get(ts.URL + "/reset_node_reputation/")
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, "/rebalanceroutes", resp.Header.Get("Location"), "no referer")
+
+	for path, want := range map[string]string{
+		"/api/chanpolicy/":          `{"detail":"Method \"GET\" not allowed."}`,
+		"/api/amboss_channel_fees/": `{"error":"Only GET method allowed"}`,
+	} {
+		method := "GET"
+		if path == "/api/amboss_channel_fees/" {
+			method = "POST"
+		}
+		req, _ := http.NewRequest(method, ts.URL+path, nil)
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode, path)
+		require.JSONEq(t, want, string(b), path)
+	}
+}
+
+func TestGrpcCodeString(t *testing.T) {
+	require.Equal(t, "StatusCode.DEADLINE_EXCEEDED", grpcCodeString(status.Error(codes.DeadlineExceeded, "x")))
+	require.Equal(t, "StatusCode.UNAVAILABLE", grpcCodeString(status.Error(codes.Unavailable, "x")))
+	require.Equal(t, "StatusCode.OK", grpcCodeString(status.Error(codes.OK, "")))
+	require.Equal(t, "plain", grpcCodeString(errors.New("plain")))
 }

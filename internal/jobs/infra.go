@@ -38,12 +38,6 @@ func nodeAlias(ctx context.Context, q nodeCacheQ, client nodeInfoClient, pubkey 
 	return info.GetNode().GetAlias()
 }
 
-// roundTo rounds x to d decimal places using half-to-even (banker's) rounding.
-func roundTo(x float64, d int) float64 {
-	p := math.Pow(10, float64(d))
-	return math.RoundToEven(x*p) / p
-}
-
 // policyClient is the LND subset required by fee-management jobs.
 type policyClient interface {
 	GetInfo(ctx context.Context, in *lnrpc.GetInfoRequest, opts ...grpc.CallOption) (*lnrpc.GetInfoResponse, error)
@@ -93,24 +87,6 @@ func settingGateEnabled(ctx context.Context, q settingsQuerier, key string) (boo
 		return false, perr
 	}
 	return n != 0, nil
-}
-
-// getRequiredInt returns the integer value of an existing setting key.
-// Returns an error if the key is missing or the value cannot be parsed.
-func getRequiredInt(ctx context.Context, q settingsQuerier, key string) (int, error) {
-	row, err := q.GetLocalSetting(ctx, key)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.Atoi(row.Value)
-}
-
-func getRequiredFloat(ctx context.Context, q settingsQuerier, key string) (float64, error) {
-	row, err := q.GetLocalSetting(ctx, key)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.ParseFloat(row.Value, 64)
 }
 
 // getOrCreateInt reads the setting key, creating it with defStr if absent, then

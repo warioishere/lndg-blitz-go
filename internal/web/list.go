@@ -92,7 +92,7 @@ func executeList[T any](ctx context.Context, dbtx db.DBTX, spec listSpec, clause
 // listHandler returns the HTTP handler for a read-only list endpoint: parses
 // filters, loads the list, translates each row via toResult into the response
 // shape, and writes a paginated or bare JSON response.
-func listHandler[T any](dbtx db.DBTX, spec listSpec, toResult func(*T) *orderedMap) http.HandlerFunc {
+func listHandler[T any](dbtx db.DBTX, spec listSpec, toResult func(*http.Request, *T) *orderedMap) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		clauses, args, bad := applyFilters(q, spec.filters)
@@ -110,7 +110,7 @@ func listHandler[T any](dbtx db.DBTX, spec listSpec, toResult func(*T) *orderedM
 
 		results := make([]any, 0, len(items))
 		for i := range items {
-			results = append(results, toResult(&items[i]))
+			results = append(results, toResult(r, &items[i]))
 		}
 
 		if spec.paginate {

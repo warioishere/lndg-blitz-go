@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"math"
 	"strconv"
 	"time"
 
@@ -18,6 +17,7 @@ import (
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc/routerrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // RapidFire constants.
@@ -303,7 +303,14 @@ func (e *engine) runRebalancer(
 		if successfulIn != nil && successfulOut != nil {
 			updateChannelBalances(ctx, q, stub, *successfulIn, *successfulOut)
 		}
-		annotated := annotateChannels(channels, float64(rebalance.Value)*rapidFireInc, false)
+		// Re-read the channels: the ones loaded at the start still hold the balances
+		// from before this rebalance moved liquidity.
+		fresh, ferr := q.ListActiveOpenPublicChannels(ctx)
+		if ferr != nil {
+			rebalLog(fmt.Sprintf("Error running rebalance attempt: %s", ferr))
+			return nil
+		}
+		annotated := annotateChannels(fresh, float64(rebalance.Value)*rapidFireInc, false)
 		inboundLen := countInboundCans(annotated, rebalance.LastHopPubkey)
 		rfOut := e.getOutCans(annotated, rebalance.LastHopPubkey)
 		drain, derr := remainingDrain(ctx, q, rebalance.LastHopPubkey)
@@ -321,7 +328,7 @@ func (e *engine) runRebalancer(
 		}
 		if inboundLen > 0 && len(rfOut) > 0 && nextValue >= 1000 {
 			scale := float64(nextValue) / float64(rebalance.Value)
-			next := e.insertNextRebalance(ctx, q, int32(nextValue), roundTo3(rebalance.FeeLimit*scale),
+			next := e.insertNextRebalance(ctx, q, int32(nextValue), pyround.Round(rebalance.FeeLimit*scale, 3),
 				formatChanIDList(rfOut), rebalance.LastHopPubkey, originalAlias, now)
 			capNote := ""
 			if nextValue < proposed {
@@ -334,7 +341,8 @@ func (e *engine) runRebalancer(
 			rebalLog(fmt.Sprintf("RapidFire skipped for %s — channel already at/near ar_in_target (remaining drain %d sats)", originalAlias, drain))
 		}
 		return nil
-	} else if rebalance.Status > 2 && rebalance.Value > 69420 {
+	} else if rebalance.Status > 2 && rebalance.Status != 406 && rebalance.Value > 69420 {
+		// 406 (no usable source) does not depend on the amount, a smaller retry cannot help.
 		var nextValue float64
 		if rebalance.Duration > 1 {
 			nextValue = float64(estimateLiquidity(lastPayment))
@@ -347,7 +355,7 @@ func (e *engine) runRebalancer(
 		inboundLen := countInboundCans(initialAnnotated, rebalance.LastHopPubkey)
 		if inboundLen > 0 && len(outboundCans) > 0 {
 			next := e.insertNextRebalance(ctx, q, int32(nextValue),
-				roundTo3(rebalance.FeeLimit/(float64(rebalance.Value)/nextValue)),
+				pyround.Round(rebalance.FeeLimit/(float64(rebalance.Value)/nextValue), 3),
 				formatChanIDList(outboundCans), rebalance.LastHopPubkey, originalAlias, now)
 			rebalLog(fmt.Sprintf("RapidFire decrease for %s from %d to %d", next.TargetAlias, rebalance.Value, next.Value))
 			return next
@@ -386,9 +394,6 @@ func textVal(t pgtype.Text) string {
 	}
 	return ""
 }
-
-// roundTo3 rounds x to 3 decimal places using round-half-to-even.
-func roundTo3(x float64) float64 { return math.RoundToEven(x*1000) / 1000 }
 
 // stableSortByFee sorts chan_ids stably by their value in feeMap, ascending.
 func stableSortByFee(ids []string, feeMap map[string]int) {

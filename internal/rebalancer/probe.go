@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"strconv"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc/routerrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // Probe constants.
@@ -361,7 +361,7 @@ func (e *engine) trySingleSource(
 					updateRoute(ctx, q, rebalance.LastHopPubkey, sourceChanID, probeHex, true, true, now)
 					updateNodeReputations(ctx, q, probeHex, true, 0, false, now)
 					// Scale fee_limit so RapidFire children maintain the same ppm.
-					scaled := math.RoundToEven(rebalance.FeeLimit*(float64(probed)/float64(rebalance.Value))*1000) / 1000
+					scaled := pyround.Round(rebalance.FeeLimit*(float64(probed)/float64(rebalance.Value)), 3)
 					feesPaid := 0.0
 					if feesMsat != 0 {
 						feesPaid = float64(feesMsat) / 1000

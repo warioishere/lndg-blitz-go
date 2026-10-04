@@ -44,7 +44,7 @@ func autoEnable(ctx context.Context, q autoEnableQuerier, now func() time.Time) 
 		rebalLog(fmt.Sprintf("Error during auto channel enabling: %s", err))
 		return
 	}
-	filterDay := pgtype.Timestamptz{Time: now().AddDate(0, 0, -apdays), Valid: true}
+	filterDay := pgtype.Timestamptz{Time: now().UTC().AddDate(0, 0, -apdays), Valid: true}
 	aggIn, err := q.AggForwardsInSince(ctx, filterDay)
 	if err != nil {
 		rebalLog(fmt.Sprintf("Error during auto channel enabling: %s", err))

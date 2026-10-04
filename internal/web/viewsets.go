@@ -15,8 +15,10 @@ import (
 // with filter/pagination via /api/; writes go through separate action endpoints.
 // Trades are omitted.
 func (s *Server) mountAPI(api chi.Router) {
+	s.mountViewSetWrites(api)
+
 	// payments — order -creation_date; +id (=index).
-	apiGet(api, "payments", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "payments", "Payments", "payment_hash", listSpec{
 		selectExpr: columnsOf[db.GuiPayment](),
 		fromExpr:   "gui_payments",
 		order:      "creation_date DESC",
@@ -29,17 +31,17 @@ func (s *Server) mountAPI(api chi.Router) {
 		paginate: true,
 	}, func(p *db.GuiPayment) *orderedMap {
 		return structToOrderedMap(p).Set("id", p.Index)
-	}))
+	})
 
 	// paymenthops — no ordering or filters.
-	apiGet(api, "paymenthops", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "paymenthops", "PaymentHops", "id", listSpec{
 		selectExpr: columnsOf[db.GuiPaymenthop](),
 		fromExpr:   "gui_paymenthops",
 		paginate:   true,
-	}, plainResult[db.GuiPaymenthop]))
+	}, plainResult[db.GuiPaymenthop])
 
 	// invoices — order -creation_date; +id (=index).
-	apiGet(api, "invoices", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "invoices", "Invoices", "r_hash", listSpec{
 		selectExpr: columnsOf[db.GuiInvoice](),
 		fromExpr:   "gui_invoices",
 		order:      "creation_date DESC",
@@ -51,12 +53,10 @@ func (s *Server) mountAPI(api chi.Router) {
 			filterFields("index", filterInt, "lt"),
 		),
 		paginate: true,
-	}, func(i *db.GuiInvoice) *orderedMap {
-		return structToOrderedMap(i).Set("id", i.Index)
-	}))
+	}, invoiceResult)
 
 	// forwards — order -id; supports chan_in_or_out OR filter, forward_date, id__lt.
-	apiGet(api, "forwards", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "forwards", "Forwards", "id", listSpec{
 		selectExpr: columnsOf[db.GuiForward](),
 		fromExpr:   "gui_forwards",
 		order:      "id DESC",
@@ -66,40 +66,40 @@ func (s *Server) mountAPI(api chi.Router) {
 			filterFields("id", filterInt, "lt"),
 		),
 		paginate: true,
-	}, plainResult[db.GuiForward]))
+	}, plainResult[db.GuiForward])
 
 	// onchain — filter time_stamp.
-	apiGet(api, "onchain", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "onchain", "Onchain", "tx_hash", listSpec{
 		selectExpr: columnsOf[db.GuiOnchain](),
 		fromExpr:   "gui_onchain",
 		filters:    filterFields("time_stamp", filterDateTime, "lte", "gte"),
 		paginate:   true,
-	}, plainResult[db.GuiOnchain]))
+	}, plainResult[db.GuiOnchain])
 
 	// closures — filter close_height.
-	apiGet(api, "closures", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "closures", "Closures", "id", listSpec{
 		selectExpr: columnsOf[db.GuiClosure](),
 		fromExpr:   "gui_closures",
 		filters:    filterFields("close_height", filterInt, "lte", "gte"),
 		paginate:   true,
-	}, plainResult[db.GuiClosure]))
+	}, plainResult[db.GuiClosure])
 
 	// resolutions — no filters.
-	apiGet(api, "resolutions", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "resolutions", "Resolutions", "id", listSpec{
 		selectExpr: columnsOf[db.GuiResolution](),
 		fromExpr:   "gui_resolutions",
 		paginate:   true,
-	}, plainResult[db.GuiResolution]))
+	}, plainResult[db.GuiResolution])
 
 	// peers — no filters.
-	apiGet(api, "peers", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "peers", "Peers", "pubkey", listSpec{
 		selectExpr: columnsOf[db.GuiPeer](),
 		fromExpr:   "gui_peers",
 		paginate:   true,
-	}, plainResult[db.GuiPeer]))
+	}, plainResult[db.GuiPeer])
 
 	// channels — filter is_open/private/is_active/auto_rebalance (bool, exact); +opened_in.
-	apiGet(api, "channels", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "channels", "Channels", "chan_id", listSpec{
 		selectExpr: columnsOf[db.GuiChannel](),
 		fromExpr:   "gui_channels",
 		filters: concatFilters(
@@ -109,12 +109,10 @@ func (s *Server) mountAPI(api chi.Router) {
 			filterFields("auto_rebalance", filterBool, "exact"),
 		),
 		paginate: true,
-	}, func(c *db.GuiChannel) *orderedMap {
-		return structToOrderedMap(c).Set("opened_in", openedIn(c.ShortChanID))
-	}))
+	}, channelResult)
 
 	// rebalancer — order -id.
-	apiGet(api, "rebalancer", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "rebalancer", "Rebalancer", "id", listSpec{
 		selectExpr: columnsOf[db.GuiRebalancer](),
 		fromExpr:   "gui_rebalancer",
 		order:      "id DESC",
@@ -126,24 +124,24 @@ func (s *Server) mountAPI(api chi.Router) {
 			filterFields("id", filterInt, "lt"),
 		),
 		paginate: true,
-	}, plainResult[db.GuiRebalancer]))
+	}, plainResult[db.GuiRebalancer])
 
 	// settings (LocalSettings) — no filters.
-	apiGet(api, "settings", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "settings", "LocalSettings", "key", listSpec{
 		selectExpr: columnsOf[db.GuiLocalsetting](),
 		fromExpr:   "gui_localsettings",
 		paginate:   true,
-	}, plainResult[db.GuiLocalsetting]))
+	}, plainResult[db.GuiLocalsetting])
 
 	// pendinghtlcs — no filters.
-	apiGet(api, "pendinghtlcs", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "pendinghtlcs", "PendingHTLCs", "id", listSpec{
 		selectExpr: columnsOf[db.GuiPendinghtlc](),
 		fromExpr:   "gui_pendinghtlcs",
 		paginate:   true,
-	}, plainResult[db.GuiPendinghtlc]))
+	}, plainResult[db.GuiPendinghtlc])
 
 	// failedhtlcs — order -id; supports chan_in_or_out OR filter.
-	apiGet(api, "failedhtlcs", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "failedhtlcs", "FailedHTLCs", "id", listSpec{
 		selectExpr: columnsOf[db.GuiFailedhtlc](),
 		fromExpr:   "gui_failedhtlcs",
 		order:      "id DESC",
@@ -155,10 +153,10 @@ func (s *Server) mountAPI(api chi.Router) {
 			filterFields("id", filterInt, "lt"),
 		),
 		paginate: true,
-	}, plainResult[db.GuiFailedhtlc]))
+	}, plainResult[db.GuiFailedhtlc])
 
 	// feelog (Autofees) — order -id; filter chan_id, id__lt.
-	apiGet(api, "feelog", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "feelog", "Autofees", "id", listSpec{
 		selectExpr: columnsOf[db.GuiAutofee](),
 		fromExpr:   "gui_autofees",
 		order:      "id DESC",
@@ -167,10 +165,10 @@ func (s *Server) mountAPI(api chi.Router) {
 			filterFields("id", filterInt, "lt"),
 		),
 		paginate: true,
-	}, plainResult[db.GuiAutofee]))
+	}, plainResult[db.GuiAutofee])
 
 	// inboundfeelog — order -id; filter chan_id, id__lt.
-	apiGet(api, "inboundfeelog", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "inboundfeelog", "InboundFeeLog", "id", listSpec{
 		selectExpr: columnsOf[db.GuiInboundfeelog](),
 		fromExpr:   "gui_inboundfeelog",
 		order:      "id DESC",
@@ -179,35 +177,38 @@ func (s *Server) mountAPI(api chi.Router) {
 			filterFields("id", filterInt, "lt"),
 		),
 		paginate: true,
-	}, plainResult[db.GuiInboundfeelog]))
+	}, plainResult[db.GuiInboundfeelog])
 
 	// graphevents — no pagination; filter target_pubkey, event_type.
-	apiGet(api, "graphevents", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "graphevents", "GraphEvent", "id", listSpec{
 		selectExpr: columnsOf[db.GuiGraphevent](),
 		fromExpr:   "gui_graphevent",
+		order:      "timestamp DESC", // model Meta ordering [-timestamp]
 		filters: concatFilters(
 			filterFields("target_pubkey", filterString, "exact"),
 			filterFields("event_type", filterString, "exact"),
 		),
 		paginate: false,
-	}, plainResult[db.GuiGraphevent]))
+	}, plainResult[db.GuiGraphevent])
 
 	// graphprobelogs — no pagination, no filters.
-	apiGet(api, "graphprobelogs", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "graphprobelogs", "GraphProbeLog", "id", listSpec{
 		selectExpr: columnsOf[db.GuiGraphprobelog](),
 		fromExpr:   "gui_graphprobelog",
+		order:      "timestamp DESC", // model Meta ordering [-timestamp]
 		paginate:   false,
-	}, plainResult[db.GuiGraphprobelog]))
+	}, plainResult[db.GuiGraphprobelog])
 
 	// probelog — details (jsonb) returned as raw JSON.
-	apiGet(api, "probelogs", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "probelogs", "ProbeLog", "id", listSpec{
 		selectExpr: columnsOf[db.GuiProbelog](),
 		fromExpr:   "gui_probelog",
+		order:      "timestamp DESC", // model Meta ordering [-timestamp]
 		paginate:   true,
-	}, probeLogToResult))
+	}, probeLogToResult)
 
 	// peerevents — order -id; out_liq_percent computed via JOIN on gui_channels.capacity.
-	apiGet(api, "peerevents", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "peerevents", "PeerEvents", "pe.id", listSpec{
 		selectExpr: "pe.id, pe.timestamp, pe.chan_id, pe.peer_alias, pe.event, pe.old_value, pe.new_value, pe.out_liq, c.capacity",
 		fromExpr:   "gui_peerevents pe LEFT JOIN gui_channels c ON c.chan_id = pe.chan_id",
 		order:      "pe.id DESC",
@@ -218,10 +219,10 @@ func (s *Server) mountAPI(api chi.Router) {
 			filterFields("id", filterInt, "lt"),
 		),
 		paginate: true,
-	}, peerEventToResult))
+	}, peerEventToResult)
 
 	// rebalanceroutes — annotated ratios + alias subqueries; order target_alias, -weighted_ratio.
-	apiGet(api, "rebalanceroutes", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "rebalanceroutes", "RebalanceRoute", "r.id", listSpec{
 		selectExpr: "r.id, r.target_pubkey, r.outgoing_chan_id, r.route, r.final_cltv_delta, " +
 			"r.success_count, r.failure_count, r.last_success, r.last_failure, r.route_hex, r.last_fee_ppm, " +
 			"p.alias AS target_alias, c.alias AS outgoing_alias",
@@ -235,15 +236,15 @@ func (s *Server) mountAPI(api chi.Router) {
 			filterFields("outgoing_chan_id", filterString, "exact"),
 		),
 		paginate: true,
-	}, rebalanceRouteToResult))
+	}, rebalanceRouteToResult)
 
 	// nodereputation — explicit field list + weighted_ratio score + alias; order wr_score ASC.
-	apiGet(api, "nodereputation", listHandler(s.db, listSpec{
+	registerViewSet(api, s.db, "nodereputation", "NodeReputation", "nr.pubkey", listSpec{
 		selectExpr: "nr.pubkey, nr.success_count, nr.failure_count, nr.last_success, nr.last_failure, p.alias",
 		fromExpr:   "gui_nodereputation nr LEFT JOIN gui_peers p ON p.pubkey = nr.pubkey",
 		order:      weightedRatioSQL("nr.success_count", "nr.failure_count"),
 		paginate:   true,
-	}, nodeReputationToResult))
+	}, nodeReputationToResult)
 }
 
 // apiGet registers a list handler under /api/<prefix>/ and /api/<prefix>.
@@ -269,6 +270,16 @@ func qualify(params []filterParam, column string) []filterParam {
 		params[i].column = column
 	}
 	return params
+}
+
+// channelResult is the ChannelSerializer shape: all columns plus opened_in.
+func channelResult(c *db.GuiChannel) *orderedMap {
+	return structToOrderedMap(c).Set("opened_in", openedIn(c.ShortChanID))
+}
+
+// invoiceResult is the InvoiceSerializer shape: all columns plus id (= index).
+func invoiceResult(i *db.GuiInvoice) *orderedMap {
+	return structToOrderedMap(i).Set("id", i.Index)
 }
 
 // plainResult maps a sqlc struct to the API JSON shape without extra fields.

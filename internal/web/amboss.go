@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -15,6 +16,10 @@ import (
 // handleAmbossChannelFeeHistory fetches fee history for a channel from the Amboss API.
 // Uses proper HTTP status codes (400/500/200).
 func (s *Server) handleAmbossChannelFeeHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Only GET method allowed"})
+		return
+	}
 	ctx := r.Context()
 	q := r.URL.Query()
 	channelID := strings.TrimSpace(q.Get("channel_id"))
@@ -113,7 +118,7 @@ type httpAmbossFetcher struct {
 }
 
 func newHTTPAmbossFetcher() *httpAmbossFetcher {
-	return &httpAmbossFetcher{client: &http.Client{}, url: ambossURL}
+	return &httpAmbossFetcher{client: &http.Client{Timeout: 10 * time.Second}, url: ambossURL}
 }
 
 const ambossQuery = `
@@ -206,7 +211,14 @@ func (f *httpAmbossFetcher) FetchChannelFeeHistory(ctx context.Context, channelI
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return ambossResult{}, &ambossAPIError{msg: fmt.Sprintf("Error fetching Amboss channel fee history: HTTP %d", resp.StatusCode)}
+		// same text as requests' raise_for_status()
+		kind := "Client"
+		if resp.StatusCode >= 500 {
+			kind = "Server"
+		}
+		reason := strings.TrimSpace(strings.TrimPrefix(resp.Status, strconv.Itoa(resp.StatusCode)))
+		return ambossResult{}, &ambossAPIError{msg: fmt.Sprintf("Error fetching Amboss channel fee history: %d %s Error: %s for url: %s",
+			resp.StatusCode, kind, reason, f.url)}
 	}
 
 	var data ambossResponse

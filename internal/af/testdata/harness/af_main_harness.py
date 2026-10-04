@@ -75,6 +75,10 @@ def seed():
        remote_inbound_fee_rate=0)
     # Peer C: single channel, mid-range, with forwards.
     ch('300', 'C'*66, 4000000, 2000000, 2000000, ar_in_target=20, local_fee_rate=100)
+    # Peer D: 2 channels, ch400 carries a manual positive inbound fee (AF must leave it
+    # alone, also after the peer mirror), ch401 is the low-liquidity mirror controller.
+    ch('400', 'D'*66, 1000000, 600000, 400000, local_fee_rate=250, local_inbound_fee_rate=50)
+    ch('401', 'D'*66, 1000000, 100000, 900000, local_fee_rate=250, local_inbound_fee_rate=-20)
 
     # Forwards: recent (within 4h) and older (within 7d). amt_out_msat >= 1e6.
     def fwd(cin, cout, amt_msat, fee, ago):
@@ -91,13 +95,18 @@ def seed():
     fwd('200', '300', 1500000, 15.0, timedelta(days=3))
 
     # Rebalance payments for ch100 (status=2 succeeded), for avg cost / cost floor.
-    def pay(phash, chan_id, fee, value, ago):
+    def pay(phash, chan_id, fee, value, ago, chan_out=None, source_fee_rate=None):
         Payments(creation_date=now - ago, payment_hash=phash, value=value, fee=fee,
-                 status=2, index=0, rebal_chan=chan_id, cleaned=False).save()
+                 status=2, index=0, rebal_chan=chan_id, cleaned=False,
+                 chan_out=chan_out, source_fee_rate=source_fee_rate).save()
 
     pay('h1', '100', 50.0, 100000.0, timedelta(hours=2))
     pay('h2', '100', 60.0, 120000.0, timedelta(hours=3))
     pay('h3', '100', 0.0, 0.0, timedelta(hours=4))  # value 0 -> skipped
+    # opportunity cost: stored source fee, fallback to the source's current fee, MPP -> 0
+    pay('h4', '100', 30.0, 100000.0, timedelta(hours=5), chan_out='300', source_fee_rate=120)
+    pay('h5', '100', 30.0, 100000.0, timedelta(hours=6), chan_out='300')
+    pay('h6', '100', 30.0, 100000.0, timedelta(hours=7), chan_out='MPP')
 
     # Failed HTLCs: wire_failure=15, failure_detail=6, amount > liq+pending.
     def fail(phash_id, cout, amount, liq, pending, ago):
@@ -127,6 +136,8 @@ def run():
             'new_inbound_rate': float(row['new_inbound_rate']),
             'inbound_adjustment': float(row['inbound_adjustment']),
             'out_percent': int(row['out_percent']),
+            'avg_rebalance_cost': None if row['avg_rebalance_cost'] is None or row['avg_rebalance_cost'] != row['avg_rebalance_cost'] else float(row['avg_rebalance_cost']),
+            'cost_floor': float(row['cost_floor']),
         })
     out.sort(key=lambda r: r['chan_id'])
     print(json.dumps(out))

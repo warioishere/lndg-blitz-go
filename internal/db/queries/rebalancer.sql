@@ -69,9 +69,12 @@ SELECT chan_id, local_fee_rate, ar_source_ppm_diff FROM gui_channels
 WHERE chan_id = ANY($1::varchar[]);
 
 -- name: GetTargetChannelInfo :one
--- get_target_info: erstes is_open+auto_rebalance-Channel zu remote_pubkey.
+-- get_target_info: erstes is_open+auto_rebalance-Channel zu remote_pubkey. ORDER BY
+-- chan_id wie Djangos .first() (Primaerschluessel), sonst ist die Wahl bei mehreren
+-- Channels zum selben Peer zufaellig.
 SELECT local_fee_rate, ar_max_cost FROM gui_channels
 WHERE is_open = true AND auto_rebalance = true AND remote_pubkey = $1
+ORDER BY chan_id
 LIMIT 1;
 
 -- name: ListRemainingDrainChannels :many

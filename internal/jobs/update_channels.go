@@ -38,8 +38,9 @@ type updateChannelsQuerier interface {
 	GetChannelAlias(ctx context.Context, chanID string) (string, error)
 	InsertChannel(ctx context.Context, arg db.InsertChannelParams) error
 	UpdateChannelSync(ctx context.Context, arg db.UpdateChannelSyncParams) error
-	CountOpenChannels(ctx context.Context) (int64, error)
-	ListOpenChannelsNotIn(ctx context.Context, dollar_1 []string) ([]db.GuiChannel, error)
+	SyncChannelLocalPolicy(ctx context.Context, arg db.SyncChannelLocalPolicyParams) (int64, error)
+	FillChannelDefaults(ctx context.Context, arg db.FillChannelDefaultsParams) error
+	CloseMissingChannels(ctx context.Context, arg db.CloseMissingChannelsParams) error
 	// peers
 	GetPeer(ctx context.Context, pubkey string) (db.GuiPeer, error)
 	GetPeerAlias(ctx context.Context, pubkey string) (pgtype.Text, error)
@@ -83,7 +84,6 @@ func peerAliasOpt(ctx context.Context, q peerAliasGetter, pubkey string) (string
 // processes pending HTLCs and channels, and marks channels closed when they
 // are no longer returned by LND.
 func UpdateChannels(ctx context.Context, q updateChannelsQuerier, client updateChannelsClient) error {
-	counter := 0
 	chanList := []string{}
 	var channelsToCreate []db.GuiChannel
 	var channelsToUpdate []db.GuiChannel
@@ -107,13 +107,14 @@ func UpdateChannels(ctx context.Context, q updateChannelsQuerier, client updateC
 	for _, channel := range channels {
 		isNew := false
 		chanIDStr := formatChanID(channel.GetChanId())
-		var ch db.GuiChannel
+		var ch, loaded db.GuiChannel
 		var pendingChannel *db.GuiPendingchannel
 
 		existing, gerr := q.GetChannel(ctx, chanIDStr)
 		switch {
 		case gerr == nil:
 			ch = existing
+			loaded = existing
 			pa, isNone, perr := peerAliasOpt(ctx, q, channel.GetRemotePubkey())
 			if perr != nil {
 				return perr
@@ -293,9 +294,6 @@ func UpdateChannels(ctx context.Context, q updateChannelsQuerier, client updateC
 			if isNew {
 				z := 0
 				oldFeeRate = &z
-			} else {
-				v := int(ch.LocalFeeRate)
-				oldFeeRate = &v
 			}
 			ch.LocalBaseFee = int32(local.GetFeeBaseMsat())
 			ch.LocalFeeRate = int32(local.GetFeeRateMilliMsat())
@@ -543,54 +541,39 @@ func UpdateChannels(ctx context.Context, q updateChannelsQuerier, client updateC
 			}
 		}
 
-		// External Fee change detected -> Autofee-Log (Ext).
-		if oldFeeRate != nil && int64(*oldFeeRate) != localFeeRatePolicy {
-			dataLog(fmt.Sprintf("Ext fee change detected on %s for peer %s: fee updated from %d to %d", ch.ChanID, ch.Alias, *oldFeeRate, ch.LocalFeeRate))
-			ch.FeesUpdated = ts(time.Now())
-			if e := q.InsertAutofee(ctx, db.InsertAutofeeParams{
-				Timestamp: ts(time.Now()),
-				ChanID:    ch.ChanID,
-				PeerAlias: ch.Alias,
-				Setting:   "Ext",
-				OldValue:  int32(*oldFeeRate),
-				NewValue:  ch.LocalFeeRate,
-			}); e != nil {
-				return e
-			}
-		}
-
 		if e := applyChannelDefaults(ctx, q, &ch, autoFeesIsNone); e != nil {
 			return e
 		}
 		if isNew {
+			if oldFeeRate != nil && int64(*oldFeeRate) != localFeeRatePolicy {
+				if e := logExtFeeChange(ctx, q, ch, int32(*oldFeeRate)); e != nil {
+					return e
+				}
+			}
 			channelsToCreate = append(channelsToCreate, ch)
 		} else {
+			if e := syncLocalPolicy(ctx, q, ch, loaded); e != nil {
+				return e
+			}
+			if ch.ArOutTarget != loaded.ArOutTarget || ch.ArInTarget != loaded.ArInTarget ||
+				ch.ArAmtTarget != loaded.ArAmtTarget || ch.ArMaxCost != loaded.ArMaxCost {
+				if e := q.FillChannelDefaults(ctx, db.FillChannelDefaultsParams{
+					ChanID: ch.ChanID, ArOutTarget: ch.ArOutTarget, ArInTarget: ch.ArInTarget,
+					ArAmtTarget: ch.ArAmtTarget, ArMaxCost: ch.ArMaxCost,
+				}); e != nil {
+					return e
+				}
+			}
 			channelsToUpdate = append(channelsToUpdate, ch)
 		}
-		counter++
 		chanList = append(chanList, chanIDStr)
 	}
 
 	// Mark channels closed: open in the DB but absent from the LND channel list.
-	records, cerr := q.CountOpenChannels(ctx)
-	if cerr != nil {
-		return cerr
-	}
-	if records > int64(counter) {
-		closed, lerr := q.ListOpenChannelsNotIn(ctx, chanList)
-		if lerr != nil {
-			return lerr
-		}
-		for i := range closed {
-			cch := closed[i]
-			cch.LastUpdate = ts(time.Now())
-			cch.IsActive = false
-			cch.IsOpen = false
-			if e := applyChannelDefaults(ctx, q, &cch, false); e != nil {
-				return e
-			}
-			channelsToUpdate = append(channelsToUpdate, cch)
-		}
+	if e := q.CloseMissingChannels(ctx, db.CloseMissingChannelsParams{
+		LastUpdate: ts(time.Now()), ListedChanIds: chanList,
+	}); e != nil {
+		return e
 	}
 
 	// Write all pending inserts and updates.
@@ -686,9 +669,7 @@ func insertChannelParamsFrom(ch db.GuiChannel) db.InsertChannelParams {
 	}
 }
 
-// updateChannelSyncParamsFrom builds the UPDATE params for a channel sync.
-// Intentionally excludes local_fee_rate, local_inbound_fee_rate, offset_updated,
-// and fees_updated (managed by fee jobs).
+// updateChannelSyncParamsFrom builds the UPDATE params for a channel sync (LND state only).
 func updateChannelSyncParamsFrom(ch db.GuiChannel) db.UpdateChannelSyncParams {
 	return db.UpdateChannelSyncParams{
 		ChanID:               ch.ChanID,
@@ -711,13 +692,6 @@ func updateChannelSyncParamsFrom(ch db.GuiChannel) db.UpdateChannelSyncParams {
 		PendingOutbound:      ch.PendingOutbound,
 		PendingInbound:       ch.PendingInbound,
 		HtlcCount:            ch.HtlcCount,
-		LocalBaseFee:         ch.LocalBaseFee,
-		LocalInboundBaseFee:  ch.LocalInboundBaseFee,
-		InboundOffset:        ch.InboundOffset,
-		LocalDisabled:        ch.LocalDisabled,
-		LocalCltv:            ch.LocalCltv,
-		LocalMinHtlcMsat:     ch.LocalMinHtlcMsat,
-		LocalMaxHtlcMsat:     ch.LocalMaxHtlcMsat,
 		RemoteBaseFee:        ch.RemoteBaseFee,
 		RemoteFeeRate:        ch.RemoteFeeRate,
 		RemoteInboundBaseFee: ch.RemoteInboundBaseFee,
@@ -731,14 +705,59 @@ func updateChannelSyncParamsFrom(ch db.GuiChannel) db.UpdateChannelSyncParams {
 		IsActive:             ch.IsActive,
 		IsOpen:               ch.IsOpen,
 		LastUpdate:           ch.LastUpdate,
-		AutoRebalance:        ch.AutoRebalance,
-		ArAmtTarget:          ch.ArAmtTarget,
-		ArInTarget:           ch.ArInTarget,
-		ArOutTarget:          ch.ArOutTarget,
-		ArMaxCost:            ch.ArMaxCost,
-		ArSource:             ch.ArSource,
-		ArSourcePpmDiff:      ch.ArSourcePpmDiff,
-		AutoFees:             ch.AutoFees,
-		Notes:                ch.Notes,
 	}
+}
+
+// syncLocalPolicy persists the policy LND reports for an existing channel only while
+// the DB still holds what this sync loaded: a UI / auto-fees write made meanwhile wins.
+// An external fee change is logged once, when it is actually written.
+func syncLocalPolicy(ctx context.Context, q updateChannelsQuerier, ch, loaded db.GuiChannel) error {
+	if ch.LocalBaseFee == loaded.LocalBaseFee && ch.LocalFeeRate == loaded.LocalFeeRate &&
+		ch.LocalInboundBaseFee == loaded.LocalInboundBaseFee && ch.LocalInboundFeeRate == loaded.LocalInboundFeeRate &&
+		ch.LocalCltv == loaded.LocalCltv && ch.LocalMinHtlcMsat == loaded.LocalMinHtlcMsat &&
+		ch.LocalMaxHtlcMsat == loaded.LocalMaxHtlcMsat && ch.LocalDisabled == loaded.LocalDisabled {
+		return nil
+	}
+	feeChanged := ch.LocalFeeRate != loaded.LocalFeeRate
+	n, err := q.SyncChannelLocalPolicy(ctx, db.SyncChannelLocalPolicyParams{
+		ChanID:                 ch.ChanID,
+		LocalBaseFee:           ch.LocalBaseFee,
+		LocalFeeRate:           ch.LocalFeeRate,
+		LocalInboundBaseFee:    ch.LocalInboundBaseFee,
+		LocalInboundFeeRate:    ch.LocalInboundFeeRate,
+		LocalCltv:              ch.LocalCltv,
+		LocalMinHtlcMsat:       ch.LocalMinHtlcMsat,
+		LocalMaxHtlcMsat:       ch.LocalMaxHtlcMsat,
+		LocalDisabled:          ch.LocalDisabled,
+		FeeChanged:             feeChanged,
+		Now:                    ts(time.Now()),
+		OldLocalBaseFee:        loaded.LocalBaseFee,
+		OldLocalFeeRate:        loaded.LocalFeeRate,
+		OldLocalInboundBaseFee: loaded.LocalInboundBaseFee,
+		OldLocalInboundFeeRate: loaded.LocalInboundFeeRate,
+		OldLocalCltv:           loaded.LocalCltv,
+		OldLocalMinHtlcMsat:    loaded.LocalMinHtlcMsat,
+		OldLocalMaxHtlcMsat:    loaded.LocalMaxHtlcMsat,
+		OldLocalDisabled:       loaded.LocalDisabled,
+	})
+	if err != nil {
+		return err
+	}
+	if n > 0 && feeChanged {
+		return logExtFeeChange(ctx, q, ch, loaded.LocalFeeRate)
+	}
+	return nil
+}
+
+// logExtFeeChange records a fee change made outside LNDg in the autofees log.
+func logExtFeeChange(ctx context.Context, q updateChannelsQuerier, ch db.GuiChannel, oldFeeRate int32) error {
+	dataLog(fmt.Sprintf("Ext fee change detected on %s for peer %s: fee updated from %d to %d", ch.ChanID, ch.Alias, oldFeeRate, ch.LocalFeeRate))
+	return q.InsertAutofee(ctx, db.InsertAutofeeParams{
+		Timestamp: ts(time.Now()),
+		ChanID:    ch.ChanID,
+		PeerAlias: ch.Alias,
+		Setting:   "Ext",
+		OldValue:  oldFeeRate,
+		NewValue:  ch.LocalFeeRate,
+	})
 }

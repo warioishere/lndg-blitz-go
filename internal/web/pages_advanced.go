@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/warioishere/lndg-blitz-go/internal/lnd"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // advancedSQL selects open channels with outbound_percent/inbound_percent computed
@@ -55,7 +56,7 @@ func (s *Server) handleAdvanced(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entries, bytesUsed := lnd.CacheStats()
-	mb := math.RoundToEven(float64(bytesUsed)/1024/1024*100) / 100
+	mb := pyround.Round(float64(bytesUsed)/1024/1024, 2)
 
 	s.renderTemplate(w, r, "advanced.html", map[string]any{
 		"channels":           rows,

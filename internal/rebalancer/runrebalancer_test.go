@@ -23,14 +23,18 @@ import (
 type fakeRebalQ struct {
 	settings    map[string]string
 	activeChans []db.GuiChannel
-	feeDiff     []db.ListChannelFeeAndDiffByIDsRow
-	target      db.GetTargetChannelInfoRow
-	targetErr   error
-	drainRows   []db.ListRemainingDrainChannelsRow
-	balances    map[string]db.GetChannelBalancesRow
-	inserted    []db.InsertRebalancerRecordParams
-	updated     []db.UpdateRebalancerRecordParams
-	nextID      int64
+	// activeChansAfter, when set, is returned from the second channel listing on:
+	// the state after the rebalance moved liquidity.
+	activeChansAfter []db.GuiChannel
+	activeCalls      int
+	feeDiff          []db.ListChannelFeeAndDiffByIDsRow
+	target           db.GetTargetChannelInfoRow
+	targetErr        error
+	drainRows        []db.ListRemainingDrainChannelsRow
+	balances         map[string]db.GetChannelBalancesRow
+	inserted         []db.InsertRebalancerRecordParams
+	updated          []db.UpdateRebalancerRecordParams
+	nextID           int64
 
 	activePubkeys  []string
 	allowedTargets []db.ListAllAllowedTargetsRow
@@ -159,6 +163,10 @@ func (f *fakeRebalQ) ListChannelAliases(ctx context.Context) ([]db.ListChannelAl
 	return nil, nil
 }
 func (f *fakeRebalQ) ListActiveOpenPublicChannels(ctx context.Context) ([]db.GuiChannel, error) {
+	f.activeCalls++
+	if f.activeCalls > 1 && f.activeChansAfter != nil {
+		return f.activeChansAfter, nil
+	}
 	return f.activeChans, nil
 }
 func (f *fakeRebalQ) InsertRebalancerRecord(ctx context.Context, arg db.InsertRebalancerRecordParams) (int64, error) {
@@ -305,4 +313,43 @@ func TestRunRebalancerSendPaymentFailureDecrease(t *testing.T) {
 	assert.Equal(t, int32(50000), next.Value) // 100000/2
 	assert.InDelta(t, 500.0, next.FeeLimit, 1e-9)
 	assert.Equal(t, int32(1), next.Status)
+}
+
+// RapidFire after a success must judge the target with the balances after the
+// rebalance: here the target is already back below its inbound threshold.
+func TestRunRebalancerRapidFireUsesFreshBalances(t *testing.T) {
+	q := newFakeRebalQ()
+	q.settings["RR-UseSavedRoutes"] = "0"
+	q.targetErr = pgx.ErrNoRows
+	q.activeChans = []db.GuiChannel{chanOut(), chanIn()}
+	refilled := chanIn()
+	refilled.LocalBalance, refilled.RemoteBalance = 1_100_000, 900_000 // inbound_can (45%/50) = 0
+	q.activeChansAfter = []db.GuiChannel{chanOut(), refilled}
+	q.drainRows = []db.ListRemainingDrainChannelsRow{
+		{RemoteBalance: 1_900_000, Capacity: 2_000_000, ArInTarget: 50}, // drain alone would allow more
+	}
+	ln := &fakeLN{invoice: &lnrpc.AddInvoiceResponse{RHash: []byte{0xaa}, PaymentRequest: "lnbc1"}}
+	router := &fakeRebalRouter{payments: []*lnrpc.Payment{{
+		Status: lnrpc.Payment_SUCCEEDED, FeeMsat: 5000,
+		Htlcs: []*lnrpc.HTLCAttempt{{Route: &lnrpc.Route{TotalFeesMsat: 5000, Hops: []*lnrpc.Hop{{ChanId: 111}, {ChanId: 222}}}}},
+	}}}
+	rb := &db.GuiRebalancer{ID: 1, Value: 100000, LastHopPubkey: "02aabbccddeeff", Duration: 1, FeeLimit: 1000}
+	next := newEngine().runRebalancer(context.Background(), ln, router, q, rb, "Worker0", fixedNow())
+	assert.Equal(t, int32(2), rb.Status)
+	assert.Nil(t, next)
+	assert.Empty(t, q.inserted)
+}
+
+// 406 (no source left after the opportunity-cost filter) does not depend on the
+// amount, so no smaller RapidFire retry is queued.
+func TestRunRebalancer406NoDecrease(t *testing.T) {
+	q := newFakeRebalQ()
+	q.activeChans = []db.GuiChannel{chanOut(), chanIn()}
+	q.target = db.GetTargetChannelInfoRow{LocalFeeRate: 100, ArMaxCost: 50}
+	q.feeDiff = []db.ListChannelFeeAndDiffByIDsRow{{ChanID: "777", LocalFeeRate: 500}} // 100 < 500 -> excluded
+	rb := &db.GuiRebalancer{ID: 1, Value: 1_000_000, LastHopPubkey: "02aabbccddeeff", Duration: 1, FeeLimit: 1000}
+	next := newEngine().runRebalancer(context.Background(), &fakeLN{}, &fakeRebalRouter{}, q, rb, "Worker0", fixedNow())
+	assert.Equal(t, int32(406), rb.Status)
+	assert.Nil(t, next)
+	assert.Empty(t, q.inserted)
 }

@@ -110,6 +110,7 @@ func (f *fakeProbeQ) GetPeerAlias(ctx context.Context, pubkey string) (pgtype.Te
 type fakeProbeRouter struct {
 	liquiditySat int64 // amounts (sat) <= this -> verified; else liquidity
 	feeMsat      int64 // total_fees_msat of built routes
+	feeFailures  int   // the next N sends fail with FEE_INSUFFICIENT (code 12)
 	buildCalls   int
 	sendCalls    int
 }
@@ -128,6 +129,10 @@ func (r *fakeProbeRouter) BuildRoute(ctx context.Context, in *routerrpc.BuildRou
 }
 func (r *fakeProbeRouter) SendToRouteV2(ctx context.Context, in *routerrpc.SendToRouteRequest, opts ...grpc.CallOption) (*lnrpc.HTLCAttempt, error) {
 	r.sendCalls++
+	if r.feeFailures > 0 {
+		r.feeFailures--
+		return &lnrpc.HTLCAttempt{Status: lnrpc.HTLCAttempt_FAILED, Failure: &lnrpc.Failure{Code: 12}}, nil
+	}
 	amtSat := in.Route.GetTotalAmtMsat() / 1000
 	nHops := uint32(len(in.Route.GetHops()))
 	if amtSat <= r.liquiditySat {
@@ -225,6 +230,22 @@ func TestProbeWithBinarySearch_FeeBudgetAbort(t *testing.T) {
 	assert.Equal(t, int64(0), good)
 	assert.Equal(t, 1, r.buildCalls) // built once, aborted on fee check
 	assert.Equal(t, 0, r.sendCalls)
+}
+
+func TestProbeWithBinarySearch_FeeFailureRetriedOnce(t *testing.T) {
+	hopPubkeys := [][]byte{{0x01}, {0x02}}
+
+	// one fee failure, then the same amount verifies
+	r := &fakeProbeRouter{liquiditySat: 100000, feeMsat: 1000, feeFailures: 1}
+	bestHex, good, _ := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000)
+	require.NotNil(t, bestHex)
+	assert.Equal(t, int64(100000), good)
+
+	// a persisting fee failure aborts after one retry
+	r = &fakeProbeRouter{liquiditySat: 100000, feeMsat: 1000, feeFailures: 100}
+	bestHex, _, _ = probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000)
+	assert.Nil(t, bestHex)
+	assert.Equal(t, 2, r.sendCalls)
 }
 
 // ---- probe_routes_job gating ----

@@ -9,6 +9,7 @@ import (
 
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // forwardsClient is the LND subset required by UpdateForwards and emergencyForwardCheck.
@@ -121,7 +122,7 @@ func UpdateForwards(ctx context.Context, q forwardsQuerier, client forwardsClien
 			ForwardDate: ts(forwardDatetime), ChanIDIn: inID, ChanIDOut: outID,
 			ChanInAlias: textOf(incomingAlias), ChanOutAlias: textOf(outgoingAlias),
 			AmtInMsat: amtInMsat, AmtOutMsat: amtOutMsat,
-			Fee: roundTo(float64(forward.FeeMsat)/1000, 3), InboundFee: roundTo(float64(inFeeMsat)/1000, 3),
+			Fee: pyround.Round(float64(forward.FeeMsat)/1000, 3), InboundFee: pyround.Round(float64(inFeeMsat)/1000, 3),
 		}); e != nil {
 			return e
 		}

@@ -74,7 +74,6 @@ func TestNodeInfoIntegration(t *testing.T) {
 	require.Equal(t, "", o["local_base_fee"])      // no override -> ''
 	require.EqualValues(t, 250, o["fee_per_kw"])
 
-	require.Nil(t, body["pending_closed"])
 	require.Nil(t, body["pending_force_closed"])
 	require.Nil(t, body["waiting_for_close"])
 }

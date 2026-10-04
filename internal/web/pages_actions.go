@@ -13,7 +13,7 @@ import (
 // skipped via continue and never shown. DB errors return 500.
 func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	filter7day := time.Now().AddDate(0, 0, -7)
+	filter7day := time.Now().UTC().AddDate(0, 0, -7)
 
 	channels, err := s.queryMaps(ctx, `SELECT chan_id, funding_txid, output_index, short_chan_id, remote_pubkey, COALESCE(alias,'') AS alias,
                 capacity, local_balance, remote_balance, pending_outbound, pending_inbound,

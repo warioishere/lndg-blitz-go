@@ -162,7 +162,7 @@ func (s *Settings) computeOutboundAdjustment(r *ChannelFeeRow) int {
 			adj = math.Trunc(adj * s.ExcessBoost)
 		}
 		return s.clampStep(adj)
-	case r.OverallOutPercent < float64(s.ExcessLimit):
+	default:
 		var adj float64
 		if r.TotalAmtRoutedIn7day+r.TotalAmtRoutedOut7day == 0 {
 			adj = -3 * float64(s.Multiplier)
@@ -179,26 +179,6 @@ func (s *Settings) computeOutboundAdjustment(r *ChannelFeeRow) int {
 				base = (-5 * float64(s.Multiplier)) * highFlowFactor
 			}
 			adj = base * scale
-		} else {
-			adj = 0
-		}
-		return s.clampStep(adj)
-	default:
-		// Unreachable: the three cases above already cover all of lowliq < overall < excess.
-		var adj float64
-		if r.TotalAmtRoutedIn7day+r.TotalAmtRoutedOut7day == 0 {
-			adj = -5 * float64(s.Multiplier)
-			if s.ExcessBoostEnabled {
-				adj = math.Trunc(adj * s.ExcessBoost)
-			}
-		} else if r.GroupNetRouted7day < -1 && r.TotalRevenueAssist7day > r.TotalRevenue7day*10 {
-			flow := math.Abs(clampFlow(r.GroupNetRouted7day))
-			scale := 1 + flow*s.FlowScale
-			adj = -5 * float64(s.Multiplier) * highFlowFactor
-			if s.ExcessBoostEnabled {
-				adj = math.Trunc(adj * s.ExcessBoost)
-			}
-			adj *= scale
 		} else {
 			adj = 0
 		}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/warioishere/lndg-blitz-go/internal/af"
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // chanWinSuffix maps the 4 time windows to their context-key suffixes
@@ -40,7 +41,7 @@ func (s *Server) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	ch := chRows[0]
 
-	now := time.Now()
+	now := time.Now().UTC() // UTC: N days = N*24h like timedelta
 	c30 := now.AddDate(0, 0, -30)
 	c7 := now.AddDate(0, 0, -7)
 	c1 := now.AddDate(0, 0, -1)
@@ -276,7 +277,7 @@ func (s *Server) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 	if revenue7fees == 0 {
 		assistedRatio = int64(revenueAssist7fees) // round(int,2) -> int
 	} else {
-		assistedRatio = roundEven(float64(revenueAssist7fees)/float64(revenue7fees), 2)
+		assistedRatio = pyround.NumPy(float64(revenueAssist7fees)/float64(revenue7fees), 2)
 	}
 
 	var feeRatio int64 = 100
@@ -300,15 +301,15 @@ func (s *Server) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 		capf := float64(capacity)
 		if hasStart {
 			daysRouting := float64(int64(now.Sub(startDate)/time.Second)) / 86400.0
-			apy[0] = roundEven(((float64(profits[0])/daysRouting)*36500)/(capf*outboundRatio), 2)
-			assistedApy[0] = roundEven(((float64(revenueAssist[0])/daysRouting)*36500)/(capf*(1-outboundRatio)), 2)
-			cv[0] = roundEven(((float64(revenue[0])/daysRouting)*36500)/(capf*outboundRatio)+assistedApy[0], 2)
+			apy[0] = pyround.NumPy(((float64(profits[0])/daysRouting)*36500)/(capf*outboundRatio), 2)
+			assistedApy[0] = pyround.NumPy(((float64(revenueAssist[0])/daysRouting)*36500)/(capf*(1-outboundRatio)), 2)
+			cv[0] = pyround.NumPy(((float64(revenue[0])/daysRouting)*36500)/(capf*outboundRatio)+assistedApy[0], 2)
 		}
 		factor := [4]float64{0, 1216.6667, 5214.2857, 36500} // index 1=30d,2=7d,3=1d
 		for i := 1; i < 4; i++ {
-			apy[i] = roundEven((float64(profits[i])*factor[i])/(capf*outboundRatio), 2)
-			assistedApy[i] = roundEven((float64(revenueAssist[i])*factor[i])/(capf*(1-outboundRatio)), 2)
-			cv[i] = roundEven((float64(revenue[i])*factor[i])/(capf*outboundRatio)+assistedApy[i], 2)
+			apy[i] = pyround.NumPy((float64(profits[i])*factor[i])/(capf*outboundRatio), 2)
+			assistedApy[i] = pyround.NumPy((float64(revenueAssist[i])*factor[i])/(capf*(1-outboundRatio)), 2)
+			cv[i] = pyround.NumPy((float64(revenue[i])*factor[i])/(capf*outboundRatio)+assistedApy[i], 2)
 		}
 	}
 
@@ -405,7 +406,7 @@ func (s *Server) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 		if oldV == 0 {
 			log["change"] = int64(0)
 		} else {
-			log["change"] = roundEven(float64(newV-oldV)*100/float64(oldV), 1)
+			log["change"] = pyround.Round(float64(newV-oldV)*100/float64(oldV), 1)
 		}
 	}
 

@@ -22,12 +22,14 @@ import (
 // (overridable via environment variables).
 
 type sbsResult struct {
-	ChanID            string  `json:"chan_id"`
-	NewRate           float64 `json:"new_rate"`
-	Adjustment        float64 `json:"adjustment"`
-	NewInboundRate    float64 `json:"new_inbound_rate"`
-	InboundAdjustment float64 `json:"inbound_adjustment"`
-	OutPercent        int     `json:"out_percent"`
+	ChanID            string   `json:"chan_id"`
+	NewRate           float64  `json:"new_rate"`
+	Adjustment        float64  `json:"adjustment"`
+	NewInboundRate    float64  `json:"new_inbound_rate"`
+	InboundAdjustment float64  `json:"inbound_adjustment"`
+	OutPercent        int      `json:"out_percent"`
+	AvgRebalanceCost  *float64 `json:"avg_rebalance_cost"`
+	CostFloor         float64  `json:"cost_floor"`
 }
 
 func envOr(key, def string) string {
@@ -63,6 +65,14 @@ func TestAfMainSideBySide(t *testing.T) {
 	if err := pool.Ping(ctx); err != nil {
 		t.Skipf("test DB not reachable: %v", err)
 	}
+	// The side-by-side tests of af and web share this database and run in
+	// parallel packages: hold a session advisory lock for the whole test.
+	lockConn, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	defer lockConn.Release()
+	_, err = lockConn.Exec(ctx, `SELECT pg_advisory_lock(727274)`)
+	require.NoError(t, err)
+	defer lockConn.Exec(ctx, `SELECT pg_advisory_unlock(727274)`)
 
 	for _, mode := range []string{"legacy", "curve"} {
 		t.Run(mode, func(t *testing.T) {
@@ -108,6 +118,13 @@ func TestAfMainSideBySide(t *testing.T) {
 				require.InDeltaf(t, py.NewInboundRate, g.NewInboundRate, eps, "chan %s new_inbound_rate", py.ChanID)
 				require.InDeltaf(t, py.InboundAdjustment, g.InboundAdjustment, eps, "chan %s inbound_adjustment", py.ChanID)
 				require.Equalf(t, py.OutPercent, g.OutPercent, "chan %s out_percent", py.ChanID)
+				require.InDeltaf(t, py.CostFloor, g.CostFloor, eps, "chan %s cost_floor", py.ChanID)
+				if py.AvgRebalanceCost == nil {
+					require.Nilf(t, g.AvgRebalanceCost, "chan %s avg_rebalance_cost", py.ChanID)
+				} else {
+					require.NotNilf(t, g.AvgRebalanceCost, "chan %s avg_rebalance_cost", py.ChanID)
+					require.InDeltaf(t, *py.AvgRebalanceCost, float64(*g.AvgRebalanceCost), eps, "chan %s avg_rebalance_cost", py.ChanID)
+				}
 			}
 			t.Logf("%s mode: %d channels match Python af.main", mode, len(pyRows))
 		})

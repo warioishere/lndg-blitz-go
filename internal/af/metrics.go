@@ -3,6 +3,8 @@ package af
 import (
 	"math"
 	"time"
+
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // aggregates holds pre-computed per-channel metrics keyed by chan_id.
@@ -20,11 +22,6 @@ type aggregates struct {
 	failedOutBoost    map[string]int       // failed HTLC count over boost interval
 	lastForwardOut    map[string]time.Time // most recent outbound forward
 	lastForwardIn     map[string]time.Time // most recent inbound forward
-}
-
-// round1 rounds x to 1 decimal place using round-half-to-even.
-func round1(x float64) float64 {
-	return math.RoundToEven(x*10) / 10
 }
 
 // maxTime returns the later of two optional timestamps, ignoring nil values.
@@ -56,7 +53,7 @@ func computeChannelMetrics(s *Settings, rows []*ChannelFeeRow, agg *aggregates, 
 		r.AmtRoutedOut4h = agg.amtRoutedOut4h[r.ChanID]
 
 		// Net flow ratio over 7 days, rounded to 1 decimal place.
-		r.NetRouted7day = round1(float64(r.AmtRoutedOut7day-r.AmtRoutedIn7day) / float64(r.Capacity))
+		r.NetRouted7day = pyround.NumPy(float64(r.AmtRoutedOut7day-r.AmtRoutedIn7day)/float64(r.Capacity), 1)
 
 		// Apply pending amounts before computing out/in percent and group aggregation.
 		r.LocalBalance += r.PendingOutbound

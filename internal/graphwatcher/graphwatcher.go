@@ -6,7 +6,6 @@ package graphwatcher
 import (
 	"context"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/warioishere/lndg-blitz-go/internal/jobs"
 	lnd "github.com/warioishere/lndg-blitz-go/internal/lnd"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // Querier bundles all database access required by graphwatcher.
@@ -60,8 +60,6 @@ func gwLog(msg string) {
 }
 
 func chanIDStr(id uint64) string { return strconv.FormatUint(id, 10) }
-
-func roundTo3(x float64) float64 { return math.RoundToEven(x*1000) / 1000 }
 
 func formatChanIDList(cids []string) string { return "[" + strings.Join(cids, ", ") + "]" }
 
@@ -279,7 +277,7 @@ func (d Deps) scheduleRebalance(ctx context.Context, targetPubkey string, target
 	if feeRate <= 0 {
 		return nil
 	}
-	feeLimit := roundTo3(float64(feeRate) * float64(ch.ArAmtTarget) * 0.000001)
+	feeLimit := pyround.Round(float64(feeRate)*float64(ch.ArAmtTarget)*0.000001, 3)
 	if _, err := d.Q.InsertRebalancerRecord(ctx, db.InsertRebalancerRecordParams{
 		Requested: pgtype.Timestamptz{Time: now, Valid: true}, Value: int32(ch.ArAmtTarget), FeeLimit: feeLimit,
 		OutgoingChanIds: formatChanIDList(outboundCans), LastHopPubkey: targetPubkey, TargetAlias: ch.Alias,

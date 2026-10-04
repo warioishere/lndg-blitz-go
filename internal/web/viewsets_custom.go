@@ -2,11 +2,11 @@ package web
 
 import (
 	"encoding/json"
-	"math"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // This file contains viewset helpers for endpoints that require JOINs,
@@ -60,7 +60,7 @@ func outLiqPercent(outLiq int64, capacity pgtype.Int8) any {
 		return nil
 	}
 	x := float64(outLiq) / float64(capacity.Int64) * 100
-	return int(math.RoundToEven(x*10) / 10)
+	return int(pyround.Round(x, 1))
 }
 
 func peerEventToResult(row *peerEventRow) *orderedMap {

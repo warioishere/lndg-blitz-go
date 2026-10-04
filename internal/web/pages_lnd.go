@@ -12,14 +12,23 @@ import (
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc/wtclientrpc"
 )
 
-// grpcCodeString formats a gRPC error as "StatusCode.<CODE>" (e.g.
-// "StatusCode.UNAVAILABLE"), which error.html checks for known cases.
+// grpcCodeString formats a gRPC error like Python's str(e.code()), e.g.
+// "StatusCode.DEADLINE_EXCEEDED"; error.html checks for known cases.
 // Non-gRPC errors fall through to err.Error().
 func grpcCodeString(err error) string {
-	if st, ok := status.FromError(err); ok {
-		return "StatusCode." + strings.ToUpper(st.Code().String())
+	st, ok := status.FromError(err)
+	if !ok {
+		return err.Error()
 	}
-	return err.Error()
+	var b strings.Builder
+	name := st.Code().String() // "DeadlineExceeded"
+	for i, c := range name {
+		if i > 0 && c >= 'A' && c <= 'Z' && name[i-1] >= 'a' && name[i-1] <= 'z' {
+			b.WriteByte('_')
+		}
+		b.WriteRune(c)
+	}
+	return "StatusCode." + strings.ToUpper(b.String())
 }
 
 // handleBatch renders the Batch-Open form for up to 10 channels plus the current

@@ -79,13 +79,7 @@ func (p pagination) prevLink(r *http.Request) any {
 // preserving any other query parameters (filters). When removeOffset is true,
 // the offset parameter is omitted from the result URL.
 func buildPageURL(r *http.Request, limit, offset int, removeOffset bool) string {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		scheme = proto
-	}
+	scheme := requestScheme(r)
 	q := r.URL.Query()
 	q.Set("limit", strconv.Itoa(limit))
 	if removeOffset {

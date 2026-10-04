@@ -1,36 +1,5 @@
 {{define "title"}}LNDg - Closures{{end}}
 {{define "content"}}
-{{if .pending_closed}}
-<div class="w3-container w3-padding-small">
-  <h2>Pending Close Channels</h2>
-  <table class="w3-table-all w3-centered w3-hoverable">
-    <tr>
-      <th>Channel ID</th>
-      <th>Peer Alias</th>
-      <th width=20%>Channel Point</th>
-      <th>Capacity</th>
-      <th>Local Balance</th>
-      <th>Remote Balance</th>
-      <th>Balance In Limbo</th>
-      <th>Local Commit Fees</th>
-      <th width=20%>Closing TX</th>
-    </tr>
-    {{range $channel := .pending_closed}}
-    <tr>
-      <td><a href="/channel?={{str $channel.chan_id}}" target="_blank">{{str $channel.short_chan_id}}</a></td>
-      <td title="{{$channel.remote_node_pub}}"><a href="{{$.graph_links}}/{{$.network}}node/{{$channel.remote_node_pub}}" target="_blank">{{if eq (str $channel.alias) ""}}{{slice ":12" $channel.remote_node_pub}}{{else}}{{$channel.alias}}{{end}}</a></td>
-      <td><a href='{{$.network_links}}/{{$.network}}tx/{{slice ":-2" $channel.channel_point}}' target="_blank">{{$channel.channel_point}}</a></td>
-      <td>{{$channel.capacity | intcomma}}</td>
-      <td>{{$channel.local_balance | intcomma}}</td>
-      <td>{{$channel.remote_balance | intcomma}}</td>
-      <td>{{$channel.limbo_balance | intcomma}}</td>
-      <td>{{$channel.local_commit_fee_sat}}</td>
-      <td><a href='{{$.network_links}}/{{$.network}}tx/{{$channel.closing_txid}}' target="_blank">{{$channel.closing_txid}}</a></td>
-    </tr>
-    {{end}}
-  </table>
-</div>
-{{end}}
 {{if .pending_force_closed}}
 <div class="w3-container w3-padding-small">
   <h2>Pending Force Close Channels</h2>

@@ -492,7 +492,6 @@
     let [activeSum, privateSum, inactiveSum] = [build_active(active, forwards_sum), build_private(private), build_inactive(inactive)]
     update_summary(node_info, payments7d, onchain_task, closures_task, activeSum, inactiveSum, privateSum, forwards_summary, inv_rev_task)
     build('Pending Open', pending_open_template, node_info.pending_open||[])
-    build('Pending Closed', pending_closed_template, node_info.pending_closed||[])
     build('Waiting For Close', pending_closed_template, node_info.waiting_for_close||[])
     build('Pending Force Closed', pending_fclosed_template, node_info.pending_force_closed||[])
     build_routed((await forwardsList_task).results)

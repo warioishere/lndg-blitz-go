@@ -10,6 +10,7 @@ import (
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc/signrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // signerClient is the signrpc subset used for WhatSat sender verification.
@@ -76,7 +77,7 @@ func UpdateInvoices(ctx context.Context, q invoicesQuerier, client invoicesClien
 		if e := q.InsertInvoice(ctx, db.InsertInvoiceParams{
 			CreationDate: ts(time.Unix(invoice.CreationDate, 0)),
 			RHash:        rHash,
-			Value:        roundTo(float64(invoice.ValueMsat)/1000, 3),
+			Value:        pyround.Round(float64(invoice.ValueMsat)/1000, 3),
 			AmtPaid:      invoice.AmtPaidSat,
 			State:        int32(invoice.State),
 			Index:        int32(invoice.AddIndex),
@@ -115,7 +116,7 @@ func updateInvoice(ctx context.Context, q invoicesQuerier, client invoicesClient
 			keysendPreimage = &ph
 		}
 		if m, ok := records[34349334]; ok {
-			msg := truncRunes(string(m), 1000)
+			msg := keysendMessage(m)
 			message = &msg
 		}
 		_, has37 := records[34349337]

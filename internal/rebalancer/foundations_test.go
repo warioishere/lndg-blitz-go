@@ -56,8 +56,6 @@ func TestFailureCodeName(t *testing.T) {
 	assert.Equal(t, "TEMPORARY_CHANNEL_FAILURE", failureCodeName(15))
 	assert.Equal(t, "FEE_INSUFFICIENT", failureCodeName(12))
 	assert.Equal(t, "99", failureCodeName(99)) // unknown -> number
-	assert.Equal(t, "CIRCULAR_ROUTE", failureDetailName(22))
-	assert.Equal(t, "77", failureDetailName(77))
 }
 
 func TestMissionControl_RecordAndValidate(t *testing.T) {

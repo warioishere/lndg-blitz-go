@@ -48,15 +48,6 @@ func emergencyForwardCheck(ctx context.Context, q emergencyForwardQuerier, clien
 	if !enabled {
 		return nil
 	}
-	// Read the two required live-EP settings unconditionally. They are NOT NULL
-	// in the DB so the defaults are never used; the reads act as existence checks.
-	if _, err = getRequiredInt(ctx, q, "EP-LiveThreshold"); err != nil {
-		return err
-	}
-	if _, err = getRequiredFloat(ctx, q, "EP-LiveIncreasePct"); err != nil {
-		return err
-	}
-
 	channels, err := q.ListEpEnabledChannelsByIDs(ctx, chanIDs)
 	if err != nil {
 		return err
@@ -85,6 +76,11 @@ func emergencyForwardCheck(ctx context.Context, q emergencyForwardQuerier, clien
 	for _, dbCh := range channels {
 		liveCh, ok := liveMap[dbCh.ChanID]
 		if !ok {
+			continue
+		}
+		// Same per-channel cooldown as EmergencyFeeJob, so a burst of forwards
+		// cannot compound the increase.
+		if dbCh.EpUpdated.Valid && now.Sub(dbCh.EpUpdated.Time).Seconds() < float64(dbCh.EpCooldown*60) {
 			continue
 		}
 		threshold := int(dbCh.EpLiveThreshold)

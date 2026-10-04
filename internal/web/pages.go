@@ -82,6 +82,28 @@ func (s *Server) mountPages(r chi.Router) {
 	r.Post("/batchopen/", s.handleBatchOpen)
 	r.Post("/advanced_rebalancing", s.handleAdvancedRebalancingPost)
 	r.Get("/get_fees/", s.handleGetFees)
+
+	// Django's form views answer a GET (reload, typed URL) with a redirect.
+	for _, p := range []string{"/addtower/", "/deletetower/", "/removetower/", "/rebalancer/",
+		"/update_settings/", "/update_channel/", "/update_pending/", "/update_setting/",
+		"/update_closing/", "/update_keysend/", "/add_avoid/", "/remove_avoid/"} {
+		r.Get(p, redirectReferer("/"))
+	}
+	r.Get("/reset_node_reputation/", redirectReferer("/rebalanceroutes"))
+	for _, p := range []string{"/openchannel/", "/closechannel/", "/connectpeer/", "/createinvoice/"} {
+		r.Get(p, redirectTo("/"))
+	}
+	r.Get("/batchopen/", redirectTo("/batch"))
+}
+
+func redirectReferer(fallback string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, refererOr(r, fallback), http.StatusFound)
+	}
+}
+
+func redirectTo(url string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, url, http.StatusFound) }
 }
 
 // handleRebalances renders the rebalances page. The last_hop_pubkey query

@@ -171,6 +171,22 @@ func TestEmergencyFeeJob_AppliesBoost(t *testing.T) {
 	assert.Equal(t, int32(220), q.autofees[0].NewValue)
 }
 
+// Only EP-Enabled is needed: the per-channel ep_* columns drive the job, so a
+// missing global EP-* default key must not stop it (or the data loop after it).
+func TestEmergencyFeeJob_MissingDefaultKeys(t *testing.T) {
+	q := &fakeFeeQ{
+		settings: map[string]string{"EP-Enabled": "1"},
+		channels: []db.GuiChannel{{
+			ChanID: "c1", IsOpen: true, EpEnabled: true, Capacity: 1000000, LocalBalance: 50000,
+			EpTarget: 10, EpIncPct: 10, EpCooldown: 60, LocalFeeRate: 200, FundingTxid: "abc",
+		}},
+	}
+	client := &fakePolicyClient{version: "0.21.0-beta"}
+	require.NoError(t, EmergencyFeeJob(context.Background(), q, client))
+	require.Len(t, q.emergencyUp, 1)
+	assert.Equal(t, int32(220), q.emergencyUp[0].LocalFeeRate)
+}
+
 func TestEmergencyFeeJob_RPCErrorLogged(t *testing.T) {
 	q := &fakeFeeQ{
 		settings: map[string]string{"EP-Enabled": "1", "EP-DefaultTarget": "10", "EP-IncreasePct": "5", "EP-Cooldown": "60"},
@@ -243,6 +259,34 @@ func TestInboundOffsets_AppliesTarget(t *testing.T) {
 	assert.Equal(t, int32(-190), q.inboundUp[0].LocalInboundFeeRate)
 	require.Len(t, q.inboundLogs, 1) // 0 != -190 -> logged
 	assert.Equal(t, "Offset Job", q.inboundLogs[0].Setting)
+}
+
+// Auto-fees owns the inbound fee of auto_fees channels while AF-Enabled and
+// AF-InboundFees are on, in legacy as well as curve mode.
+func TestInboundOffsets_LeavesAutoFeesChannels(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		settings map[string]string
+		applied  bool
+	}{
+		{"AF inbound on, legacy", map[string]string{"AF-Enabled": "1", "AF-InboundFees": "1", "AF-CurveMode": "0"}, false},
+		{"AF inbound on, curve", map[string]string{"AF-Enabled": "1", "AF-InboundFees": "1", "AF-CurveMode": "1"}, false},
+		{"AF inbound off", map[string]string{"AF-Enabled": "1", "AF-InboundFees": "0"}, true},
+		{"AF disabled", map[string]string{"AF-Enabled": "0", "AF-InboundFees": "1"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settings := map[string]string{"IO-Enabled": "1"}
+			for k, v := range tc.settings {
+				settings[k] = v
+			}
+			q := &fakeFeeQ{settings: settings, channels: []db.GuiChannel{{
+				ChanID: "c1", IsOpen: true, AutoFees: true, InboundOffset: -10, LocalFeeRate: 200, FundingTxid: "abc",
+			}}}
+			client := &fakePolicyClient{version: "0.21.0-beta"}
+			require.NoError(t, InboundOffsets(context.Background(), q, client))
+			assert.Equal(t, tc.applied, len(client.policyReqs) == 1)
+		})
+	}
 }
 
 func TestInboundOffsets_Pre018Skips(t *testing.T) {

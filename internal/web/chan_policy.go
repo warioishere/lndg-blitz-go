@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc/routerrpc"
@@ -96,9 +95,10 @@ func (s *Server) handleChanPolicy(w http.ResponseWriter, r *http.Request) {
 			MinHtlcMsat:          uint64(minHtlcMsat),
 			MaxHtlcMsat:          uint64(maxHtlcMsat),
 		}
-		// Include inbound fees only when either inbound field is non-zero.
-		if (body.InboundBaseFee != nil && *body.InboundBaseFee != 0) ||
-			(body.InboundFeeRate != nil && *body.InboundFeeRate != 0) {
+		// An explicitly sent inbound fee goes to LND even when it is 0 (that is how
+		// it gets reset); otherwise a new outbound rate re-applies the inbound offset.
+		var offsetTarget *int32
+		if body.InboundBaseFee != nil || body.InboundFeeRate != nil {
 			if versionAtLeast(info.GetVersion(), 0.18) {
 				req.InboundFee = &lnrpc.InboundFee{
 					BaseFeeMsat: int32(inboundBaseFeeMsat),
@@ -108,6 +108,11 @@ func (s *Server) handleChanPolicy(w http.ResponseWriter, r *http.Request) {
 				writeAPIError(w, "LND version too low to set inbound fees, update to v0.18+")
 				return
 			}
+		} else if body.FeeRate != nil && versionAtLeast(info.GetVersion(), 0.18) {
+			if t, ok := offsetInboundFee(ch.InboundOffset, float64(*body.FeeRate)); ok {
+				offsetTarget = &t
+				req.InboundFee = &lnrpc.InboundFee{BaseFeeMsat: ch.LocalInboundBaseFee, FeeRatePpm: t}
+			}
 		}
 
 		if _, err := s.lnd.Lightning.UpdateChannelPolicy(ctx, req); err != nil {
@@ -115,7 +120,6 @@ func (s *Server) handleChanPolicy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		now := time.Now()
 		if body.BaseFee != nil {
 			if err := s.execChanPolicy(ctx, w, `UPDATE gui_channels SET local_base_fee=$2 WHERE chan_id=$1`, ch.ChanID, *body.BaseFee); err != nil {
 				return
@@ -123,18 +127,13 @@ func (s *Server) handleChanPolicy(w http.ResponseWriter, r *http.Request) {
 			returnResp.Set("base_fee", *body.BaseFee)
 		}
 		if body.FeeRate != nil {
-			oldFeeRate := ch.LocalFeeRate
 			newRate := int32(*body.FeeRate)
-			if err := s.execChanPolicy(ctx, w, `UPDATE gui_channels SET local_fee_rate=$2, fees_updated=$3 WHERE chan_id=$1`, ch.ChanID, newRate, now); err != nil {
-				return
-			}
-			returnResp.Set("fee_rate", *body.FeeRate)
-			if _, err := s.db.Exec(ctx, `INSERT INTO gui_autofees (timestamp, chan_id, peer_alias, setting, old_value, new_value) VALUES ($1,$2,$3,$4,$5,$6)`,
-				now, ch.ChanID, ch.Alias, "Manual", oldFeeRate, newRate); err != nil {
+			if err := s.recordOutboundFee(ctx, ffaChannelFrom(ch), newRate, offsetTarget); err != nil {
 				writeAPIError(w, "Channel policy update failed! Error: "+err.Error())
 				return
 			}
-			updated, err := s.syncPeerOutboundFee(ctx, ch.RemotePubkey, ch.ChanID, newRate)
+			returnResp.Set("fee_rate", *body.FeeRate)
+			_, updated, err := s.syncPeerOutboundFee(ctx, ch.RemotePubkey, ch.ChanID, newRate)
 			if err != nil {
 				writeAPIError(w, "Channel policy update failed! Error: "+grpcErrorMsg(err))
 				return
@@ -218,97 +217,4 @@ func versionAtLeast(version string, min float64) bool {
 		return false
 	}
 	return f >= min
-}
-
-// syncPeerOutboundFee propagates a manual outbound fee change to all other open
-// channels with the same peer (sibling channels). Each sibling gets an
-// UpdateChannelPolicy call and DB writes for both the fee rate and the autofees
-// log. If the sibling has an inbound offset configured, the inbound fee rate is
-// adjusted accordingly. Returns the number of siblings actually updated.
-func (s *Server) syncPeerOutboundFee(ctx context.Context, remotePubkey, excludeChanID string, newRate int32) (int, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT chan_id, local_fee_rate, local_base_fee, local_cltv, inbound_offset,
-		        local_inbound_base_fee, local_inbound_fee_rate, alias, funding_txid, output_index
-		 FROM gui_channels WHERE remote_pubkey=$1 AND is_open=true AND chan_id<>$2`,
-		remotePubkey, excludeChanID)
-	if err != nil {
-		return 0, err
-	}
-	type sibling struct {
-		chanID                                                string
-		localFeeRate, localBaseFee, localCltv, inboundOffset  int32
-		localInboundBaseFee, localInboundFeeRate, outputIndex int32
-		alias, fundingTxid                                    string
-	}
-	var siblings []sibling
-	for rows.Next() {
-		var sb sibling
-		if err := rows.Scan(&sb.chanID, &sb.localFeeRate, &sb.localBaseFee, &sb.localCltv, &sb.inboundOffset,
-			&sb.localInboundBaseFee, &sb.localInboundFeeRate, &sb.alias, &sb.fundingTxid, &sb.outputIndex); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		siblings = append(siblings, sb)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-
-	updated := 0
-	for _, sb := range siblings {
-		if sb.localFeeRate == newRate {
-			continue
-		}
-		req := &lnrpc.PolicyUpdateRequest{
-			Scope:         &lnrpc.PolicyUpdateRequest_ChanPoint{ChanPoint: channelPoint(sb.fundingTxid, sb.outputIndex)},
-			BaseFeeMsat:   int64(sb.localBaseFee),
-			FeeRate:       float64(newRate) / 1000000,
-			TimeLockDelta: uint32(sb.localCltv),
-		}
-		hasInbound := false
-		var inboundTarget int32
-		if sb.inboundOffset != 0 {
-			balance := newRate + sb.inboundOffset
-			if balance > 0 {
-				inboundTarget = -balance
-			} else {
-				inboundTarget = 0
-			}
-			hasInbound = true
-			req.InboundFee = &lnrpc.InboundFee{BaseFeeMsat: sb.localInboundBaseFee, FeeRatePpm: inboundTarget}
-		}
-		if _, err := s.lnd.Lightning.UpdateChannelPolicy(ctx, req); err != nil {
-			return updated, err
-		}
-
-		now := time.Now()
-		oldRate := sb.localFeeRate
-		if hasInbound {
-			if _, err := s.db.Exec(ctx, `UPDATE gui_channels SET local_fee_rate=$2, fees_updated=$3, local_inbound_fee_rate=$4, offset_updated=$5 WHERE chan_id=$1`,
-				sb.chanID, newRate, now, inboundTarget, now); err != nil {
-				return updated, err
-			}
-		} else {
-			if _, err := s.db.Exec(ctx, `UPDATE gui_channels SET local_fee_rate=$2, fees_updated=$3 WHERE chan_id=$1`,
-				sb.chanID, newRate, now); err != nil {
-				return updated, err
-			}
-		}
-		if _, err := s.db.Exec(ctx, `INSERT INTO gui_autofees (timestamp, chan_id, peer_alias, setting, old_value, new_value) VALUES ($1,$2,$3,$4,$5,$6)`,
-			now, sb.chanID, sb.alias, "Manual", oldRate, newRate); err != nil {
-			return updated, err
-		}
-		if hasInbound {
-			oldInbound := sb.localInboundFeeRate
-			if oldInbound != inboundTarget {
-				if _, err := s.db.Exec(ctx, `INSERT INTO gui_inboundfeelog (timestamp, chan_id, peer_alias, setting, old_value, new_value) VALUES ($1,$2,$3,$4,$5,$6)`,
-					now, sb.chanID, sb.alias, "Fee Adj Offset", oldInbound, inboundTarget); err != nil {
-					return updated, err
-				}
-			}
-		}
-		updated++
-	}
-	return updated, nil
 }

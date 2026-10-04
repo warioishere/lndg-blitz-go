@@ -5,9 +5,11 @@
 SELECT DISTINCT remote_pubkey FROM gui_channels WHERE is_open = true AND auto_rebalance = true;
 
 -- name: ListOpenARChannelsByPubkey :many
--- _trigger_probe targets: offene AR-Channels zu remote_pubkey.
+-- _trigger_probe targets: offene AR-Channels zu remote_pubkey. ORDER BY chan_id wie
+-- Djangos targets.first() (Primaerschluessel); targets[0] bestimmt Fee und Budget.
 SELECT * FROM gui_channels
-WHERE is_open = true AND auto_rebalance = true AND remote_pubkey = $1;
+WHERE is_open = true AND auto_rebalance = true AND remote_pubkey = $1
+ORDER BY chan_id;
 
 -- name: ListGraphOutboundCans :many
 -- outbound_cans: is_open, exclude(auto_rebalance=True, ar_source=False).

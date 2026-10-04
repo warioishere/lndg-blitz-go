@@ -47,8 +47,9 @@ func InboundOffsets(ctx context.Context, q inboundOffsetsQuerier, client policyC
 	if err != nil {
 		return err
 	}
-	// When curve mode manages inbound fees, skip channels handled by autofees.
-	curveMode, err := settingEqualsNoCreate(ctx, q, "AF-CurveMode", "1")
+	// Auto-fees owns the inbound fee of its channels while it runs with inbound fees
+	// on (curve and legacy mode alike), so leave those channels to it.
+	afEnabled, err := settingEqualsNoCreate(ctx, q, "AF-Enabled", "1")
 	if err != nil {
 		return err
 	}
@@ -58,7 +59,7 @@ func InboundOffsets(ctx context.Context, q inboundOffsetsQuerier, client policyC
 	}
 
 	for _, ch0 := range channels {
-		if curveMode && afInbound && ch0.AutoFees {
+		if afEnabled && afInbound && ch0.AutoFees {
 			continue
 		}
 		// Re-fetch the channel to get current values before updating.

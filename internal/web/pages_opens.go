@@ -9,11 +9,12 @@ import (
 
 // opensSQL selects suggested peers from PaymentHops over the last 60 days of
 // successful payments, excluding self, current peers, and avoided nodes.
-// Computes ppm/score/count/amount/fees/sum_cost_to/alias; filters score != 0;
+// Computes ppm/score/count/amount/fees/sum_cost_to/alias; filters score != 0
+// (numeric ROUND = half away from zero, as Django generates it);
 // ordered by -score then ppm; top 21.
 const opensSQL = `SELECT node_pubkey,
         (sum(fee) / sum(amt)) * 1000000 AS ppm,
-        ROUND((ROUND(count(id) / 1) + ROUND(sum(amt) / 100000)) / 10)::bigint AS score,
+        ROUND((ROUND(count(id) / 1, 0) + ROUND((sum(amt) / 100000)::numeric, 0)) / 10, 0)::bigint AS score,
         count(id) AS "count",
         sum(amt) AS amount,
         sum(fee) AS fees,
@@ -27,7 +28,7 @@ const opensSQL = `SELECT node_pubkey,
         AND node_pubkey NOT IN (SELECT remote_pubkey FROM gui_channels WHERE is_open = true)
         AND node_pubkey NOT IN (SELECT pubkey FROM gui_avoidnodes)
     GROUP BY node_pubkey
-    HAVING ROUND((ROUND(count(id) / 1) + ROUND(sum(amt) / 100000)) / 10) <> 0
+    HAVING ROUND((ROUND(count(id) / 1, 0) + ROUND((sum(amt) / 100000)::numeric, 0)) / 10, 0) <> 0
     ORDER BY score DESC, ppm
     LIMIT 21`
 
@@ -40,7 +41,7 @@ func (s *Server) handleOpens(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	openList, err := s.queryMaps(ctx, opensSQL, time.Now().AddDate(0, 0, -60), info.GetIdentityPubkey())
+	openList, err := s.queryMaps(ctx, opensSQL, time.Now().UTC().AddDate(0, 0, -60), info.GetIdentityPubkey())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

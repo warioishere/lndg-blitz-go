@@ -2,9 +2,11 @@ package web
 
 import (
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -36,6 +38,17 @@ func TestFloatformat(t *testing.T) {
 	require.Equal(t, "1.50", floatformat(2, 1.5))
 	require.Equal(t, "2", floatformat(0, 2.4))
 	require.Equal(t, "3.14", floatformat(2, 3.14159))
+	// reference values from Django's floatformat (half up on str(value))
+	for _, c := range []struct {
+		v    any
+		arg  int
+		want string
+	}{
+		{1234.5, 0, "1235"}, {2.675, 2, "2.68"}, {-0.4, 0, "0"}, {-2.5, 0, "-3"}, {0.05, 1, "0.1"},
+		{7, 1, "7.0"}, {int64(5), 0, "5"}, {-0.04, 1, "0.0"}, {1e21, 0, "1000000000000000000000"}, {99.95, 1, "100.0"},
+	} {
+		require.Equal(t, c.want, floatformat(c.arg, c.v), "%v|floatformat:%d", c.v, c.arg)
+	}
 }
 
 func TestDjangoDefaultAndAdd(t *testing.T) {
@@ -72,4 +85,39 @@ func TestResetPageIntegration(t *testing.T) {
 	// base.html layout present (config script + external JS file)
 	require.Contains(t, html, "window.GRAPH_LINKS")
 	require.Contains(t, html, "/static/gui_base.js")
+}
+
+// Reference strings from Django's naturaltime (count and unit joined by U+00A0).
+func TestNaturaltime(t *testing.T) {
+	now := time.Now()
+	for _, c := range []struct {
+		ago  time.Duration
+		want string
+	}{
+		{1 * time.Second, "a second ago"},
+		{30 * time.Second, "30 seconds ago"},
+		{90 * time.Second, "a minute ago"},
+		{5 * time.Minute, "5 minutes ago"},
+		{time.Hour + time.Minute, "an hour ago"},
+		{3*time.Hour + time.Minute, "3 hours ago"},
+		{29*time.Hour + time.Minute, "1 day, 5 hours ago"},
+		{9*24*time.Hour + time.Minute, "1 week, 2 days ago"},
+		{-(3*time.Hour - 30*time.Minute), "2 hours from now"},
+	} {
+		require.Equal(t, c.want, naturaltime(now.Add(-c.ago)), "%v ago", c.ago)
+	}
+	require.Equal(t, "1 year, 1 month",
+		timesince(time.Date(2013, 2, 10, 0, 0, 0, 0, time.UTC), time.Date(2014, 3, 10, 0, 0, 0, 0, time.UTC)))
+}
+
+// Reference strings from Python's str(float).
+func TestPyFloatString(t *testing.T) {
+	for f, want := range map[float64]string{
+		12: "12.0", 0.1: "0.1", 1e-05: "1e-05", 0.0001: "0.0001", 1.5e16: "1.5e+16",
+		1234567.0: "1234567.0", 1e15: "1000000000000000.0", math.Inf(1): "inf", math.Inf(-1): "-inf",
+	} {
+		require.Equal(t, want, pyFloatString(f), "%v", f)
+	}
+	require.Equal(t, "nan", pyFloatString(math.NaN()))
+	require.Equal(t, "-0.0", pyFloatString(math.Copysign(0, -1)))
 }

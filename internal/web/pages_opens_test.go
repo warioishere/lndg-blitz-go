@@ -29,6 +29,13 @@ func TestOpensPageIntegration(t *testing.T) {
 		"chan_id": "1", "alias": "SuggestedNode", "chan_capacity": 5000000,
 		"node_pubkey": "03suggested", "amt": 1000000.0, "fee": 50.0, "cost_to": 50.0,
 	})
+	// score = round((1 + round(4.5)) / 10): Django's numeric ROUND rounds the
+	// halves up (1 -> listed), float rounding to even would give 0 (hidden)
+	insertRow(t, pool, "gui_paymenthops", map[string]any{
+		"id": 2, "payment_hash_id": "openpay", "attempt_id": 1, "step": 2,
+		"chan_id": "2", "alias": "HalfNode", "chan_capacity": 5000000,
+		"node_pubkey": "03half", "amt": 450000.0, "fee": 1.0, "cost_to": 1.0,
+	})
 	insertRow(t, pool, "gui_avoidnodes", map[string]any{
 		"pubkey": "03avoid", "notes": "bad peer", "updated": recent,
 	})
@@ -44,6 +51,7 @@ func TestOpensPageIntegration(t *testing.T) {
 	require.Contains(t, html, "03suggested")
 	require.Contains(t, html, "SuggestedNode")
 	require.Contains(t, html, "1,000,000") // amount routed
+	require.Contains(t, html, "03half")
 	require.Contains(t, html, "Avoid/Exclude List")
 	require.Contains(t, html, "03avoid")
 	require.Contains(t, html, "bad peer")

@@ -52,3 +52,30 @@ func TestChartIntegration(t *testing.T) {
 	require.EqualValues(t, 2, row["revenue"])  // forward fee
 	require.EqualValues(t, 12, row["onchain"]) // onchain 5 + closure 7
 }
+
+// Without on-chain records the closures cannot be dated: they are left out
+// instead of failing the whole chart.
+func TestChartWithoutOnchain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping container-based test in -short mode")
+	}
+	pool, cleanup := setupDB(t)
+	defer cleanup()
+	srv := NewServer(&config.Settings{}, pool)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	var results []map[string]any
+	getJSON(t, ts.URL+"/api/chart/", &results)
+	require.Empty(t, results, "no data at all")
+
+	insertRow(t, pool, "gui_payments", map[string]any{
+		"creation_date": time.Date(2024, 1, 10, 8, 0, 0, 0, time.UTC), "payment_hash": "p1", "value": 100.0, "fee": 3.0,
+		"status": 2, "index": 1, "cleaned": false,
+	})
+	insertRow(t, pool, "gui_closures", map[string]any{"id": int64(1), "chan_id": "c", "close_height": 100, "closing_costs": 7})
+	getJSON(t, ts.URL+"/api/chart/", &results)
+	require.Len(t, results, 1)
+	require.EqualValues(t, 3, results[0]["cost"])
+	require.EqualValues(t, 0, results[0]["onchain"])
+}

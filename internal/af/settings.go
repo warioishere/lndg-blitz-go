@@ -38,7 +38,7 @@ type Settings struct {
 	ExcessBoostEnabled   bool    // AF-ExcessBoostOn == '1'
 	PeerRateCheck        bool    // AF-PeerRateCheck == '1'
 	PeerRateLimit        int     // AF-PeerRateLimit
-	BypassPeerRateOnHTLC bool    // AF-BypassPeerHTLC == '1' (DB error → false)
+	BypassPeerRateOnHTLC bool    // AF-BypassPeerHTLC == '1'
 	FlowScale            float64 // AF-FlowScale
 	MaxStep              int     // AF-MaxStep
 	CurveMode            bool    // AF-CurveMode == '1'
@@ -193,12 +193,10 @@ func LoadSettings(ctx context.Context, q settingsQuerier) (*Settings, error) {
 	if s.PeerRateLimit, err = getInt(ctx, q, "AF-PeerRateLimit", "0"); err != nil {
 		return nil, err
 	}
-	// A DB error reading this setting is treated as false rather than propagated.
-	if str, bypassErr := getStr(ctx, q, "AF-BypassPeerHTLC", "0"); bypassErr == nil {
-		s.BypassPeerRateOnHTLC = str == "1"
-	} else {
-		s.BypassPeerRateOnHTLC = false
+	if str, err = getStr(ctx, q, "AF-BypassPeerHTLC", "0"); err != nil {
+		return nil, err
 	}
+	s.BypassPeerRateOnHTLC = str == "1"
 	if s.FlowScale, err = getFloat(ctx, q, "AF-FlowScale", "1.0"); err != nil {
 		return nil, err
 	}

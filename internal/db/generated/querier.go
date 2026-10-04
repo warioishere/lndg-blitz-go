@@ -19,12 +19,13 @@ type Querier interface {
 	// Spiegelt LocalSettings.objects.filter(key__in=[...]).exists().
 	AnyLocalSettingExists(ctx context.Context, dollar_1 []string) (bool, error)
 	ChannelFeeRates(ctx context.Context, chanIds []string) ([]ChannelFeeRatesRow, error)
+	// Channels still open in the DB but no longer listed by LND.
+	CloseMissingChannels(ctx context.Context, arg CloseMissingChannelsParams) error
 	// Closure-Queries fuer update_closures.
 	CountClosures(ctx context.Context) (int64, error)
 	// failed_htlc_boost_job: failed HTLCs for a channel's outbound in the interval.
 	CountFailedHTLCBoost(ctx context.Context, arg CountFailedHTLCBoostParams) (int64, error)
 	CountForwardsAtDate(ctx context.Context, forwardDate pgtype.Timestamptz) (int64, error)
-	CountOpenChannels(ctx context.Context) (int64, error)
 	// Spiegelt LocalSettings(key, value).save() nur-wenn-nicht-vorhanden.
 	CreateLocalSettingIfAbsent(ctx context.Context, arg CreateLocalSettingIfAbsentParams) error
 	DeleteAggregatedFailedHTLCs(ctx context.Context, arg DeleteAggregatedFailedHTLCsParams) error
@@ -48,6 +49,8 @@ type Querier interface {
 	ExistsResolutionBySweep(ctx context.Context, sweepTxid string) (bool, error)
 	// FailedHTLCs.objects.filter(timestamp>=cutoff, wire_failure=15, failure_detail=6).values()
 	FailedHTLCsForAF(ctx context.Context, timestamp pgtype.Timestamptz) ([]FailedHTLCsForAFRow, error)
+	// Fills auto-rebalance defaults only where a value is still unset (0).
+	FillChannelDefaults(ctx context.Context, arg FillChannelDefaultsParams) error
 	ForwardsInSum(ctx context.Context, forwardDate pgtype.Timestamptz) ([]ForwardsInSumRow, error)
 	ForwardsInSumFee(ctx context.Context, forwardDate pgtype.Timestamptz) ([]ForwardsInSumFeeRow, error)
 	ForwardsLastIn(ctx context.Context, forwardDate pgtype.Timestamptz) ([]ForwardsLastInRow, error)
@@ -79,7 +82,9 @@ type Querier interface {
 	GetPeerAlias(ctx context.Context, pubkey string) (pgtype.Text, error)
 	GetPendingChannelByFunding(ctx context.Context, arg GetPendingChannelByFundingParams) (GuiPendingchannel, error)
 	GetRebalanceRoute(ctx context.Context, arg GetRebalanceRouteParams) (GuiRebalanceroute, error)
-	// get_target_info: erstes is_open+auto_rebalance-Channel zu remote_pubkey.
+	// get_target_info: erstes is_open+auto_rebalance-Channel zu remote_pubkey. ORDER BY
+	// chan_id wie Djangos .first() (Primaerschluessel), sonst ist die Wahl bei mehreren
+	// Channels zum selben Peer zufaellig.
 	GetTargetChannelInfo(ctx context.Context, remotePubkey string) (GetTargetChannelInfoRow, error)
 	// _schedule_rebalance: existiert ein status in {0,1} Rebalance fuer den Ziel-Peer?
 	HasActiveRebalanceForPubkey(ctx context.Context, lastHopPubkey string) (bool, error)
@@ -151,7 +156,8 @@ type Querier interface {
 	ListInflightPayments(ctx context.Context) ([]ListInflightPaymentsRow, error)
 	ListLocalSettings(ctx context.Context) ([]GuiLocalsetting, error)
 	ListNodeReputations(ctx context.Context, dollar_1 []string) ([]ListNodeReputationsRow, error)
-	// _trigger_probe targets: offene AR-Channels zu remote_pubkey.
+	// _trigger_probe targets: offene AR-Channels zu remote_pubkey. ORDER BY chan_id wie
+	// Djangos targets.first() (Primaerschluessel); targets[0] bestimmt Fee und Budget.
 	ListOpenARChannelsByPubkey(ctx context.Context, remotePubkey string) ([]GuiChannel, error)
 	// Probe-Subsystem (jobs.py:1064-1316): QueryRoutes-Binaersuche fuer AR-Targets,
 	// RebalanceRoute get_or_create und ProbeLog (gui_probelog = Schema A).
@@ -162,7 +168,6 @@ type Querier interface {
 	// fuer avg-cost, FailedHTLCs. amt_out_msat >= 1000000 entspricht dem Basisfilter
 	// aus af.py:88.
 	ListOpenChannels(ctx context.Context) ([]GuiChannel, error)
-	ListOpenChannelsNotIn(ctx context.Context, dollar_1 []string) ([]GuiChannel, error)
 	// Invoice-Queries fuer update_invoices / update_invoice.
 	ListOpenInvoices(ctx context.Context) ([]ListOpenInvoicesRow, error)
 	// outbound_cans = Channels.objects.filter(is_open=True)
@@ -214,6 +219,9 @@ type Querier interface {
 	SetPaymentStatus(ctx context.Context, arg SetPaymentStatusParams) error
 	SetPeerConnected(ctx context.Context, arg SetPeerConnectedParams) error
 	SetPeerLastReconnected(ctx context.Context, arg SetPeerLastReconnectedParams) error
+	// Writes the policy LND reports only while the row still holds the values the sync
+	// loaded; 0 rows means a UI / auto-fees write came in between and wins.
+	SyncChannelLocalPolicy(ctx context.Context, arg SyncChannelLocalPolicyParams) (int64, error)
 	// auto_fees: ch.local_fee_rate / local_inbound_fee_rate / fees_updated (ch.save()).
 	UpdateChannelAutoFees(ctx context.Context, arg UpdateChannelAutoFeesParams) error
 	// emergency_fee_job: ch.local_fee_rate / fees_updated / ep_updated (ch.save()).
@@ -224,6 +232,8 @@ type Querier interface {
 	UpdateChannelInboundOffset(ctx context.Context, arg UpdateChannelInboundOffsetParams) error
 	// auto_maxhtlc_job: targeted update (jobs.py:877-880).
 	UpdateChannelMaxHtlc(ctx context.Context, arg UpdateChannelMaxHtlcParams) error
+	// LND state only. Our own policy goes through SyncChannelLocalPolicy and UI-owned
+	// settings are never written here, so a concurrent UI write is not reverted.
 	UpdateChannelSync(ctx context.Context, arg UpdateChannelSyncParams) error
 	UpdateClosureCosts(ctx context.Context, arg UpdateClosureCostsParams) error
 	// _dispatch_probe: nachtraegliche routes_found-Aktualisierung des Events.

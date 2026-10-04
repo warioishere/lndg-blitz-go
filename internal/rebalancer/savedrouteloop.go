@@ -14,6 +14,7 @@ import (
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc/routerrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // trySavedRoute attempts a single saved-route entry. Returns true if the outer
@@ -197,10 +198,10 @@ func (e *engine) trySavedRoute(
 	if failureSet {
 		codeNum = int(failure.GetCode())
 		fsi = int(failure.GetFailureSourceIndex())
-		rebalLog(fmt.Sprintf("Saved route failed via %s - code: %s - detail: not set - failure_hop: %d",
+		rebalLog(fmt.Sprintf("Saved route failed via %s - code: %s - failure_hop: %d",
 			srLabel, failureCodeName(codeNum), fsi))
 	} else {
-		rebalLog(fmt.Sprintf("Saved route failed via %s - code: no-details - detail: not set - failure_hop: None", srLabel))
+		rebalLog(fmt.Sprintf("Saved route failed via %s - code: no-details - failure_hop: None", srLabel))
 	}
 	e.mc.recordRouteFailure(routeMsg, failure)
 	updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, *rebuiltHex, false, false, now())
@@ -251,7 +252,7 @@ func (e *engine) trySavedRoute(
 					return false
 				}
 				if probeResp.GetStatus() == lnrpc.HTLCAttempt_SUCCEEDED {
-					rebalance.FeeLimit = roundTo3(rebalance.FeeLimit * (float64(probed) / float64(rebalance.Value)))
+					rebalance.FeeLimit = pyround.Round(rebalance.FeeLimit*(float64(probed)/float64(rebalance.Value)), 3)
 					rebalance.Value = int32(probed)
 					rebalance.Status = 2
 					rebalance.PaymentHash = textOf(hex.EncodeToString(probeInvoice.GetRHash()))

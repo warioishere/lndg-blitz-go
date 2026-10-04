@@ -64,7 +64,7 @@ func readControllerLog(count int, grep string) (int64, []string, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	var logs []string
+	logs := []string{}
 	for _, line := range splitKeepNewline(data) {
 		if grep != "" {
 			if strings.Contains(line, grep) {

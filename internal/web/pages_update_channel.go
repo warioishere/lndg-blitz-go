@@ -6,7 +6,6 @@ import (
 	"math"
 	"net/http"
 	"strconv"
-	"time"
 
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
@@ -73,7 +72,7 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		}
 		f.add(fmt.Sprintf("Base fee for channel %s (%s) updated to a value of: %d", alias, chanID, tbf))
 	case 1: // fee rate (LND + sibling sync)
-		if !s.updateChannelFeeRate(ctx, w, f, ch, cp, target) {
+		if !s.updateChannelFeeRate(ctx, w, f, ch, target) {
 			return
 		}
 	case 12: // inbound base fee (LND, v0.18+)
@@ -273,56 +272,15 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	s.redirect(w, r, refererOr(r, "/"), f)
 }
 
-// updateChannelFeeRate handles update_target==1: pushes UpdateChannelPolicy with
-// optional inbound offset recalculation, updates the DB, writes autofees/inbound
-// fee log entries, and syncs sibling channels. Returns false (with 500 set) on error.
-func (s *Server) updateChannelFeeRate(ctx context.Context, w http.ResponseWriter, f *flasher, ch db.GuiChannel, cp *lnrpc.ChannelPoint, target float64) bool {
-	req := &lnrpc.PolicyUpdateRequest{
-		Scope: &lnrpc.PolicyUpdateRequest_ChanPoint{ChanPoint: cp}, BaseFeeMsat: int64(ch.LocalBaseFee),
-		FeeRate: target / 1000000, TimeLockDelta: uint32(ch.LocalCltv),
-	}
-	hasInbound := false
-	var inboundTarget int32
-	if ch.InboundOffset != 0 {
-		balance := target + float64(ch.InboundOffset)
-		if balance > 0 {
-			inboundTarget = int32(math.RoundToEven(-balance))
-		}
-		hasInbound = true
-		req.InboundFee = &lnrpc.InboundFee{BaseFeeMsat: ch.LocalInboundBaseFee, FeeRatePpm: inboundTarget}
-	}
-	if _, err := s.lnd.Lightning.UpdateChannelPolicy(ctx, req); err != nil {
+// updateChannelFeeRate handles update_target==1: the new rate (plus the inbound
+// offset, if any) goes to LND and the DB, then to the sibling channels.
+// Returns false (with 500 set) on error.
+func (s *Server) updateChannelFeeRate(ctx context.Context, w http.ResponseWriter, f *flasher, ch db.GuiChannel, target float64) bool {
+	if err := s.applyOutboundFee(ctx, ffaChannelFrom(ch), target); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return false
 	}
-	now := time.Now()
-	oldFeeRate := ch.LocalFeeRate
-	newRate := int32(target)
-	var execErr error
-	if hasInbound {
-		_, execErr = s.db.Exec(ctx, `UPDATE gui_channels SET local_fee_rate=$2, fees_updated=$3, local_inbound_fee_rate=$4, offset_updated=$5 WHERE chan_id=$1`,
-			ch.ChanID, newRate, now, inboundTarget, now)
-	} else {
-		_, execErr = s.db.Exec(ctx, `UPDATE gui_channels SET local_fee_rate=$2, fees_updated=$3 WHERE chan_id=$1`,
-			ch.ChanID, newRate, now)
-	}
-	if execErr != nil {
-		http.Error(w, execErr.Error(), http.StatusInternalServerError)
-		return false
-	}
-	if _, err := s.db.Exec(ctx, `INSERT INTO gui_autofees (timestamp, chan_id, peer_alias, setting, old_value, new_value) VALUES ($1,$2,$3,$4,$5,$6)`,
-		now, ch.ChanID, ch.Alias, "Manual", oldFeeRate, newRate); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return false
-	}
-	if hasInbound && ch.LocalInboundFeeRate != inboundTarget {
-		if _, err := s.db.Exec(ctx, `INSERT INTO gui_inboundfeelog (timestamp, chan_id, peer_alias, setting, old_value, new_value) VALUES ($1,$2,$3,$4,$5,$6)`,
-			now, ch.ChanID, ch.Alias, "Fee Adj Offset", ch.LocalInboundFeeRate, inboundTarget); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return false
-		}
-	}
-	updated, err := s.syncPeerOutboundFee(ctx, ch.RemotePubkey, ch.ChanID, newRate)
+	_, updated, err := s.syncPeerOutboundFee(ctx, ch.RemotePubkey, ch.ChanID, int32(target))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return false

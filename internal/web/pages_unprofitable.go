@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // Age bonus heuristic constants.
@@ -29,12 +30,6 @@ var ucTimeframes = []ucTimeframe{
 	{"7", 7, "7 Days"},
 	{"30", 30, "30 Days"},
 	{"90", 90, "90 Days"},
-}
-
-// roundEven rounds x to n decimal places using banker's rounding.
-func roundEven(x float64, n int) float64 {
-	factor := math.Pow(10, float64(n))
-	return math.RoundToEven(x*factor) / factor
 }
 
 // ucChan holds the base channel data needed for the unprofitable channels view.
@@ -82,7 +77,7 @@ func (s *Server) handleUnprofitableChannels(w http.ResponseWriter, r *http.Reque
 			break
 		}
 	}
-	filterDate := time.Now().AddDate(0, 0, -selected.days)
+	filterDate := time.Now().UTC().AddDate(0, 0, -selected.days)
 
 	// Active, open channels.
 	chanRows, err := s.queryMaps(ctx, `SELECT chan_id, capacity, local_balance, remote_balance, local_fee_rate, COALESCE(alias,'') AS alias, initiator FROM gui_channels WHERE is_active = true AND is_open = true`)
@@ -238,7 +233,7 @@ func (s *Server) handleUnprofitableChannels(w http.ResponseWriter, r *http.Reque
 		if ch.capacity > 0 {
 			localRatio = float64(ch.localBalance) / float64(ch.capacity)
 		}
-		localRatioPct := roundEven(localRatio*100, 2)
+		localRatioPct := pyround.Round(localRatio*100, 2)
 
 		totalOutbound := float64(m.routedOut) + m.rebalancedOut
 		assistedRevenue := m.assistedRevenue
@@ -304,7 +299,7 @@ func (s *Server) handleUnprofitableChannels(w http.ResponseWriter, r *http.Reque
 			}
 		}
 		priorityScore = math.Max(1.0, priorityScore-ageBonus)
-		smartStuckIndex := roundEven(priorityScore/7.0, 2)
+		smartStuckIndex := pyround.Round(priorityScore/7.0, 2)
 
 		var ageDaysVal any = "N/A"
 		if ageDays >= 0 {
@@ -326,7 +321,7 @@ func (s *Server) handleUnprofitableChannels(w http.ResponseWriter, r *http.Reque
 			"profit":              profit,
 			"assisted_revenue":    assistedRevenue,
 			"initiator":           ch.initiator,
-			"capacity_millions":   roundEven(float64(ch.capacity)/1000000, 1),
+			"capacity_millions":   pyround.Round(float64(ch.capacity)/1000000, 1),
 			"local_ratio":         localRatioPct,
 			"stuck_index":         smartStuckIndex,
 			"age_days":            ageDaysVal,

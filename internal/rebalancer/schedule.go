@@ -11,6 +11,7 @@ import (
 	"time"
 
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
+	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // pyFloatStr formats a float for log strings: integers get one decimal place ("2.0"),
@@ -195,7 +196,7 @@ func (e *engine) autoSchedule(ctx context.Context, q scheduleQuerier, now func()
 				continue
 			}
 			tValue := targetValue(target.ch.ArAmtTarget, variance)
-			tFee := roundTo3(float64(targetFeeRate) * float64(tValue) * 0.000001)
+			tFee := pyround.Round(float64(targetFeeRate)*float64(tValue)*0.000001, 3)
 			if tFee == 0 {
 				continue
 			}
@@ -229,7 +230,7 @@ func (e *engine) autoSchedule(ctx context.Context, q scheduleQuerier, now func()
 			continue
 		}
 		tValue := targetValue(target.ch.ArAmtTarget, variance)
-		tFee := roundTo3(float64(targetFeeRate) * float64(tValue) * 0.000001)
+		tFee := pyround.Round(float64(targetFeeRate)*float64(tValue)*0.000001, 3)
 		if tFee == 0 {
 			continue
 		}

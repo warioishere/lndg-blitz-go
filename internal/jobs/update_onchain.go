@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -29,6 +30,13 @@ func truncRunes(s string, n int) string {
 		return string(r[:n])
 	}
 	return s
+}
+
+// keysendMessage decodes a sender-controlled keysend message: invalid UTF-8 and
+// NUL bytes are dropped (Postgres rejects both), then capped at 1000 runes.
+func keysendMessage(b []byte) string {
+	s := strings.ReplaceAll(strings.ToValidUTF8(string(b), ""), "\x00", "")
+	return truncRunes(s, 1000)
 }
 
 // UpdateOnchain fetches on-chain transactions from LND starting at the last

@@ -17,6 +17,7 @@ import (
 type fakeAfQ struct {
 	settings    map[string]string
 	channels    []db.GuiChannel
+	fresh       map[string]db.GuiChannel // GetChannel override: the row as changed after the snapshot
 	autofees    []db.InsertAutofeeParams
 	inboundLogs []db.InsertInboundFeeLogParams
 	autoFeesUp  []db.UpdateChannelAutoFeesParams
@@ -82,6 +83,9 @@ func (f *fakeAfQ) ListAutoFeesChannels(ctx context.Context) ([]db.GuiChannel, er
 	return f.channels, nil
 }
 func (f *fakeAfQ) GetChannel(ctx context.Context, chanID string) (db.GuiChannel, error) {
+	if c, ok := f.fresh[chanID]; ok {
+		return c, nil
+	}
 	for _, c := range f.channels {
 		if c.ChanID == chanID {
 			return c, nil
@@ -137,8 +141,33 @@ func TestAutoFees_AppliesOutboundChange(t *testing.T) {
 	assert.Equal(t, int32(200), q.autoFeesUp[0].LocalFeeRate)
 }
 
+// A fee changed manually after af.Main took its snapshot must not be overwritten
+// with a rate computed from the stale snapshot.
 func TestAutoFees_SkipsManualChange(t *testing.T) {
-	// Skipping a channel whose fee was manually changed between the list snapshot and
-	// the per-channel fetch requires a separate List/Get view; covered in integration tests.
-	t.Skip("snapshot-skip requires separate List/Get view; covered in integration tests")
+	old := time.Now().Add(-72 * time.Hour)
+	listed := db.GuiChannel{
+		ChanID: "c1", RemotePubkey: "peerA", IsOpen: true, IsActive: true, AutoFees: true,
+		Capacity: 1000000, LocalBalance: 500000, RemoteBalance: 500000,
+		LocalFeeRate: 203, LocalBaseFee: 1000, LocalCltv: 40, ArInTarget: 30, ArMaxCost: 50,
+		Alias: "peerA", FeesUpdated: pgtype.Timestamptz{Time: old, Valid: true}, FundingTxid: "abc",
+	}
+	for name, change := range map[string]func(*db.GuiChannel){
+		"outbound": func(c *db.GuiChannel) { c.LocalFeeRate = 300 },
+		"inbound":  func(c *db.GuiChannel) { c.LocalInboundFeeRate = -50 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			fresh := listed
+			change(&fresh)
+			q := &fakeAfQ{
+				settings: map[string]string{"AF-Enabled": "1", "AF-CurveMode": "0"},
+				channels: []db.GuiChannel{listed},
+				fresh:    map[string]db.GuiChannel{"c1": fresh},
+			}
+			client := &fakePolicyClient{version: "0.21.0-beta"}
+			require.NoError(t, AutoFees(context.Background(), q, client))
+			assert.Empty(t, client.policyReqs, "no policy pushed to LND")
+			assert.Empty(t, q.autofees)
+			assert.Empty(t, q.autoFeesUp)
+		})
+	}
 }
