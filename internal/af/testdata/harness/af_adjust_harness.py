@@ -26,7 +26,7 @@ def clamp_step(val, max_step):
 def compute_curve_outbound_adjustment(row, S):
     intensity = S['intensity']; exponent = S['exponent']; max_step = S['max_step']
     peer_rate_check = S['peer_rate_check']; peer_rate_limit = S['peer_rate_limit']
-    downscale = S['downscale']; flow_weight = S['flow_weight']
+    downscale = S['downscale']; flow_weight = S['flow_weight']; lowliq_limit = S['lowliq_limit']
     ch_target = 100 - row.get('ar_in_target', 90)
     deviation = (ch_target - row['out_percent']) / 100.0
     sign = 1 if deviation > 0 else (-1 if deviation < 0 else 0)
@@ -41,7 +41,10 @@ def compute_curve_outbound_adjustment(row, S):
         net_flow_ratio = max(-1.0, min(1.0, net_flow_ratio))
         if (adj > 0 and net_flow_ratio > 0) or (adj < 0 and net_flow_ratio < 0):
             adj *= (1 + flow_weight * abs(net_flow_ratio))
-    return int(round(max(-max_step, min(max_step, adj))))
+    adj = int(round(max(-max_step, min(max_step, adj))))
+    if adj == 0 and sign > 0 and row['out_percent'] <= lowliq_limit:
+        adj = min(1, max_step)
+    return adj
 
 
 def compute_curve_inbound_adjustment(row, S):

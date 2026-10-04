@@ -33,6 +33,8 @@ def seed():
         LocalSettings(key='AF-CurveMode', value='0').save()
     # Enable FLP globally to exercise the cost floor.
     LocalSettings(key='FLP-Enabled', value='1').save()
+    # 1 ppm steps (as on the node): a +1 adjustment is not rounded away
+    LocalSettings(key='AF-Increment', value='1').save()
 
     def ch(chan_id, pubkey, cap, local, remote, **kw):
         defaults = dict(
@@ -79,6 +81,8 @@ def seed():
     # alone, also after the peer mirror), ch401 is the low-liquidity mirror controller.
     ch('400', 'D'*66, 1000000, 600000, 400000, local_fee_rate=250, local_inbound_fee_rate=50)
     ch('401', 'D'*66, 1000000, 100000, 900000, local_fee_rate=250, local_inbound_fee_rate=-20)
+    # Peer E: depleted below a 10% target: curve mode must still rise by 1 ppm.
+    ch('500', 'E'*66, 1000000, 10000, 990000, ar_in_target=90, local_fee_rate=120, remote_fee_rate=10)
 
     # Forwards: recent (within 4h) and older (within 7d). amt_out_msat >= 1e6.
     def fwd(cin, cout, amt_msat, fee, ago):

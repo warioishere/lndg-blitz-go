@@ -60,7 +60,13 @@ func (s *Settings) computeCurveOutboundAdjustment(r *ChannelFeeRow) int {
 		}
 	}
 	clamped := math.Max(float64(-s.MaxStep), math.Min(float64(s.MaxStep), adj))
-	return int(math.RoundToEven(clamped))
+	step := int(math.RoundToEven(clamped))
+	// A depleted channel below its target rises at least 1 ppm per run, as in
+	// legacy mode; a small deviation squared would otherwise round to 0.
+	if step == 0 && deviation > 0 && r.OutPercent <= s.LowLiqLimit {
+		step = min(1, s.MaxStep)
+	}
+	return step
 }
 
 // computeCurveInboundAdjustment calculates the curve-mode inbound fee adjustment
