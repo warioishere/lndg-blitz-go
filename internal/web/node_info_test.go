@@ -60,6 +60,15 @@ func TestNodeInfoIntegration(t *testing.T) {
 	require.Equal(t, []any{"bitcoin-mainnet"}, body["chains"])
 	require.EqualValues(t, 0, body["db_size"]) // file does not exist -> 0
 
+	// LND on Postgres: the size of the named database (here the test DB itself)
+	var dbName string
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT current_database()`).Scan(&dbName))
+	pgSrv := httptest.NewServer(NewServer(&config.Settings{LND_DB_NAME: dbName}, pool, WithLND(&LND{Lightning: fake})).Handler())
+	defer pgSrv.Close()
+	var pgBody map[string]any
+	getJSON(t, pgSrv.URL+"/api/node_info/", &pgBody)
+	require.Greater(t, pgBody["db_size"], 0.0)
+
 	bal := body["balance"].(map[string]any)
 	require.EqualValues(t, 1500, bal["total"]) // 1000 + 500 (+ limbo 0)
 	require.EqualValues(t, 1000, bal["onchain"])

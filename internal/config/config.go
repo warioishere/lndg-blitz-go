@@ -19,9 +19,12 @@ type Settings struct {
 	LND_TLS_PATH      string
 	LND_MACAROON_PATH string
 	LND_DATABASE_PATH string
-	LND_NETWORK       string
-	LND_RPC_SERVER    string
-	LND_MAX_MESSAGE   string
+	// LND_DB_NAME is LND's Postgres database (db.backend=postgres, same cluster);
+	// when set, its size replaces the channel.db file size.
+	LND_DB_NAME     string
+	LND_NETWORK     string
+	LND_RPC_SERVER  string
+	LND_MAX_MESSAGE string
 	// DATABASE_URL is the Postgres DSN used by pgxpool.
 	DATABASE_URL string
 
@@ -117,6 +120,7 @@ func load() *Settings {
 		LND_TLS_PATH:      getenv("LND_TLS_PATH", "~/.lnd/tls.cert"),
 		LND_MACAROON_PATH: getenv("LND_MACAROON_PATH", "~/.lnd/data/chain/bitcoin/mainnet/admin.macaroon"),
 		LND_DATABASE_PATH: getenv("LND_DATABASE_PATH", "~/.lnd/data/graph/mainnet/channel.db"),
+		LND_DB_NAME:       getenv("LND_DB_NAME", ""),
 		LND_NETWORK:       getenv("LND_NETWORK", "mainnet"),
 		LND_RPC_SERVER:    getenv("LND_RPC_SERVER", "localhost:10009"),
 		LND_MAX_MESSAGE:   getenv("LND_MAX_MESSAGE", "35"),

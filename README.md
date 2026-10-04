@@ -54,6 +54,7 @@ file.**
 | `LND_NETWORK` | `mainnet` | `mainnet` or `testnet` (controls e.g. mempool links) |
 | `LND_MAX_MESSAGE` | `35` | max gRPC message size in MB |
 | `LND_DATABASE_PATH` | `~/.lnd/data/graph/mainnet/channel.db` | path to LND's `channel.db` (for DB-size display only) |
+| `LND_DB_NAME` | _(empty)_ | LND's Postgres database when LND runs with `db.backend=postgres` in the same cluster; its size replaces the `channel.db` size |
 | `WEB_BIND_ADDR` | `0.0.0.0:8889` | bind address of the HTTP server |
 | `WEB_BASIC_AUTH_USER` | _(empty)_ | when **both** auth vars are set, HTTP basic auth is enabled |
 | `WEB_BASIC_AUTH_PASS` | _(empty)_ | |

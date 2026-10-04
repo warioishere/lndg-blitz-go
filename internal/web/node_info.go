@@ -17,8 +17,8 @@ import (
 
 // handleNodeInfo returns node status including pending channels and wallet balance.
 // An RPC error produces a JSON {"detail":...} 500 response. The db_size field
-// reflects the local file size of the channel database at LND_DATABASE_PATH only;
-// remote filesystem paths are not supported.
+// is the size of LND's Postgres database (LND_DB_NAME) or of the local channel.db
+// at LND_DATABASE_PATH; remote filesystem paths are not supported.
 func (s *Server) handleNodeInfo(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	info, err := s.lnd.Lightning.GetInfo(ctx, &lnrpc.GetInfoRequest{})
@@ -198,7 +198,7 @@ func (s *Server) handleNodeInfo(w http.ResponseWriter, r *http.Request) {
 		Set("pending_open", pendingOpen).
 		Set("pending_force_closed", pendingForceClosed).
 		Set("waiting_for_close", waitingForClose).
-		Set("db_size", channelDBSize(s.cfg.LND_DATABASE_PATH))
+		Set("db_size", s.lndDBSize(ctx))
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -324,10 +324,18 @@ func int4Val(v pgtype.Int4) any {
 	return nil
 }
 
-// channelDBSize returns the channel database file size in gigabytes, rounded
-// to 3 decimal places; the integer 0, as in Python, if the file cannot be stat'd.
-func channelDBSize(path string) any {
-	fi, err := os.Stat(expandHome(path))
+// lndDBSize returns the size of LND's database in gigabytes, rounded to 3
+// decimal places: its Postgres database when LND_DB_NAME is set, else the
+// channel.db file. The integer 0, as in Python, when it cannot be read.
+func (s *Server) lndDBSize(ctx context.Context) any {
+	if s.cfg.LND_DB_NAME != "" {
+		var size int64
+		if err := s.db.QueryRow(ctx, `SELECT pg_database_size($1)`, s.cfg.LND_DB_NAME).Scan(&size); err != nil {
+			return 0
+		}
+		return pyround.Round(float64(size)*0.000000001, 3)
+	}
+	fi, err := os.Stat(expandHome(s.cfg.LND_DATABASE_PATH))
 	if err != nil {
 		return 0
 	}
