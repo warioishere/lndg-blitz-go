@@ -11,6 +11,35 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const channelFeeRates = `-- name: ChannelFeeRates :many
+SELECT chan_id, local_fee_rate FROM gui_channels WHERE chan_id = ANY($1::text[])
+`
+
+type ChannelFeeRatesRow struct {
+	ChanID       string `json:"chan_id"`
+	LocalFeeRate int32  `json:"local_fee_rate"`
+}
+
+func (q *Queries) ChannelFeeRates(ctx context.Context, chanIds []string) ([]ChannelFeeRatesRow, error) {
+	rows, err := q.db.Query(ctx, channelFeeRates, chanIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ChannelFeeRatesRow{}
+	for rows.Next() {
+		var i ChannelFeeRatesRow
+		if err := rows.Scan(&i.ChanID, &i.LocalFeeRate); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deletePaymentHops = `-- name: DeletePaymentHops :exec
 DELETE FROM gui_paymenthops WHERE payment_hash_id = $1
 `
@@ -22,7 +51,7 @@ func (q *Queries) DeletePaymentHops(ctx context.Context, paymentHashID string) e
 
 const getPayment = `-- name: GetPayment :one
 
-SELECT creation_date, payment_hash, value, fee, status, index, chan_out, chan_out_alias, keysend_preimage, message, cleaned, rebal_chan FROM gui_payments WHERE payment_hash = $1
+SELECT creation_date, payment_hash, value, fee, status, index, chan_out, chan_out_alias, keysend_preimage, message, cleaned, rebal_chan, source_fee_rate FROM gui_payments WHERE payment_hash = $1
 `
 
 // Payment-Queries fuer update_payments / update_payment.
@@ -42,6 +71,7 @@ func (q *Queries) GetPayment(ctx context.Context, paymentHash string) (GuiPaymen
 		&i.Message,
 		&i.Cleaned,
 		&i.RebalChan,
+		&i.SourceFeeRate,
 	)
 	return i, err
 }
@@ -189,7 +219,7 @@ func (q *Queries) UpdatePaymentBasic(ctx context.Context, arg UpdatePaymentBasic
 
 const updatePaymentHopResults = `-- name: UpdatePaymentHopResults :exec
 UPDATE gui_payments SET chan_out = $2, chan_out_alias = $3, keysend_preimage = $4,
-  message = $5, rebal_chan = $6 WHERE payment_hash = $1
+  message = $5, rebal_chan = $6, source_fee_rate = $7 WHERE payment_hash = $1
 `
 
 type UpdatePaymentHopResultsParams struct {
@@ -199,9 +229,10 @@ type UpdatePaymentHopResultsParams struct {
 	KeysendPreimage pgtype.Text `json:"keysend_preimage"`
 	Message         pgtype.Text `json:"message"`
 	RebalChan       pgtype.Text `json:"rebal_chan"`
+	SourceFeeRate   pgtype.Int4 `json:"source_fee_rate"`
 }
 
-// chan_out / chan_out_alias / keysend_preimage / message / rebal_chan nach Hop-Verarbeitung.
+// chan_out / chan_out_alias / keysend_preimage / message / rebal_chan / source_fee_rate nach Hop-Verarbeitung.
 func (q *Queries) UpdatePaymentHopResults(ctx context.Context, arg UpdatePaymentHopResultsParams) error {
 	_, err := q.db.Exec(ctx, updatePaymentHopResults,
 		arg.PaymentHash,
@@ -210,6 +241,7 @@ func (q *Queries) UpdatePaymentHopResults(ctx context.Context, arg UpdatePayment
 		arg.KeysendPreimage,
 		arg.Message,
 		arg.RebalChan,
+		arg.SourceFeeRate,
 	)
 	return err
 }

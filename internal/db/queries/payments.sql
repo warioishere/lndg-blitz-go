@@ -21,9 +21,12 @@ UPDATE gui_payments SET creation_date = $2, value = $3, fee = $4, status = $5, i
 WHERE payment_hash = $1;
 
 -- name: UpdatePaymentHopResults :exec
--- chan_out / chan_out_alias / keysend_preimage / message / rebal_chan nach Hop-Verarbeitung.
+-- chan_out / chan_out_alias / keysend_preimage / message / rebal_chan / source_fee_rate nach Hop-Verarbeitung.
 UPDATE gui_payments SET chan_out = $2, chan_out_alias = $3, keysend_preimage = $4,
-  message = $5, rebal_chan = $6 WHERE payment_hash = $1;
+  message = $5, rebal_chan = $6, source_fee_rate = $7 WHERE payment_hash = $1;
+
+-- name: ChannelFeeRates :many
+SELECT chan_id, local_fee_rate FROM gui_channels WHERE chan_id = ANY(@chan_ids::text[]);
 
 -- name: DeletePaymentHops :exec
 DELETE FROM gui_paymenthops WHERE payment_hash_id = $1;

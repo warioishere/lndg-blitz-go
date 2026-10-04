@@ -6,10 +6,14 @@
 SELECT * FROM gui_channels WHERE is_open = true ORDER BY chan_id;
 
 -- name: RebalPaymentsForChannel :many
--- Payments.objects.filter(status=2, rebal_chan=chan_id).order_by('-creation_date')[:lookback]
-SELECT fee, value FROM gui_payments
-WHERE status = 2 AND rebal_chan = $1
-ORDER BY creation_date DESC
+-- af.rebalance_cost_ppm: last `lookback` successful rebalances into the channel. The
+-- source fee falls back to the source channel's current fee for payments imported
+-- before source_fee_rate existed; MPP ('MPP' matches no channel) or unknown -> 0.
+SELECT p.fee, p.value, COALESCE(p.source_fee_rate, c.local_fee_rate, 0)::integer AS source_fee_rate
+FROM gui_payments p
+LEFT JOIN gui_channels c ON c.chan_id = p.chan_out
+WHERE p.status = 2 AND p.rebal_chan = $1
+ORDER BY p.creation_date DESC
 LIMIT $2;
 
 -- name: ForwardsInSumFee :many

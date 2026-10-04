@@ -18,6 +18,7 @@ type Querier interface {
 	AggregateFailedHTLCs(ctx context.Context, dollar_1 []int64) ([]AggregateFailedHTLCsRow, error)
 	// Spiegelt LocalSettings.objects.filter(key__in=[...]).exists().
 	AnyLocalSettingExists(ctx context.Context, dollar_1 []string) (bool, error)
+	ChannelFeeRates(ctx context.Context, chanIds []string) ([]ChannelFeeRatesRow, error)
 	// Closure-Queries fuer update_closures.
 	CountClosures(ctx context.Context) (int64, error)
 	// failed_htlc_boost_job: failed HTLCs for a channel's outbound in the interval.
@@ -195,7 +196,9 @@ type Querier interface {
 	MaxPaymentIndex(ctx context.Context) (int32, error)
 	// last_block = 0 if no rows else max(block_height)+1 (jobs.py:591).
 	NextOnchainBlockHeight(ctx context.Context) (int32, error)
-	// Payments.objects.filter(status=2, rebal_chan=chan_id).order_by('-creation_date')[:lookback]
+	// af.rebalance_cost_ppm: last `lookback` successful rebalances into the channel. The
+	// source fee falls back to the source channel's current fee for payments imported
+	// before source_fee_rate existed; MPP ('MPP' matches no channel) or unknown -> 0.
 	RebalPaymentsForChannel(ctx context.Context, arg RebalPaymentsForChannelParams) ([]RebalPaymentsForChannelRow, error)
 	// Queries fuer agg_failed_htlcs / agg_htlcs.
 	SelectBalanceFailedIDs(ctx context.Context, timestamp pgtype.Timestamptz) ([]int64, error)
@@ -228,7 +231,7 @@ type Querier interface {
 	UpdateHistFailedHTLC(ctx context.Context, arg UpdateHistFailedHTLCParams) error
 	UpdateInvoiceSettled(ctx context.Context, arg UpdateInvoiceSettledParams) error
 	UpdatePaymentBasic(ctx context.Context, arg UpdatePaymentBasicParams) error
-	// chan_out / chan_out_alias / keysend_preimage / message / rebal_chan nach Hop-Verarbeitung.
+	// chan_out / chan_out_alias / keysend_preimage / message / rebal_chan / source_fee_rate nach Hop-Verarbeitung.
 	UpdatePaymentHopResults(ctx context.Context, arg UpdatePaymentHopResultsParams) error
 	UpdatePeerAlias(ctx context.Context, arg UpdatePeerAliasParams) error
 	UpdatePeerData(ctx context.Context, arg UpdatePeerDataParams) error

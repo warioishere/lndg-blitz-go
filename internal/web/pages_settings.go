@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/warioishere/lndg-blitz-go/internal/af"
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 )
 
@@ -142,26 +145,19 @@ func (s *Server) handleFeeLimitProtection(w http.ResponseWriter, r *http.Request
 	}
 	list := make([]map[string]any, 0, len(channels))
 	for _, ch := range channels {
-		payments, err := s.queryMaps(ctx,
-			`SELECT fee, value FROM gui_payments WHERE status = 2 AND rebal_chan = $1 `+
-				`ORDER BY creation_date DESC LIMIT $2`, ch["chan_id"], lookback)
+		chanID, _ := ch["chan_id"].(string)
+		pays, err := s.queries.RebalPaymentsForChannel(ctx, db.RebalPaymentsForChannelParams{
+			RebalChan: pgtype.Text{String: chanID, Valid: true},
+			Limit:     int32(lookback),
+		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		var sum float64
-		var n int
-		for _, p := range payments {
-			fee, _ := toFloat64(p["fee"])
-			value, _ := toFloat64(p["value"])
-			if value != 0 {
-				sum += fee * 1000000 / value
-				n++
-			}
-		}
+		// same number AF uses as cost floor
 		var avgPpm any
-		if n > 0 {
-			avgPpm = int64(sum / float64(n)) // truncate towards zero
+		if v := af.AvgRebalanceCostPPM(pays); v != nil {
+			avgPpm = int64(*v)
 		}
 		list = append(list, map[string]any{
 			"chan_id":     ch["chan_id"],

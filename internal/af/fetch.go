@@ -63,8 +63,7 @@ func fetchAggregates(ctx context.Context, q fetchQuerier, channels []db.GuiChann
 		lastForwardIn:     map[string]time.Time{},
 	}
 
-	// Average rebalance cost per channel: last `lookback` successful rebalance
-	// payments, cost in ppm = fee*1e6/value for value != 0, then averaged.
+	// Average rebalance cost per channel over the last `lookback` successful rebalances.
 	for _, ch := range channels {
 		pays, err := q.RebalPaymentsForChannel(ctx, db.RebalPaymentsForChannelParams{
 			RebalChan: pgtype.Text{String: ch.ChanID, Valid: true},
@@ -73,20 +72,7 @@ func fetchAggregates(ctx context.Context, q fetchQuerier, channels []db.GuiChann
 		if err != nil {
 			return nil, err
 		}
-		var sum float64
-		var n int
-		for _, p := range pays {
-			if p.Value != 0 {
-				sum += p.Fee * 1000000 / p.Value
-				n++
-			}
-		}
-		if n > 0 {
-			v := int(sum / float64(n)) // truncates toward zero
-			agg.avgRebalanceCost[ch.ChanID] = &v
-		} else {
-			agg.avgRebalanceCost[ch.ChanID] = nil
-		}
+		agg.avgRebalanceCost[ch.ChanID] = AvgRebalanceCostPPM(pays)
 	}
 
 	// Time window boundaries.
@@ -189,4 +175,24 @@ func failedCounts(rows []db.FailedHTLCsForAFRow) map[string]int {
 		}
 	}
 	return m
+}
+
+// AvgRebalanceCostPPM averages the cost of rebalance payments in ppm: the routing
+// fee paid (fee*1e6/value) plus the outbound fee of the source channel the liquidity
+// was taken from (opportunity cost). Payments with value 0 are skipped. Returns nil
+// when nothing is left to average.
+func AvgRebalanceCostPPM(pays []db.RebalPaymentsForChannelRow) *int {
+	var sum float64
+	var n int
+	for _, p := range pays {
+		if p.Value != 0 {
+			sum += p.Fee*1000000/p.Value + float64(p.SourceFeeRate)
+			n++
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	v := int(sum / float64(n)) // truncates toward zero
+	return &v
 }

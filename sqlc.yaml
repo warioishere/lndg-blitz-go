@@ -3,7 +3,9 @@ sql:
   - engine: "postgresql"
     # Schema: nur die up-Migration (die down-Datei wuerde alle Tabellen wieder
     # droppen und sqlc ein leeres Schema liefern).
-    schema: "internal/db/migrations/000001_initial_schema.up.sql"
+    schema:
+      - "internal/db/migrations/000001_initial_schema.up.sql"
+      - "internal/db/migrations/000002_payments_source_fee_rate.up.sql"
     queries: "internal/db/queries"
     gen:
       go:

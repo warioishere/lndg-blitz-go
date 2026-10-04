@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgtype"
+	"math"
 	"strconv"
 	"time"
 
@@ -30,6 +31,7 @@ type paymentsQuerier interface {
 	SetPaymentStatus(ctx context.Context, arg db.SetPaymentStatusParams) error
 	UpdatePaymentBasic(ctx context.Context, arg db.UpdatePaymentBasicParams) error
 	UpdatePaymentHopResults(ctx context.Context, arg db.UpdatePaymentHopResultsParams) error
+	ChannelFeeRates(ctx context.Context, chanIds []string) ([]db.ChannelFeeRatesRow, error)
 	DeletePaymentHops(ctx context.Context, paymentHashID string) error
 	InsertPaymentHop(ctx context.Context, arg db.InsertPaymentHopParams) error
 }
@@ -178,6 +180,14 @@ func updatePayment(ctx context.Context, q paymentsQuerier, client paymentsClient
 			}
 		}
 	}
+	var sourceFeeRate pgtype.Int4
+	if status == 2 && rebalChan != nil {
+		v, err := rebalanceSourceFeeRate(ctx, q, payment)
+		if err != nil {
+			return err
+		}
+		sourceFeeRate = v
+	}
 	return q.UpdatePaymentHopResults(ctx, db.UpdatePaymentHopResultsParams{
 		PaymentHash:     payment.PaymentHash,
 		ChanOut:         textPtr(chanOut),
@@ -185,7 +195,51 @@ func updatePayment(ctx context.Context, q paymentsQuerier, client paymentsClient
 		KeysendPreimage: textPtr(keysendPreimage),
 		Message:         textPtr(message),
 		RebalChan:       textPtr(rebalChan),
+		SourceFeeRate:   sourceFeeRate,
 	})
+}
+
+// rebalanceSourceFeeRate is the opportunity cost of a rebalance: the outbound ppm of
+// the channel(s) the liquidity left through, weighted by the amount each successful
+// part sent. Invalid if no source channel is known anymore, the cost lookup then
+// falls back to its current fee.
+func rebalanceSourceFeeRate(ctx context.Context, q paymentsQuerier, payment *lnrpc.Payment) (pgtype.Int4, error) {
+	type part struct {
+		chanID string
+		amt    int64
+	}
+	var parts []part
+	var ids []string
+	for _, attempt := range payment.Htlcs {
+		hops := attempt.GetRoute().GetHops()
+		if int32(attempt.Status) != 1 || len(hops) == 0 {
+			continue
+		}
+		id := formatChanID(hops[0].ChanId)
+		parts = append(parts, part{chanID: id, amt: attempt.GetRoute().GetTotalAmtMsat()})
+		ids = append(ids, id)
+	}
+	rows, err := q.ChannelFeeRates(ctx, ids)
+	if err != nil {
+		return pgtype.Int4{}, err
+	}
+	rates := make(map[string]int32, len(rows))
+	for _, r := range rows {
+		rates[r.ChanID] = r.LocalFeeRate
+	}
+	var weighted float64
+	var totalAmt int64
+	for _, p := range parts {
+		if rate, ok := rates[p.chanID]; ok {
+			weighted += float64(rate) * float64(p.amt)
+			totalAmt += p.amt
+		}
+	}
+	if totalAmt == 0 {
+		return pgtype.Int4{}, nil
+	}
+	// RoundToEven matches Python's round()
+	return pgtype.Int4{Int32: int32(math.RoundToEven(weighted / float64(totalAmt))), Valid: true}, nil
 }
 
 // formatChanID formats a numeric channel ID as a decimal string.

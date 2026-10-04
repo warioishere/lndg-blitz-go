@@ -289,6 +289,7 @@ type GuiPayment struct {
 	Message         pgtype.Text        `json:"message"`
 	Cleaned         bool               `json:"cleaned"`
 	RebalChan       pgtype.Text        `json:"rebal_chan"`
+	SourceFeeRate   pgtype.Int4        `json:"source_fee_rate"`
 }
 
 type GuiPaymenthop struct {

@@ -346,9 +346,11 @@ func (q *Queries) ListOpenChannels(ctx context.Context) ([]GuiChannel, error) {
 }
 
 const rebalPaymentsForChannel = `-- name: RebalPaymentsForChannel :many
-SELECT fee, value FROM gui_payments
-WHERE status = 2 AND rebal_chan = $1
-ORDER BY creation_date DESC
+SELECT p.fee, p.value, COALESCE(p.source_fee_rate, c.local_fee_rate, 0)::integer AS source_fee_rate
+FROM gui_payments p
+LEFT JOIN gui_channels c ON c.chan_id = p.chan_out
+WHERE p.status = 2 AND p.rebal_chan = $1
+ORDER BY p.creation_date DESC
 LIMIT $2
 `
 
@@ -358,11 +360,14 @@ type RebalPaymentsForChannelParams struct {
 }
 
 type RebalPaymentsForChannelRow struct {
-	Fee   float64 `json:"fee"`
-	Value float64 `json:"value"`
+	Fee           float64 `json:"fee"`
+	Value         float64 `json:"value"`
+	SourceFeeRate int32   `json:"source_fee_rate"`
 }
 
-// Payments.objects.filter(status=2, rebal_chan=chan_id).order_by('-creation_date')[:lookback]
+// af.rebalance_cost_ppm: last `lookback` successful rebalances into the channel. The
+// source fee falls back to the source channel's current fee for payments imported
+// before source_fee_rate existed; MPP ('MPP' matches no channel) or unknown -> 0.
 func (q *Queries) RebalPaymentsForChannel(ctx context.Context, arg RebalPaymentsForChannelParams) ([]RebalPaymentsForChannelRow, error) {
 	rows, err := q.db.Query(ctx, rebalPaymentsForChannel, arg.RebalChan, arg.Limit)
 	if err != nil {
@@ -372,7 +377,7 @@ func (q *Queries) RebalPaymentsForChannel(ctx context.Context, arg RebalPayments
 	items := []RebalPaymentsForChannelRow{}
 	for rows.Next() {
 		var i RebalPaymentsForChannelRow
-		if err := rows.Scan(&i.Fee, &i.Value); err != nil {
+		if err := rows.Scan(&i.Fee, &i.Value, &i.SourceFeeRate); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

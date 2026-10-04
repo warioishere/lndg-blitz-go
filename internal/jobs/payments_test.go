@@ -18,6 +18,7 @@ type fakePaymentsQ struct {
 	hopResults *db.UpdatePaymentHopResultsParams
 	basic      []db.UpdatePaymentBasicParams
 	deleted    []string
+	feeRates   map[string]int32 // chan_id -> local_fee_rate for ChannelFeeRates
 }
 
 func (f *fakePaymentsQ) GetLocalSetting(ctx context.Context, key string) (db.GuiLocalsetting, error) {
@@ -54,6 +55,15 @@ func (f *fakePaymentsQ) DeletePaymentHops(ctx context.Context, paymentHashID str
 func (f *fakePaymentsQ) InsertPaymentHop(ctx context.Context, arg db.InsertPaymentHopParams) error {
 	f.hops = append(f.hops, arg)
 	return nil
+}
+func (f *fakePaymentsQ) ChannelFeeRates(ctx context.Context, chanIds []string) ([]db.ChannelFeeRatesRow, error) {
+	var out []db.ChannelFeeRatesRow
+	for _, id := range chanIds {
+		if rate, ok := f.feeRates[id]; ok {
+			out = append(out, db.ChannelFeeRatesRow{ChanID: id, LocalFeeRate: rate})
+		}
+	}
+	return out, nil
 }
 
 type fakePaymentsClient struct{ alias string }
@@ -114,4 +124,49 @@ func TestUpdatePayment_MPP(t *testing.T) {
 	require.NotNil(t, q.hopResults)
 	assert.Equal(t, "MPP", q.hopResults.ChanOut.String, "two succeeded attempts -> MPP")
 	assert.Equal(t, "MPP", q.hopResults.ChanOutAlias.String)
+}
+
+// rebalance attempt: source channel src, last hop on our own node into chan 999
+func rebalAttempt(src uint64, totalAmtMsat int64) *lnrpc.HTLCAttempt {
+	return &lnrpc.HTLCAttempt{
+		Status: lnrpc.HTLCAttempt_SUCCEEDED,
+		Route: &lnrpc.Route{TotalAmtMsat: totalAmtMsat, Hops: []*lnrpc.Hop{
+			{ChanId: src, PubKey: "mid"},
+			{ChanId: 999, PubKey: "self"},
+		}},
+	}
+}
+
+func TestUpdatePayment_SourceFeeRate(t *testing.T) {
+	client := &fakePaymentsClient{alias: "N"}
+	run := func(q *fakePaymentsQ, status lnrpc.Payment_PaymentStatus, attempts ...*lnrpc.HTLCAttempt) *db.UpdatePaymentHopResultsParams {
+		payment := &lnrpc.Payment{PaymentHash: "ph", Status: status, Htlcs: attempts}
+		require.NoError(t, updatePayment(context.Background(), q, client, payment, "self"))
+		require.NotNil(t, q.hopResults)
+		return q.hopResults
+	}
+
+	res := run(&fakePaymentsQ{feeRates: map[string]int32{"111": 400}}, lnrpc.Payment_SUCCEEDED, rebalAttempt(111, 1000))
+	assert.Equal(t, int32(400), res.SourceFeeRate.Int32, "single source -> its outbound fee")
+	assert.True(t, res.SourceFeeRate.Valid)
+
+	res = run(&fakePaymentsQ{feeRates: map[string]int32{"111": 400, "333": 100}}, lnrpc.Payment_SUCCEEDED,
+		rebalAttempt(111, 3000), rebalAttempt(333, 1000))
+	assert.Equal(t, int32(325), res.SourceFeeRate.Int32, "MPP -> amount weighted (400*3 + 100*1) / 4")
+
+	res = run(&fakePaymentsQ{feeRates: map[string]int32{"111": 400}}, lnrpc.Payment_SUCCEEDED,
+		rebalAttempt(111, 1000), rebalAttempt(555, 1000))
+	assert.Equal(t, int32(400), res.SourceFeeRate.Int32, "unknown source part is left out of the average")
+
+	res = run(&fakePaymentsQ{}, lnrpc.Payment_SUCCEEDED, rebalAttempt(111, 1000))
+	assert.False(t, res.SourceFeeRate.Valid, "no known source -> NULL, read side falls back")
+
+	res = run(&fakePaymentsQ{feeRates: map[string]int32{"111": 400}}, lnrpc.Payment_IN_FLIGHT, rebalAttempt(111, 1000))
+	assert.False(t, res.SourceFeeRate.Valid, "only captured once the payment succeeded")
+
+	notRebal := &lnrpc.HTLCAttempt{Status: lnrpc.HTLCAttempt_SUCCEEDED, Route: &lnrpc.Route{TotalAmtMsat: 1000, Hops: []*lnrpc.Hop{
+		{ChanId: 111, PubKey: "mid"}, {ChanId: 777, PubKey: "someone"},
+	}}}
+	res = run(&fakePaymentsQ{feeRates: map[string]int32{"111": 400}}, lnrpc.Payment_SUCCEEDED, notRebal)
+	assert.False(t, res.SourceFeeRate.Valid, "not a rebalance -> no source fee")
 }

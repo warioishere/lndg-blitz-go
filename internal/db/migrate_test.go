@@ -74,6 +74,14 @@ func TestMigrationsApply(t *testing.T) {
 		assert.True(t, exists, "table %s should exist", tbl)
 	}
 
+	// 000002: rebalance source fee (opportunity cost) on payments.
+	var hasSourceFee bool
+	err = conn.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='gui_payments' AND column_name='source_fee_rate')`,
+	).Scan(&hasSourceFee)
+	require.NoError(t, err)
+	assert.True(t, hasSourceFee, "gui_payments.source_fee_rate should exist")
+
 	// Idempotency: a second call to Migrate returns ErrNoChange and no error.
 	require.NoError(t, Migrate(migrateURL))
 }
