@@ -30,7 +30,7 @@ type fakeProbeQ struct {
 
 	upserts       []db.UpsertLocalSettingParams
 	insertedRR    []db.InsertRebalanceRouteParams
-	updatedRR     []db.UpdateRebalanceRouteHexParams
+	updatedRR     []db.UpdateRebalanceRouteProbeParams
 	probeLogs     []db.InsertProbeLogParams
 	prunedOldLogs int
 }
@@ -78,7 +78,7 @@ func (f *fakeProbeQ) InsertRebalanceRoute(ctx context.Context, arg db.InsertReba
 	f.insertedRR = append(f.insertedRR, arg)
 	return nil
 }
-func (f *fakeProbeQ) UpdateRebalanceRouteHex(ctx context.Context, arg db.UpdateRebalanceRouteHexParams) error {
+func (f *fakeProbeQ) UpdateRebalanceRouteProbe(ctx context.Context, arg db.UpdateRebalanceRouteProbeParams) error {
 	f.updatedRR = append(f.updatedRR, arg)
 	return nil
 }
@@ -307,6 +307,8 @@ func TestProbeRoutesJob_FullVerifiedNewRoute(t *testing.T) {
 	assert.Equal(t, hopPubkey(0xaa)+"-"+hopPubkey(0xbb), rr.Route)
 	assert.Equal(t, int32(rebalancer.FinalCltvDelta), rr.FinalCltvDelta)
 	assert.True(t, rr.RouteHex.Valid)
+	assert.True(t, rr.LastProbed.Valid)
+	assert.Equal(t, int64(100000), rr.ProbedAmountSat.Int64)
 
 	// ProbeLog + prune + QR-LastProbe upsert.
 	require.Len(t, q.probeLogs, 1)
@@ -326,6 +328,20 @@ func TestProbeRoutesJob_FullVerifiedNewRoute(t *testing.T) {
 	assert.EqualValues(t, 1, details[0]["new"])
 	assert.EqualValues(t, 1, details[0]["verified"])
 	assert.EqualValues(t, 1, details[0]["out_chans_tried"])
+}
+
+func TestProbeTargetsZeroFeeRouteStoresZero(t *testing.T) {
+	q := newFakeProbeQ()
+	channels := []db.GuiChannel{refillTarget("555", peerPub), sourceChan("111", 50)}
+	ln := &fakeProbeLN{selfPubkey: "03self", routes: []*lnrpc.Route{{Hops: []*lnrpc.Hop{
+		{PubKey: hopPubkey(0xaa), ChanId: 111}, {PubKey: hopPubkey(0xbb), ChanId: 222},
+	}}}}
+	r := &fakeProbeRouter{liquiditySat: 100000} // no fees
+	_, _, _, _, err := probeTargets(context.Background(), ln, r, q, hopPubkey(0x03), channels, 7000, 10)
+	require.NoError(t, err)
+	require.Len(t, q.insertedRR, 1)
+	assert.True(t, q.insertedRR[0].LastFeePpm.Valid) // 0, not unknown
+	assert.Equal(t, 0.0, q.insertedRR[0].LastFeePpm.Float64)
 }
 
 func TestProbeRoutesJob_ExistingRouteUpdated(t *testing.T) {
@@ -349,6 +365,8 @@ func TestProbeRoutesJob_ExistingRouteUpdated(t *testing.T) {
 	require.Len(t, q.updatedRR, 1)
 	assert.Equal(t, int64(7), q.updatedRR[0].ID)
 	assert.True(t, q.updatedRR[0].RouteHex.Valid)
+	assert.True(t, q.updatedRR[0].LastProbed.Valid)
+	assert.True(t, q.updatedRR[0].ProbedAmountSat.Valid)
 	require.Len(t, q.probeLogs, 1)
 	assert.Equal(t, int32(1), q.probeLogs[0].RoutesExisting)
 }

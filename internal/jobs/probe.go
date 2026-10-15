@@ -41,7 +41,7 @@ type probeQuerier interface {
 	ListActiveOpenPublicChannels(ctx context.Context) ([]db.GuiChannel, error)
 	GetRebalanceRoute(ctx context.Context, arg db.GetRebalanceRouteParams) (db.GuiRebalanceroute, error)
 	InsertRebalanceRoute(ctx context.Context, arg db.InsertRebalanceRouteParams) error
-	UpdateRebalanceRouteHex(ctx context.Context, arg db.UpdateRebalanceRouteHexParams) error
+	UpdateRebalanceRouteProbe(ctx context.Context, arg db.UpdateRebalanceRouteProbeParams) error
 	InsertProbeLog(ctx context.Context, arg db.InsertProbeLogParams) error
 	DeleteOldProbeLogs(ctx context.Context) error
 	GetPeerAlias(ctx context.Context, pubkey string) (pgtype.Text, error)
@@ -303,20 +303,25 @@ func probeTargets(ctx context.Context, stub probeLightningClient, routerstub pro
 			path := strings.Join(pathParts, "-")
 			routeOutChan := formatChanID(hops[0].GetChanId())
 
+			// A verified route without a fee ppm from the probe charged no fees.
+			feePpm := pgtype.Float8{Float64: 0, Valid: true}
+			if verifiedFeePpm != nil {
+				feePpm.Float64 = *verifiedFeePpm
+			}
+			probedAt := pgtype.Timestamptz{Time: time.Now(), Valid: true}
+			probedAmount := pgtype.Int8{Int64: maxAmountSat, Valid: true}
 			existing, gerr := q.GetRebalanceRoute(ctx, db.GetRebalanceRouteParams{
 				TargetPubkey: chn.RemotePubkey, OutgoingChanID: routeOutChan, Route: path,
 			})
 			switch {
 			case isNoRows(gerr):
-				var feePpm pgtype.Float8
-				if verifiedFeePpm != nil {
-					feePpm = pgtype.Float8{Float64: *verifiedFeePpm, Valid: true}
-				}
 				if e := q.InsertRebalanceRoute(ctx, db.InsertRebalanceRouteParams{
 					TargetPubkey: chn.RemotePubkey, OutgoingChanID: routeOutChan, Route: path,
-					FinalCltvDelta: rebalancer.FinalCltvDelta,
-					RouteHex:       pgtype.Text{String: *verifiedHex, Valid: true},
-					LastFeePpm:     feePpm,
+					FinalCltvDelta:  rebalancer.FinalCltvDelta,
+					RouteHex:        pgtype.Text{String: *verifiedHex, Valid: true},
+					LastFeePpm:      feePpm,
+					LastProbed:      probedAt,
+					ProbedAmountSat: probedAmount,
 				}); e != nil {
 					return 0, 0, 0, nil, e
 				}
@@ -324,12 +329,9 @@ func probeTargets(ctx context.Context, stub probeLightningClient, routerstub pro
 			case gerr != nil:
 				return 0, 0, 0, nil, gerr
 			default:
-				newFeePpm := existing.LastFeePpm
-				if verifiedFeePpm != nil {
-					newFeePpm = pgtype.Float8{Float64: *verifiedFeePpm, Valid: true}
-				}
-				if e := q.UpdateRebalanceRouteHex(ctx, db.UpdateRebalanceRouteHexParams{
-					ID: existing.ID, RouteHex: pgtype.Text{String: *verifiedHex, Valid: true}, LastFeePpm: newFeePpm,
+				if e := q.UpdateRebalanceRouteProbe(ctx, db.UpdateRebalanceRouteProbeParams{
+					ID: existing.ID, RouteHex: pgtype.Text{String: *verifiedHex, Valid: true}, LastFeePpm: feePpm,
+					LastProbed: probedAt, ProbedAmountSat: probedAmount,
 				}); e != nil {
 					return 0, 0, 0, nil, e
 				}

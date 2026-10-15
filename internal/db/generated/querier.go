@@ -41,9 +41,13 @@ type Querier interface {
 	DeleteResolutionsByChan(ctx context.Context, chanID string) error
 	// purge_stale_routes: Routen mit nicht (mehr) offenem outgoing-Channel loeschen.
 	DeleteRoutesNotOpenOutgoing(ctx context.Context, dollar_1 []string) (int64, error)
+	// Routes to peers without an open auto-rebalance channel.
+	DeleteRoutesOfNonTargets(ctx context.Context) (int64, error)
 	DeleteStaleNodeReputations(ctx context.Context, lastSuccess pgtype.Timestamptz) error
 	// getestete Routen ohne kuerzlichen Erfolg loeschen; ungetestete (probed) behalten.
 	DeleteStaleTestedRoutes(ctx context.Context, lastSuccess pgtype.Timestamptz) error
+	// Never-paid routes the route prober has not verified since cutoff.
+	DeleteUnconfirmedRoutes(ctx context.Context, lastProbed pgtype.Timestamptz) error
 	// Peers.filter(connected=True).exclude(pubkey__in=peer_list).update(connected=False)
 	DisconnectStalePeers(ctx context.Context, dollar_1 []string) error
 	ExistsResolutionBySweep(ctx context.Context, sweepTxid string) (bool, error)
@@ -117,13 +121,14 @@ type Querier interface {
 	InsertPeerEvent(ctx context.Context, arg InsertPeerEventParams) error
 	InsertPendingHTLC(ctx context.Context, arg InsertPendingHTLCParams) error
 	InsertProbeLog(ctx context.Context, arg InsertProbeLogParams) error
-	// get_or_create defaults: final_cltv_delta/route_hex/last_fee_ppm gesetzt;
-	// success_count/failure_count = 0, last_success/last_failure = NULL.
+	// A new route with success_count/failure_count = 0; last_probed and
+	// probed_amount_sat are set when the route prober verified it.
 	InsertRebalanceRoute(ctx context.Context, arg InsertRebalanceRouteParams) error
 	// RapidFire: Rebalancer(value, fee_limit, outgoing_chan_ids, last_hop_pubkey,
 	// target_alias, duration=1, status=1).save(); requested=now (Django-Default).
 	InsertRebalancerRecord(ctx context.Context, arg InsertRebalancerRecordParams) (int64, error)
 	InsertResolution(ctx context.Context, arg InsertResolutionParams) error
+	InsertRouteAttempt(ctx context.Context, arg InsertRouteAttemptParams) error
 	InsertShadowFeeLog(ctx context.Context, arg InsertShadowFeeLogParams) error
 	// Forwards-Queries fuer update_forwards / emergency_forward_check.
 	LatestForward(ctx context.Context) (LatestForwardRow, error)
@@ -173,16 +178,9 @@ type Querier interface {
 	ListPendingRebalances(ctx context.Context) ([]GuiRebalancer, error)
 	// _remaining_drain: alle offenen AR-Channels zu remote_pubkey.
 	ListRemainingDrainChannels(ctx context.Context, remotePubkey string) ([]ListRemainingDrainChannelsRow, error)
-	// tested: NOT(success_count=0 AND failure_count=0), order_by('-weighted_ratio').
-	// weighted_ratio inline = ((sc+1)/(sc+fc+2)) * ((sc+fc)/(sc+fc+10)).
-	ListTestedRoutes(ctx context.Context, arg ListTestedRoutesParams) ([]GuiRebalanceroute, error)
-	// fee_known_untested: success_count=0 AND failure_count=0 AND last_fee_ppm IS NOT NULL.
-	ListUntestedFeeKnownRoutes(ctx context.Context, arg ListUntestedFeeKnownRoutesParams) ([]GuiRebalanceroute, error)
-	// get_saved_routes Kandidaten-Selects (rebalancer.py:616-627). Gemeinsamer Filter:
-	// target_pubkey + outgoing_chan_id IN chan_ids + (last_failure < cutoff OR NULL).
-	// truly_untested: success_count=0 AND failure_count=0 AND last_fee_ppm IS NULL,
-	// order_by('?') == ORDER BY random() (nicht-deterministisch, siehe PORTING_NOTES).
-	ListUntestedNoFeeRoutes(ctx context.Context, arg ListUntestedNoFeeRoutesParams) ([]GuiRebalanceroute, error)
+	// Saved routes of a target from the given sources; a route that failed after
+	// cutoff is left out.
+	ListRoutesForTarget(ctx context.Context, arg ListRoutesForTargetParams) ([]GuiRebalanceroute, error)
 	// main(): beim Start alle status=1 (in-flight) auf 400 setzen + stop=now.
 	MarkInFlightRebalancesError(ctx context.Context, stop pgtype.Timestamptz) error
 	// mark_route_failure: failure_count += 1; last_failure = now (DB-seitiges Inkrement).
@@ -242,8 +240,8 @@ type Querier interface {
 	UpdateRebalanceRoute(ctx context.Context, arg UpdateRebalanceRouteParams) error
 	// update_route_fee: save(update_fields=['last_fee_ppm']).
 	UpdateRebalanceRouteFee(ctx context.Context, arg UpdateRebalanceRouteFeeParams) error
-	// obj.save(update_fields=['route_hex', 'last_fee_ppm'])
-	UpdateRebalanceRouteHex(ctx context.Context, arg UpdateRebalanceRouteHexParams) error
+	// The route prober verified a known route again.
+	UpdateRebalanceRouteProbe(ctx context.Context, arg UpdateRebalanceRouteProbeParams) error
 	// save_record(rebalance) auf bestehendem Datensatz (record.save(), gekeyt auf id).
 	UpdateRebalancerRecord(ctx context.Context, arg UpdateRebalancerRecordParams) error
 	UpsertLocalSetting(ctx context.Context, arg UpsertLocalSettingParams) error

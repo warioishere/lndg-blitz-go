@@ -21,6 +21,18 @@ UPDATE gui_rebalanceroute SET failure_count = failure_count + 1, last_failure = 
 -- purge_stale_routes: Routen mit nicht (mehr) offenem outgoing-Channel loeschen.
 DELETE FROM gui_rebalanceroute WHERE outgoing_chan_id <> ALL($1::varchar[]);
 
+-- name: DeleteUnconfirmedRoutes :exec
+-- Never-paid routes the route prober has not verified since cutoff.
+DELETE FROM gui_rebalanceroute
+WHERE success_count = 0 AND failure_count = 0 AND (last_probed IS NULL OR last_probed < $1);
+
+-- name: DeleteRoutesOfNonTargets :execrows
+-- Routes to peers without an open auto-rebalance channel.
+DELETE FROM gui_rebalanceroute r
+WHERE NOT EXISTS (
+    SELECT 1 FROM gui_channels c WHERE c.remote_pubkey = r.target_pubkey AND c.is_open AND c.auto_rebalance
+);
+
 -- name: DeleteStaleTestedRoutes :exec
 -- getestete Routen ohne kuerzlichen Erfolg loeschen; ungetestete (probed) behalten.
 DELETE FROM gui_rebalanceroute
@@ -155,42 +167,17 @@ INSERT INTO gui_rebalancer
 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL, $8, NULL, false, NULL)
 RETURNING id;
 
--- get_saved_routes Kandidaten-Selects (rebalancer.py:616-627). Gemeinsamer Filter:
--- target_pubkey + outgoing_chan_id IN chan_ids + (last_failure < cutoff OR NULL).
-
--- name: ListUntestedNoFeeRoutes :many
--- truly_untested: success_count=0 AND failure_count=0 AND last_fee_ppm IS NULL,
--- order_by('?') == ORDER BY random() (nicht-deterministisch, siehe PORTING_NOTES).
-SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count,
-       failure_count, last_success, last_failure, route_hex, last_fee_ppm
-FROM gui_rebalanceroute
+-- name: ListRoutesForTarget :many
+-- Saved routes of a target from the given sources; a route that failed after
+-- cutoff is left out.
+SELECT * FROM gui_rebalanceroute
 WHERE target_pubkey = sqlc.arg(target_pubkey)
   AND outgoing_chan_id = ANY(sqlc.arg(chan_ids)::varchar[])
   AND (last_failure < sqlc.arg(cutoff) OR last_failure IS NULL)
-  AND success_count = 0 AND failure_count = 0 AND last_fee_ppm IS NULL
-ORDER BY random() LIMIT sqlc.arg(fetch_limit);
+ORDER BY id;
 
--- name: ListUntestedFeeKnownRoutes :many
--- fee_known_untested: success_count=0 AND failure_count=0 AND last_fee_ppm IS NOT NULL.
-SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count,
-       failure_count, last_success, last_failure, route_hex, last_fee_ppm
-FROM gui_rebalanceroute
-WHERE target_pubkey = sqlc.arg(target_pubkey)
-  AND outgoing_chan_id = ANY(sqlc.arg(chan_ids)::varchar[])
-  AND (last_failure < sqlc.arg(cutoff) OR last_failure IS NULL)
-  AND success_count = 0 AND failure_count = 0 AND last_fee_ppm IS NOT NULL
-ORDER BY last_fee_ppm LIMIT sqlc.arg(fetch_limit);
-
--- name: ListTestedRoutes :many
--- tested: NOT(success_count=0 AND failure_count=0), order_by('-weighted_ratio').
--- weighted_ratio inline = ((sc+1)/(sc+fc+2)) * ((sc+fc)/(sc+fc+10)).
-SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count,
-       failure_count, last_success, last_failure, route_hex, last_fee_ppm
-FROM gui_rebalanceroute
-WHERE target_pubkey = sqlc.arg(target_pubkey)
-  AND outgoing_chan_id = ANY(sqlc.arg(chan_ids)::varchar[])
-  AND (last_failure < sqlc.arg(cutoff) OR last_failure IS NULL)
-  AND NOT (success_count = 0 AND failure_count = 0)
-ORDER BY ((success_count + 1.0) / (success_count + failure_count + 2.0))
-       * ((success_count + failure_count) / (success_count + failure_count + 10.0)) DESC
-LIMIT sqlc.arg(fetch_limit);
+-- name: InsertRouteAttempt :exec
+INSERT INTO route_attempt_log
+    (timestamp, rebalance_id, route_id, target_pubkey, outgoing_chan_id, list, position,
+     evidence_age_s, fee_ppm, value_sat, outcome, failure_code, failure_hop)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);

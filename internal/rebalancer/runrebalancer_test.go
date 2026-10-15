@@ -36,6 +36,9 @@ type fakeRebalQ struct {
 	updated          []db.UpdateRebalancerRecordParams
 	nextID           int64
 
+	savedRoutes []db.GuiRebalanceroute
+	attempts    []db.InsertRouteAttemptParams
+
 	activePubkeys  []string
 	allowedTargets []db.ListAllAllowedTargetsRow
 	lastRebal      map[string]db.GetLastRebalanceForPubkeyRow
@@ -112,14 +115,12 @@ func (f *fakeRebalQ) IncrNodeReputationFailure(ctx context.Context, arg db.IncrN
 }
 
 // savedRoutesQuerier
-func (f *fakeRebalQ) ListUntestedNoFeeRoutes(ctx context.Context, arg db.ListUntestedNoFeeRoutesParams) ([]db.GuiRebalanceroute, error) {
-	return nil, nil
+func (f *fakeRebalQ) ListRoutesForTarget(ctx context.Context, arg db.ListRoutesForTargetParams) ([]db.GuiRebalanceroute, error) {
+	return f.savedRoutes, nil
 }
-func (f *fakeRebalQ) ListUntestedFeeKnownRoutes(ctx context.Context, arg db.ListUntestedFeeKnownRoutesParams) ([]db.GuiRebalanceroute, error) {
-	return nil, nil
-}
-func (f *fakeRebalQ) ListTestedRoutes(ctx context.Context, arg db.ListTestedRoutesParams) ([]db.GuiRebalanceroute, error) {
-	return nil, nil
+func (f *fakeRebalQ) InsertRouteAttempt(ctx context.Context, arg db.InsertRouteAttemptParams) error {
+	f.attempts = append(f.attempts, arg)
+	return nil
 }
 func (f *fakeRebalQ) ListNodeReputations(ctx context.Context, dollar_1 []string) ([]db.ListNodeReputationsRow, error) {
 	return nil, nil
@@ -133,6 +134,10 @@ func (f *fakeRebalQ) DeleteRoutesNotOpenOutgoing(ctx context.Context, dollar_1 [
 func (f *fakeRebalQ) DeleteStaleTestedRoutes(ctx context.Context, lastSuccess pgtype.Timestamptz) error {
 	return nil
 }
+func (f *fakeRebalQ) DeleteUnconfirmedRoutes(ctx context.Context, lastProbed pgtype.Timestamptz) error {
+	return nil
+}
+func (f *fakeRebalQ) DeleteRoutesOfNonTargets(ctx context.Context) (int64, error) { return 0, nil }
 func (f *fakeRebalQ) DeleteStaleNodeReputations(ctx context.Context, lastSuccess pgtype.Timestamptz) error {
 	return nil
 }

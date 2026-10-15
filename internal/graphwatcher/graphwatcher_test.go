@@ -65,7 +65,7 @@ func (f *fakeQ) GetRebalanceRoute(ctx context.Context, arg db.GetRebalanceRouteP
 func (f *fakeQ) InsertRebalanceRoute(ctx context.Context, arg db.InsertRebalanceRouteParams) error {
 	return nil
 }
-func (f *fakeQ) UpdateRebalanceRouteHex(ctx context.Context, arg db.UpdateRebalanceRouteHexParams) error {
+func (f *fakeQ) UpdateRebalanceRouteProbe(ctx context.Context, arg db.UpdateRebalanceRouteProbeParams) error {
 	return nil
 }
 func (f *fakeQ) InsertProbeLog(ctx context.Context, arg db.InsertProbeLogParams) error { return nil }

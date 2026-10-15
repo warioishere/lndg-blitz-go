@@ -17,8 +17,21 @@ import (
 	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
-// trySavedRoute attempts a single saved-route entry. Returns true if the outer
-// loop should stop (payment succeeded). It mutates rebalance, successfulOut/In,
+// savedRouteResult is how a saved-route attempt ended. outcome is one of
+// success, success_smaller (paid with the amount a probe found), failed,
+// skip_max_htlc, skip_failed_edge, skip_cost, build_failed, error; code and hop
+// are the failure code and failure source index of a failed payment (-1: none).
+type savedRouteResult struct {
+	outcome   string
+	code, hop int
+}
+
+func (r savedRouteResult) succeeded() bool {
+	return r.outcome == "success" || r.outcome == "success_smaller"
+}
+
+// trySavedRoute attempts a single saved-route entry; the outer loop stops when
+// the result succeeded. It mutates rebalance, successfulOut/In,
 // triedSavedSources, and savedSucceeded. RPC errors are treated as soft failures.
 func (e *engine) trySavedRoute(
 	ctx context.Context,
@@ -37,7 +50,7 @@ func (e *engine) trySavedRoute(
 	triedSavedSources map[string]struct{},
 	savedSucceeded *bool,
 	now func() time.Time,
-) bool {
+) savedRouteResult {
 	srLabel := e.alias.label(sr.OutgoingChanID)
 	rebalLog(fmt.Sprintf("Trying saved route via %s", srLabel))
 
@@ -60,14 +73,14 @@ func (e *engine) trySavedRoute(
 		p, err := parseRouteHex(sr.RouteHex.String)
 		if err != nil {
 			handleErr(err)
-			return false
+			return savedRouteResult{outcome: "error", code: -1, hop: -1}
 		}
 		parsedSr = p
 		for _, h := range p.GetHops() {
 			b, derr := hex.DecodeString(h.GetPubKey())
 			if derr != nil {
 				handleErr(derr)
-				return false
+				return savedRouteResult{outcome: "error", code: -1, hop: -1}
 			}
 			hopKeys = append(hopKeys, b)
 		}
@@ -76,7 +89,7 @@ func (e *engine) trySavedRoute(
 			b, derr := hex.DecodeString(k)
 			if derr != nil {
 				handleErr(derr)
-				return false
+				return savedRouteResult{outcome: "error", code: -1, hop: -1}
 			}
 			hopKeys = append(hopKeys, b)
 		}
@@ -88,18 +101,18 @@ func (e *engine) trySavedRoute(
 		if capMsat != 0 && int64(rebalance.Value)*1000 > capMsat {
 			rebalLog(fmt.Sprintf("Saved route via %s max_htlc cap is %d sats, less than rebalance value %d - skipping",
 				srLabel, capMsat/1000, rebalance.Value))
-			return false
+			return savedRouteResult{outcome: "skip_max_htlc", code: -1, hop: -1}
 		}
 		if !e.mc.validateRoute(parsedSr) {
 			rebalLog(fmt.Sprintf("Saved route via %s skipped — reuses a cached failed edge", srLabel))
-			return false
+			return savedRouteResult{outcome: "skip_failed_edge", code: -1, hop: -1}
 		}
 	}
 
 	outChanID, perr := strconv.ParseUint(sr.OutgoingChanID, 10, 64)
 	if perr != nil {
 		handleErr(perr)
-		return false
+		return savedRouteResult{outcome: "error", code: -1, hop: -1}
 	}
 	build, berr := routerstub.BuildRoute(ctx, &routerrpc.BuildRouteRequest{
 		OutgoingChanId: outChanID,
@@ -110,7 +123,7 @@ func (e *engine) trySavedRoute(
 	})
 	if berr != nil {
 		handleErr(berr)
-		return false
+		return savedRouteResult{outcome: "build_failed", code: -1, hop: -1}
 	}
 	rebalLog(fmt.Sprintf("BuildRoute succeeded via %s", srLabel))
 
@@ -122,7 +135,7 @@ func (e *engine) trySavedRoute(
 			srcFee := lookupSourceFee(sourceFeeMap, sr.OutgoingChanID)
 			rebalLog(fmt.Sprintf("BuildRoute via %s rejected: route %d ppm + source %d ppm outbound, max route budget %d ppm (target %d * %d%% - %d source) - skipping",
 				srLabel, totalPpm, srcFee, budgetPpm, targetFeeRate, arMaxCost, srcFee))
-			return false
+			return savedRouteResult{outcome: "skip_cost", code: -1, hop: -1}
 		}
 	}
 
@@ -131,14 +144,14 @@ func (e *engine) trySavedRoute(
 		rebalLog(fmt.Sprintf("BuildRoute via %s exceeds fee limit (%d > %d msat, %d ppm) - skipping without penalty",
 			srLabel, build.GetRoute().GetTotalFeesMsat(), feeLimitMsat, int(actualPpm)))
 		updateRouteFee(ctx, q, sr.ID, actualPpm)
-		return false
+		return savedRouteResult{outcome: "skip_cost", code: -1, hop: -1}
 	}
 
 	routeMsg := build.GetRoute()
 	rb, merr := proto.Marshal(routeMsg)
 	if merr != nil {
 		handleErr(merr)
-		return false
+		return savedRouteResult{outcome: "error", code: -1, hop: -1}
 	}
 	h := hex.EncodeToString(rb)
 	rebuiltHex = &h
@@ -151,7 +164,7 @@ func (e *engine) trySavedRoute(
 	cancel()
 	if serr != nil {
 		handleErr(serr)
-		return false
+		return savedRouteResult{outcome: "error", code: -1, hop: -1}
 	}
 
 	if paymentResp.GetStatus() == lnrpc.HTLCAttempt_SUCCEEDED { // status == 1
@@ -175,7 +188,7 @@ func (e *engine) trySavedRoute(
 		updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, *rebuiltHex, true, false, now())
 		updateNodeReputations(ctx, q, *rebuiltHex, true, 0, false, now())
 		*savedSucceeded = true
-		return true
+		return savedRouteResult{outcome: "success", code: -1, hop: -1}
 	}
 
 	// Handle failure.
@@ -193,6 +206,10 @@ func (e *engine) trySavedRoute(
 	e.mc.recordRouteFailure(routeMsg, failure)
 	updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, *rebuiltHex, false, false, now())
 	updateNodeReputations(ctx, q, *rebuiltHex, false, fsi, failureSet, now())
+	failed := savedRouteResult{outcome: "failed", code: -1, hop: -1}
+	if failureSet {
+		failed.code, failed.hop = codeNum, fsi
+	}
 
 	// Probe for a smaller amount when the target peer lacks liquidity.
 	totalHops := len(routeMsg.GetHops())
@@ -203,7 +220,7 @@ func (e *engine) trySavedRoute(
 			probeInvoice, aerr := stub.AddInvoice(ctx, &lnrpc.Invoice{Value: probed, Expiry: int64(timeout / time.Second), CltvExpiry: FinalCltvDelta})
 			if aerr != nil {
 				handleErr(aerr)
-				return false
+				return failed
 			}
 			probeBuild, pberr := routerstub.BuildRoute(ctx, &routerrpc.BuildRouteRequest{
 				OutgoingChanId: outChanID,
@@ -214,7 +231,7 @@ func (e *engine) trySavedRoute(
 			})
 			if pberr != nil {
 				handleErr(pberr)
-				return false
+				return failed
 			}
 			scaledFeeLimit := feeLimitMsat * probed / int64(rebalance.Value)
 			oppOk := true
@@ -236,7 +253,7 @@ func (e *engine) trySavedRoute(
 				pcancel()
 				if prerr != nil {
 					handleErr(prerr)
-					return false
+					return failed
 				}
 				if probeResp.GetStatus() == lnrpc.HTLCAttempt_SUCCEEDED {
 					rebalance.FeeLimit = pyround.Round(rebalance.FeeLimit*(float64(probed)/float64(rebalance.Value)), 3)
@@ -255,10 +272,10 @@ func (e *engine) trySavedRoute(
 					updateNodeReputations(ctx, q, ph, true, 0, false, now())
 					rebalLog(fmt.Sprintf("Probe payment succeeded: %d sats via %s", probed, srLabel))
 					*savedSucceeded = true
-					return true
+					return savedRouteResult{outcome: "success_smaller", code: -1, hop: -1}
 				}
 			}
 		}
 	}
-	return false
+	return failed
 }

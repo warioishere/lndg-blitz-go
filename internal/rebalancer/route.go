@@ -109,7 +109,7 @@ func updateRoute(ctx context.Context, q routeQuerier, pubkey, chanID, routeHex s
 		if forgiveFailure && ro.FailureCount > 0 {
 			ro.FailureCount--
 		}
-		if parsed.GetTotalAmtMsat() != 0 && parsed.GetTotalFeesMsat() != 0 {
+		if parsed.GetTotalAmtMsat() > parsed.GetTotalFeesMsat() {
 			fee := float64(parsed.GetTotalFeesMsat()) / float64(parsed.GetTotalAmtMsat()-parsed.GetTotalFeesMsat()) * 1000000
 			ro.LastFeePpm = pgtype.Float8{Float64: fee, Valid: true}
 		}
@@ -211,11 +211,19 @@ type purgeQuerier interface {
 	ListOpenChannelIDs(ctx context.Context) ([]string, error)
 	DeleteRoutesNotOpenOutgoing(ctx context.Context, dollar_1 []string) (int64, error)
 	DeleteStaleTestedRoutes(ctx context.Context, lastSuccess pgtype.Timestamptz) error
+	DeleteUnconfirmedRoutes(ctx context.Context, lastProbed pgtype.Timestamptz) error
+	DeleteRoutesOfNonTargets(ctx context.Context) (int64, error)
 	DeleteStaleNodeReputations(ctx context.Context, lastSuccess pgtype.Timestamptz) error
 }
 
-// purgeStaleRoutes removes routes for closed channels and records older than
-// 7 days (routes) or 14 days (node reputations).
+// unconfirmedRouteTTL is how long a never-paid route stays without the route
+// prober verifying it again (12 prober runs at the default interval).
+const unconfirmedRouteTTL = 24 * time.Hour
+
+// purgeStaleRoutes removes routes for closed channels and for peers without an
+// open auto-rebalance channel, tested routes without a success for 7 days,
+// never-paid routes the prober has not verified for unconfirmedRouteTTL, and
+// node reputations older than 14 days.
 func purgeStaleRoutes(ctx context.Context, q purgeQuerier, now time.Time) {
 	disabled, err := collectRoutesDisabled(ctx, q)
 	if err != nil {
@@ -238,8 +246,20 @@ func purgeStaleRoutes(ctx context.Context, q purgeQuerier, now time.Time) {
 	if dead > 0 {
 		rebalLog(fmt.Sprintf("Purged %d routes for closed outgoing channels", dead))
 	}
+	nonTargets, err := q.DeleteRoutesOfNonTargets(ctx)
+	if err != nil {
+		rebalLog(fmt.Sprintf("Error purging stale routes: %s", err))
+		return
+	}
+	if nonTargets > 0 {
+		rebalLog(fmt.Sprintf("Purged %d routes to peers that are no auto-rebalance target", nonTargets))
+	}
 	cutoff := pgtype.Timestamptz{Time: now.Add(-7 * 24 * time.Hour), Valid: true}
 	if e := q.DeleteStaleTestedRoutes(ctx, cutoff); e != nil {
+		rebalLog(fmt.Sprintf("Error purging stale routes: %s", e))
+		return
+	}
+	if e := q.DeleteUnconfirmedRoutes(ctx, pgtype.Timestamptz{Time: now.Add(-unconfirmedRouteTTL), Valid: true}); e != nil {
 		rebalLog(fmt.Sprintf("Error purging stale routes: %s", e))
 		return
 	}

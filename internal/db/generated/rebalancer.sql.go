@@ -88,6 +88,22 @@ func (q *Queries) DeleteRoutesNotOpenOutgoing(ctx context.Context, dollar_1 []st
 	return result.RowsAffected(), nil
 }
 
+const deleteRoutesOfNonTargets = `-- name: DeleteRoutesOfNonTargets :execrows
+DELETE FROM gui_rebalanceroute r
+WHERE NOT EXISTS (
+    SELECT 1 FROM gui_channels c WHERE c.remote_pubkey = r.target_pubkey AND c.is_open AND c.auto_rebalance
+)
+`
+
+// Routes to peers without an open auto-rebalance channel.
+func (q *Queries) DeleteRoutesOfNonTargets(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRoutesOfNonTargets)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteStaleNodeReputations = `-- name: DeleteStaleNodeReputations :exec
 DELETE FROM gui_nodereputation
 WHERE (last_success < $1 OR last_success IS NULL)
@@ -108,6 +124,17 @@ WHERE (last_success < $1 OR last_success IS NULL)
 // getestete Routen ohne kuerzlichen Erfolg loeschen; ungetestete (probed) behalten.
 func (q *Queries) DeleteStaleTestedRoutes(ctx context.Context, lastSuccess pgtype.Timestamptz) error {
 	_, err := q.db.Exec(ctx, deleteStaleTestedRoutes, lastSuccess)
+	return err
+}
+
+const deleteUnconfirmedRoutes = `-- name: DeleteUnconfirmedRoutes :exec
+DELETE FROM gui_rebalanceroute
+WHERE success_count = 0 AND failure_count = 0 AND (last_probed IS NULL OR last_probed < $1)
+`
+
+// Never-paid routes the route prober has not verified since cutoff.
+func (q *Queries) DeleteUnconfirmedRoutes(ctx context.Context, lastProbed pgtype.Timestamptz) error {
+	_, err := q.db.Exec(ctx, deleteUnconfirmedRoutes, lastProbed)
 	return err
 }
 
@@ -273,6 +300,48 @@ func (q *Queries) InsertRebalancerRecord(ctx context.Context, arg InsertRebalanc
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const insertRouteAttempt = `-- name: InsertRouteAttempt :exec
+INSERT INTO route_attempt_log
+    (timestamp, rebalance_id, route_id, target_pubkey, outgoing_chan_id, list, position,
+     evidence_age_s, fee_ppm, value_sat, outcome, failure_code, failure_hop)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+`
+
+type InsertRouteAttemptParams struct {
+	Timestamp      pgtype.Timestamptz `json:"timestamp"`
+	RebalanceID    int64              `json:"rebalance_id"`
+	RouteID        int64              `json:"route_id"`
+	TargetPubkey   string             `json:"target_pubkey"`
+	OutgoingChanID string             `json:"outgoing_chan_id"`
+	List           string             `json:"list"`
+	Position       int32              `json:"position"`
+	EvidenceAgeS   pgtype.Float8      `json:"evidence_age_s"`
+	FeePpm         pgtype.Float8      `json:"fee_ppm"`
+	ValueSat       int64              `json:"value_sat"`
+	Outcome        string             `json:"outcome"`
+	FailureCode    pgtype.Int4        `json:"failure_code"`
+	FailureHop     pgtype.Int4        `json:"failure_hop"`
+}
+
+func (q *Queries) InsertRouteAttempt(ctx context.Context, arg InsertRouteAttemptParams) error {
+	_, err := q.db.Exec(ctx, insertRouteAttempt,
+		arg.Timestamp,
+		arg.RebalanceID,
+		arg.RouteID,
+		arg.TargetPubkey,
+		arg.OutgoingChanID,
+		arg.List,
+		arg.Position,
+		arg.EvidenceAgeS,
+		arg.FeePpm,
+		arg.ValueSat,
+		arg.Outcome,
+		arg.FailureCode,
+		arg.FailureHop,
+	)
+	return err
 }
 
 const listActiveOpenPublicChannels = `-- name: ListActiveOpenPublicChannels :many
@@ -650,35 +719,24 @@ func (q *Queries) ListRemainingDrainChannels(ctx context.Context, remotePubkey s
 	return items, nil
 }
 
-const listTestedRoutes = `-- name: ListTestedRoutes :many
-SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count,
-       failure_count, last_success, last_failure, route_hex, last_fee_ppm
-FROM gui_rebalanceroute
+const listRoutesForTarget = `-- name: ListRoutesForTarget :many
+SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count, failure_count, last_success, last_failure, route_hex, last_fee_ppm, last_probed, probed_amount_sat FROM gui_rebalanceroute
 WHERE target_pubkey = $1
   AND outgoing_chan_id = ANY($2::varchar[])
   AND (last_failure < $3 OR last_failure IS NULL)
-  AND NOT (success_count = 0 AND failure_count = 0)
-ORDER BY ((success_count + 1.0) / (success_count + failure_count + 2.0))
-       * ((success_count + failure_count) / (success_count + failure_count + 10.0)) DESC
-LIMIT $4
+ORDER BY id
 `
 
-type ListTestedRoutesParams struct {
+type ListRoutesForTargetParams struct {
 	TargetPubkey string             `json:"target_pubkey"`
 	ChanIds      []string           `json:"chan_ids"`
 	Cutoff       pgtype.Timestamptz `json:"cutoff"`
-	FetchLimit   int32              `json:"fetch_limit"`
 }
 
-// tested: NOT(success_count=0 AND failure_count=0), order_by('-weighted_ratio').
-// weighted_ratio inline = ((sc+1)/(sc+fc+2)) * ((sc+fc)/(sc+fc+10)).
-func (q *Queries) ListTestedRoutes(ctx context.Context, arg ListTestedRoutesParams) ([]GuiRebalanceroute, error) {
-	rows, err := q.db.Query(ctx, listTestedRoutes,
-		arg.TargetPubkey,
-		arg.ChanIds,
-		arg.Cutoff,
-		arg.FetchLimit,
-	)
+// Saved routes of a target from the given sources; a route that failed after
+// cutoff is left out.
+func (q *Queries) ListRoutesForTarget(ctx context.Context, arg ListRoutesForTargetParams) ([]GuiRebalanceroute, error) {
+	rows, err := q.db.Query(ctx, listRoutesForTarget, arg.TargetPubkey, arg.ChanIds, arg.Cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -698,122 +756,8 @@ func (q *Queries) ListTestedRoutes(ctx context.Context, arg ListTestedRoutesPara
 			&i.LastFailure,
 			&i.RouteHex,
 			&i.LastFeePpm,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listUntestedFeeKnownRoutes = `-- name: ListUntestedFeeKnownRoutes :many
-SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count,
-       failure_count, last_success, last_failure, route_hex, last_fee_ppm
-FROM gui_rebalanceroute
-WHERE target_pubkey = $1
-  AND outgoing_chan_id = ANY($2::varchar[])
-  AND (last_failure < $3 OR last_failure IS NULL)
-  AND success_count = 0 AND failure_count = 0 AND last_fee_ppm IS NOT NULL
-ORDER BY last_fee_ppm LIMIT $4
-`
-
-type ListUntestedFeeKnownRoutesParams struct {
-	TargetPubkey string             `json:"target_pubkey"`
-	ChanIds      []string           `json:"chan_ids"`
-	Cutoff       pgtype.Timestamptz `json:"cutoff"`
-	FetchLimit   int32              `json:"fetch_limit"`
-}
-
-// fee_known_untested: success_count=0 AND failure_count=0 AND last_fee_ppm IS NOT NULL.
-func (q *Queries) ListUntestedFeeKnownRoutes(ctx context.Context, arg ListUntestedFeeKnownRoutesParams) ([]GuiRebalanceroute, error) {
-	rows, err := q.db.Query(ctx, listUntestedFeeKnownRoutes,
-		arg.TargetPubkey,
-		arg.ChanIds,
-		arg.Cutoff,
-		arg.FetchLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []GuiRebalanceroute{}
-	for rows.Next() {
-		var i GuiRebalanceroute
-		if err := rows.Scan(
-			&i.ID,
-			&i.TargetPubkey,
-			&i.OutgoingChanID,
-			&i.Route,
-			&i.FinalCltvDelta,
-			&i.SuccessCount,
-			&i.FailureCount,
-			&i.LastSuccess,
-			&i.LastFailure,
-			&i.RouteHex,
-			&i.LastFeePpm,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listUntestedNoFeeRoutes = `-- name: ListUntestedNoFeeRoutes :many
-
-SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count,
-       failure_count, last_success, last_failure, route_hex, last_fee_ppm
-FROM gui_rebalanceroute
-WHERE target_pubkey = $1
-  AND outgoing_chan_id = ANY($2::varchar[])
-  AND (last_failure < $3 OR last_failure IS NULL)
-  AND success_count = 0 AND failure_count = 0 AND last_fee_ppm IS NULL
-ORDER BY random() LIMIT $4
-`
-
-type ListUntestedNoFeeRoutesParams struct {
-	TargetPubkey string             `json:"target_pubkey"`
-	ChanIds      []string           `json:"chan_ids"`
-	Cutoff       pgtype.Timestamptz `json:"cutoff"`
-	FetchLimit   int32              `json:"fetch_limit"`
-}
-
-// get_saved_routes Kandidaten-Selects (rebalancer.py:616-627). Gemeinsamer Filter:
-// target_pubkey + outgoing_chan_id IN chan_ids + (last_failure < cutoff OR NULL).
-// truly_untested: success_count=0 AND failure_count=0 AND last_fee_ppm IS NULL,
-// order_by('?') == ORDER BY random() (nicht-deterministisch, siehe PORTING_NOTES).
-func (q *Queries) ListUntestedNoFeeRoutes(ctx context.Context, arg ListUntestedNoFeeRoutesParams) ([]GuiRebalanceroute, error) {
-	rows, err := q.db.Query(ctx, listUntestedNoFeeRoutes,
-		arg.TargetPubkey,
-		arg.ChanIds,
-		arg.Cutoff,
-		arg.FetchLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []GuiRebalanceroute{}
-	for rows.Next() {
-		var i GuiRebalanceroute
-		if err := rows.Scan(
-			&i.ID,
-			&i.TargetPubkey,
-			&i.OutgoingChanID,
-			&i.Route,
-			&i.FinalCltvDelta,
-			&i.SuccessCount,
-			&i.FailureCount,
-			&i.LastSuccess,
-			&i.LastFailure,
-			&i.RouteHex,
-			&i.LastFeePpm,
+			&i.LastProbed,
+			&i.ProbedAmountSat,
 		); err != nil {
 			return nil, err
 		}

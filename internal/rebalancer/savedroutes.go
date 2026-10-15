@@ -13,248 +13,239 @@ import (
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 )
 
+// Saved routes are tried in an order built from each route's latest evidence:
+// a payment over it, a failure, or a verification by the route prober. Three
+// lists:
+//
+//	proven  - paid successfully within provenWindow, no failure since
+//	explore - verified by the prober (or paid longer ago), no failure since
+//	failed  - the latest evidence is a failure older than failCooldown
+//
+// proven and explore alternate (explore at positions 2, 5, 8, ...), so a
+// rebalance also tries routes that were never paid; failed routes come last.
+const (
+	listProven  = "proven"
+	listExplore = "explore"
+	listFailed  = "failed"
+
+	provenWindow = 48 * time.Hour
+	freshProbe   = 2 * time.Hour // one route prober interval
+	failCooldown = 30 * time.Minute
+)
+
 // savedRoutesQuerier bundles the DB selects required by getSavedRoutes.
 type savedRoutesQuerier interface {
-	ListUntestedNoFeeRoutes(ctx context.Context, arg db.ListUntestedNoFeeRoutesParams) ([]db.GuiRebalanceroute, error)
-	ListUntestedFeeKnownRoutes(ctx context.Context, arg db.ListUntestedFeeKnownRoutesParams) ([]db.GuiRebalanceroute, error)
-	ListTestedRoutes(ctx context.Context, arg db.ListTestedRoutesParams) ([]db.GuiRebalanceroute, error)
+	ListRoutesForTarget(ctx context.Context, arg db.ListRoutesForTargetParams) ([]db.GuiRebalanceroute, error)
 	ListNodeReputations(ctx context.Context, dollar_1 []string) ([]db.ListNodeReputationsRow, error)
 }
 
-// scoredRoute attaches an adjusted score and hop set to a candidate route.
-type scoredRoute struct {
+// rankedRoute is a saved route with the list it was taken from, its 1-based
+// position in the try order and the time of its latest evidence (zero: none).
+type rankedRoute struct {
 	row      db.GuiRebalanceroute
-	adjScore float64
-	hops     map[string]struct{}
+	list     string
+	position int
+	evidence time.Time
 }
 
-// routeUntested returns true when success_count == 0 && failure_count == 0.
-func routeUntested(r db.GuiRebalanceroute) bool {
-	return r.SuccessCount == 0 && r.FailureCount == 0
-}
-
-// feePos returns true when last_fee_ppm is set and positive.
-func feePos(f pgtype.Float8) bool { return f.Valid && f.Float64 > 0 }
-
-// feeFalsy returns true when last_fee_ppm is NULL or zero.
-func feeFalsy(f pgtype.Float8) bool { return !f.Valid || f.Float64 == 0 }
-
-// hopSet returns the set of pubkeys from a "-"-separated route string.
-func hopSet(route string) map[string]struct{} {
-	hops := make(map[string]struct{})
-	for _, pk := range strings.Split(route, "-") {
-		hops[pk] = struct{}{}
+func tsTime(t pgtype.Timestamptz) time.Time {
+	if !t.Valid {
+		return time.Time{}
 	}
-	return hops
+	return t.Time
 }
 
-// getSavedRoutes selects and scores saved routes for a target pubkey using
-// diversity-aware greedy selection. On error it logs and returns nil.
-func getSavedRoutes(ctx context.Context, q savedRoutesQuerier, pubkey string, chanIDs []string, limit int, now time.Time) []db.GuiRebalanceroute {
-	cutoff := pgtype.Timestamptz{Time: now.Add(-30 * time.Minute), Valid: true}
-	fetchLimit := limit * 3
-	if fetchLimit < 30 {
-		fetchLimit = 30
+func latestOf(ts ...time.Time) time.Time {
+	var out time.Time
+	for _, t := range ts {
+		if t.After(out) {
+			out = t
+		}
 	}
+	return out
+}
 
-	trulyUntested, err := q.ListUntestedNoFeeRoutes(ctx, db.ListUntestedNoFeeRoutesParams{
-		TargetPubkey: pubkey, ChanIds: chanIDs, Cutoff: cutoff, FetchLimit: int32(fetchLimit),
+// classifyRoute returns the list of a route and the time of its latest evidence.
+func classifyRoute(r db.GuiRebalanceroute, now time.Time) (string, time.Time) {
+	success, failure, probed := tsTime(r.LastSuccess), tsTime(r.LastFailure), tsTime(r.LastProbed)
+	evidence := latestOf(success, failure, probed)
+	switch {
+	case !failure.IsZero() && failure.Equal(evidence):
+		return listFailed, evidence
+	case !success.IsZero() && now.Sub(success) <= provenWindow:
+		return listProven, evidence
+	default:
+		return listExplore, evidence
+	}
+}
+
+// routeCandidate holds the sort keys of a route within its list.
+type routeCandidate struct {
+	ranked  rankedRoute
+	fresh   bool    // latest evidence within freshProbe
+	carries bool    // no prober amount below the rebalance value, or paid since the probe
+	fee     float64 // last_fee_ppm; +Inf when unknown
+	rep     float64 // lowest node reputation on the route
+	ratio   float64 // success / attempts
+}
+
+// getSavedRoutes returns up to limit saved routes of a target in the order to
+// try them (see the list rules above). value is the rebalance amount in sats:
+// a route whose prober-verified amount is below it, and that was not paid since,
+// goes behind the others of its list. On error it logs and returns nil.
+func getSavedRoutes(ctx context.Context, q savedRoutesQuerier, pubkey string, chanIDs []string, limit int, value int64, now time.Time) []rankedRoute {
+	rows, err := q.ListRoutesForTarget(ctx, db.ListRoutesForTargetParams{
+		TargetPubkey: pubkey, ChanIds: chanIDs, Cutoff: pgtype.Timestamptz{Time: now.Add(-failCooldown), Valid: true},
 	})
 	if err != nil {
 		rebalLog(fmt.Sprintf("Error getting saved routes: %s", err))
 		return nil
 	}
-	feeKnownUntested, err := q.ListUntestedFeeKnownRoutes(ctx, db.ListUntestedFeeKnownRoutesParams{
-		TargetPubkey: pubkey, ChanIds: chanIDs, Cutoff: cutoff, FetchLimit: int32(fetchLimit),
-	})
+	if len(rows) == 0 {
+		return []rankedRoute{}
+	}
+
+	pubkeySet := map[string]struct{}{}
+	for _, r := range rows {
+		for _, pk := range strings.Split(r.Route, "-") {
+			pubkeySet[pk] = struct{}{}
+		}
+	}
+	pubkeys := make([]string, 0, len(pubkeySet))
+	for pk := range pubkeySet {
+		pubkeys = append(pubkeys, pk)
+	}
+	reps, err := q.ListNodeReputations(ctx, pubkeys)
 	if err != nil {
 		rebalLog(fmt.Sprintf("Error getting saved routes: %s", err))
 		return nil
 	}
-	tested, err := q.ListTestedRoutes(ctx, db.ListTestedRoutesParams{
-		TargetPubkey: pubkey, ChanIds: chanIDs, Cutoff: cutoff, FetchLimit: int32(fetchLimit),
-	})
-	if err != nil {
-		rebalLog(fmt.Sprintf("Error getting saved routes: %s", err))
-		return nil
+	repMap := make(map[string]float64, len(reps))
+	for _, nr := range reps {
+		repMap[nr.Pubkey] = calcWeightedRatio(int(nr.SuccessCount), int(nr.FailureCount), 10)
 	}
 
-	// Merge: truly_untested + fee_known_untested + tested, capped at fetchLimit.
-	candidates := make([]db.GuiRebalanceroute, 0, len(trulyUntested)+len(feeKnownUntested)+len(tested))
-	candidates = append(candidates, trulyUntested...)
-	candidates = append(candidates, feeKnownUntested...)
-	candidates = append(candidates, tested...)
-	if len(candidates) > fetchLimit {
-		candidates = candidates[:fetchLimit]
-	}
-	if len(candidates) == 0 {
-		return []db.GuiRebalanceroute{}
-	}
-
-	// Step 1: Node-reputation scoring.
-	routeHops := make(map[int64]map[string]struct{}, len(candidates))
-	allPubkeysSet := make(map[string]struct{})
-	for _, r := range candidates {
-		hops := hopSet(r.Route)
-		routeHops[r.ID] = hops
-		for pk := range hops {
-			allPubkeysSet[pk] = struct{}{}
+	var proven, explore, failed []routeCandidate
+	for _, r := range rows {
+		list, evidence := classifyRoute(r, now)
+		c := routeCandidate{
+			ranked:  rankedRoute{row: r, list: list, evidence: evidence},
+			fresh:   !evidence.IsZero() && now.Sub(evidence) <= freshProbe,
+			carries: !r.ProbedAmountSat.Valid || r.ProbedAmountSat.Int64 >= value || tsTime(r.LastSuccess).After(tsTime(r.LastProbed)),
+			fee:     math.Inf(1),
+			rep:     1,
 		}
-	}
-
-	repMap := make(map[string]float64)
-	if len(allPubkeysSet) > 0 {
-		allPubkeys := make([]string, 0, len(allPubkeysSet))
-		for pk := range allPubkeysSet {
-			allPubkeys = append(allPubkeys, pk)
+		if r.LastFeePpm.Valid {
+			c.fee = r.LastFeePpm.Float64
 		}
-		reps, err := q.ListNodeReputations(ctx, allPubkeys)
-		if err != nil {
-			rebalLog(fmt.Sprintf("Error getting saved routes: %s", err))
-			return nil
-		}
-		for _, nr := range reps {
-			repMap[nr.Pubkey] = calcWeightedRatio(int(nr.SuccessCount), int(nr.FailureCount), 10)
-		}
-	}
-
-	// Minimum known fee across candidates (only last_fee_ppm > 0).
-	var minFee float64
-	hasMinFee := false
-	for _, r := range candidates {
-		if feePos(r.LastFeePpm) {
-			if !hasMinFee || r.LastFeePpm.Float64 < minFee {
-				minFee = r.LastFeePpm.Float64
-				hasMinFee = true
+		for _, pk := range strings.Split(r.Route, "-") {
+			s, ok := repMap[pk]
+			if !ok {
+				s = 0.5
 			}
+			c.rep = math.Min(c.rep, s)
+		}
+		if n := r.SuccessCount + r.FailureCount; n > 0 {
+			c.ratio = float64(r.SuccessCount) / float64(n)
+		}
+		switch list {
+		case listProven:
+			proven = append(proven, c)
+		case listExplore:
+			explore = append(explore, c)
+		default:
+			failed = append(failed, c)
 		}
 	}
 
-	scored := make([]scoredRoute, 0, len(candidates))
-	for _, r := range candidates {
-		hops := routeHops[r.ID]
-		var minNodeScore float64
-		if len(hops) > 0 && len(repMap) > 0 {
-			minNodeScore = math.Inf(1)
-			for pk := range hops {
-				s := 0.5
-				if v, ok := repMap[pk]; ok {
-					s = v
-				}
-				if s < minNodeScore {
-					minNodeScore = s
-				}
-			}
+	byFee := func(a, b routeCandidate) bool {
+		if a.fee != b.fee {
+			return a.fee < b.fee
+		}
+		if a.rep != b.rep {
+			return a.rep > b.rep
+		}
+		return a.ranked.row.ID < b.ranked.row.ID
+	}
+	sort.SliceStable(proven, func(i, j int) bool {
+		a, b := proven[i], proven[j]
+		if a.carries != b.carries {
+			return a.carries
+		}
+		return byFee(a, b)
+	})
+	sort.SliceStable(explore, func(i, j int) bool {
+		a, b := explore[i], explore[j]
+		if a.fresh != b.fresh {
+			return a.fresh
+		}
+		if a.carries != b.carries {
+			return a.carries
+		}
+		return byFee(a, b)
+	})
+	sort.SliceStable(failed, func(i, j int) bool {
+		a, b := failed[i], failed[j]
+		if a.ratio != b.ratio {
+			return a.ratio > b.ratio
+		}
+		return byFee(a, b)
+	})
+
+	out := make([]rankedRoute, 0, min(limit, len(rows)))
+	add := func(c routeCandidate) {
+		c.ranked.position = len(out) + 1
+		out = append(out, c.ranked)
+	}
+	pi, ei := 0, 0
+	for len(out) < limit && (pi < len(proven) || ei < len(explore)) {
+		takeExplore := (len(out)+1)%3 == 2
+		if (takeExplore && ei < len(explore)) || pi >= len(proven) {
+			add(explore[ei])
+			ei++
 		} else {
-			minNodeScore = 0.5
-		}
-
-		var adjScore float64
-		if routeUntested(r) {
-			feeFactor := 1.0
-			if hasMinFee && feePos(r.LastFeePpm) {
-				feeFactor = minFee / r.LastFeePpm.Float64
-			}
-			adjScore = 0.5 * minNodeScore * feeFactor
-		} else {
-			// Time decay: half-life 48 hours.
-			var timeFactor float64
-			if r.LastSuccess.Valid {
-				hoursAgo := now.Sub(r.LastSuccess.Time).Seconds() / 3600
-				timeFactor = math.Pow(2, -hoursAgo/48)
-			} else {
-				timeFactor = 0.1
-			}
-			feeFactor := 0.5
-			if hasMinFee && feePos(r.LastFeePpm) {
-				feeFactor = minFee / r.LastFeePpm.Float64
-			}
-			weightedRatio := calcWeightedRatio(int(r.SuccessCount), int(r.FailureCount), 10)
-			adjScore = weightedRatio * minNodeScore * timeFactor * feeFactor
-		}
-		scored = append(scored, scoredRoute{row: r, adjScore: adjScore, hops: hops})
-	}
-
-	// Step 2: Diversity-aware greedy selection. Stable sort preserves input order for ties.
-	sort.SliceStable(scored, func(i, j int) bool { return scored[i].adjScore > scored[j].adjScore })
-
-	selected := make([]db.GuiRebalanceroute, 0, limit)
-	usedHops := make(map[string]struct{})
-	remaining := make([]scoredRoute, len(scored))
-	copy(remaining, scored)
-
-	for len(remaining) > 0 && len(selected) < limit {
-		bestIdx := 0
-		bestFinal := -1.0
-		for i, sr := range remaining {
-			shared := 0
-			for pk := range sr.hops {
-				if _, ok := usedHops[pk]; ok {
-					shared++
-				}
-			}
-			penalty := math.Pow(0.5, float64(shared))
-			final := sr.adjScore * penalty
-			if final > bestFinal {
-				bestFinal = final
-				bestIdx = i
-			}
-		}
-		sr := remaining[bestIdx]
-		remaining = append(remaining[:bestIdx], remaining[bestIdx+1:]...)
-		selected = append(selected, sr.row)
-		for pk := range sr.hops {
-			usedHops[pk] = struct{}{}
+			add(proven[pi])
+			pi++
 		}
 	}
+	for _, c := range failed {
+		if len(out) >= limit {
+			break
+		}
+		add(c)
+	}
+	return out
+}
 
-	// Step 3: Reserve ~50% of slots for truly untested routes (no fee data at all).
-	minExplore := limit / 2
-	if minExplore < 1 {
-		minExplore = 1
+// countLists summarizes how many routes of each list a try order holds.
+func countLists(rs []rankedRoute) string {
+	n := map[string]int{}
+	for _, r := range rs {
+		n[r.list]++
 	}
-	untestedCount := 0
-	for _, r := range selected {
-		if routeUntested(r) && feeFalsy(r.LastFeePpm) {
-			untestedCount++
-		}
-	}
-	if untestedCount < minExplore {
-		selectedIDs := make(map[int64]struct{}, len(selected))
-		for _, r := range selected {
-			selectedIDs[r.ID] = struct{}{}
-		}
-		untestedAvail := make([]db.GuiRebalanceroute, 0)
-		for _, sr := range scored {
-			r := sr.row
-			if _, picked := selectedIDs[r.ID]; routeUntested(r) && feeFalsy(r.LastFeePpm) && !picked {
-				untestedAvail = append(untestedAvail, r)
-			}
-		}
-		need := minExplore - untestedCount
-		if need > len(untestedAvail) {
-			need = len(untestedAvail)
-		}
-		if need > 0 {
-			// Drop the lowest-priority tested routes (last chosen by diversity selection).
-			keep := make([]db.GuiRebalanceroute, 0, len(selected))
-			canDrop := need
-			for i := len(selected) - 1; i >= 0; i-- {
-				r := selected[i]
-				if canDrop > 0 && (r.SuccessCount > 0 || r.FailureCount > 0) {
-					canDrop--
-				} else {
-					keep = append(keep, r)
-				}
-			}
-			// Reverse keep back to original order.
-			for i, j := 0, len(keep)-1; i < j; i, j = i+1, j-1 {
-				keep[i], keep[j] = keep[j], keep[i]
-			}
-			keep = append(keep, untestedAvail[:need]...)
-			selected = keep
-		}
-	}
+	return fmt.Sprintf("%d proven, %d explore, %d failed", n[listProven], n[listExplore], n[listFailed])
+}
 
-	return selected
+type attemptLogQuerier interface {
+	InsertRouteAttempt(ctx context.Context, arg db.InsertRouteAttemptParams) error
+}
+
+// logRouteAttempt writes one saved-route attempt to route_attempt_log; a
+// failed write is logged and never stops the rebalance.
+func logRouteAttempt(ctx context.Context, q attemptLogQuerier, rebalanceID int64, rr rankedRoute, value int64, res savedRouteResult, now time.Time) {
+	p := db.InsertRouteAttemptParams{
+		Timestamp: pgtype.Timestamptz{Time: now, Valid: true}, RebalanceID: rebalanceID, RouteID: rr.row.ID,
+		TargetPubkey: rr.row.TargetPubkey, OutgoingChanID: rr.row.OutgoingChanID, List: rr.list,
+		Position: int32(rr.position), FeePpm: rr.row.LastFeePpm, ValueSat: value, Outcome: res.outcome,
+	}
+	if !rr.evidence.IsZero() {
+		p.EvidenceAgeS = pgtype.Float8{Float64: now.Sub(rr.evidence).Seconds(), Valid: true}
+	}
+	if res.code >= 0 {
+		p.FailureCode = pgtype.Int4{Int32: int32(res.code), Valid: true}
+		p.FailureHop = pgtype.Int4{Int32: int32(res.hop), Valid: true}
+	}
+	if err := q.InsertRouteAttempt(ctx, p); err != nil {
+		rebalLog(fmt.Sprintf("Error writing route attempt log: %s", err))
+	}
 }

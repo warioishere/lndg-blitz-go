@@ -389,17 +389,19 @@ type GuiRebalancer struct {
 }
 
 type GuiRebalanceroute struct {
-	ID             int64              `json:"id"`
-	TargetPubkey   string             `json:"target_pubkey"`
-	OutgoingChanID string             `json:"outgoing_chan_id"`
-	Route          string             `json:"route"`
-	FinalCltvDelta int32              `json:"final_cltv_delta"`
-	SuccessCount   int32              `json:"success_count"`
-	FailureCount   int32              `json:"failure_count"`
-	LastSuccess    pgtype.Timestamptz `json:"last_success"`
-	LastFailure    pgtype.Timestamptz `json:"last_failure"`
-	RouteHex       pgtype.Text        `json:"route_hex"`
-	LastFeePpm     pgtype.Float8      `json:"last_fee_ppm"`
+	ID              int64              `json:"id"`
+	TargetPubkey    string             `json:"target_pubkey"`
+	OutgoingChanID  string             `json:"outgoing_chan_id"`
+	Route           string             `json:"route"`
+	FinalCltvDelta  int32              `json:"final_cltv_delta"`
+	SuccessCount    int32              `json:"success_count"`
+	FailureCount    int32              `json:"failure_count"`
+	LastSuccess     pgtype.Timestamptz `json:"last_success"`
+	LastFailure     pgtype.Timestamptz `json:"last_failure"`
+	RouteHex        pgtype.Text        `json:"route_hex"`
+	LastFeePpm      pgtype.Float8      `json:"last_fee_ppm"`
+	LastProbed      pgtype.Timestamptz `json:"last_probed"`
+	ProbedAmountSat pgtype.Int8        `json:"probed_amount_sat"`
 }
 
 type GuiResolution struct {
@@ -423,6 +425,23 @@ type GuiTradesale struct {
 	Secret       pgtype.Text        `json:"secret"`
 	SaleLimit    pgtype.Int4        `json:"sale_limit"`
 	SaleCount    int32              `json:"sale_count"`
+}
+
+type RouteAttemptLog struct {
+	ID             int64              `json:"id"`
+	Timestamp      pgtype.Timestamptz `json:"timestamp"`
+	RebalanceID    int64              `json:"rebalance_id"`
+	RouteID        int64              `json:"route_id"`
+	TargetPubkey   string             `json:"target_pubkey"`
+	OutgoingChanID string             `json:"outgoing_chan_id"`
+	List           string             `json:"list"`
+	Position       int32              `json:"position"`
+	EvidenceAgeS   pgtype.Float8      `json:"evidence_age_s"`
+	FeePpm         pgtype.Float8      `json:"fee_ppm"`
+	ValueSat       int64              `json:"value_sat"`
+	Outcome        string             `json:"outcome"`
+	FailureCode    pgtype.Int4        `json:"failure_code"`
+	FailureHop     pgtype.Int4        `json:"failure_hop"`
 }
 
 type ShadowFeeLog struct {

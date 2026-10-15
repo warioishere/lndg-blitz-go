@@ -38,6 +38,8 @@ type fakeRouteQ struct {
 	openIDs      []string
 	deletedNotIn [][]string
 	delTested    int
+	unconfirmed  []pgtype.Timestamptz
+	delNonTarget int
 	delReps      int
 }
 
@@ -90,6 +92,14 @@ func (f *fakeRouteQ) DeleteRoutesNotOpenOutgoing(ctx context.Context, dollar_1 [
 func (f *fakeRouteQ) DeleteStaleTestedRoutes(ctx context.Context, ts pgtype.Timestamptz) error {
 	f.delTested++
 	return nil
+}
+func (f *fakeRouteQ) DeleteUnconfirmedRoutes(ctx context.Context, ts pgtype.Timestamptz) error {
+	f.unconfirmed = append(f.unconfirmed, ts)
+	return nil
+}
+func (f *fakeRouteQ) DeleteRoutesOfNonTargets(ctx context.Context) (int64, error) {
+	f.delNonTarget++
+	return 0, nil
 }
 func (f *fakeRouteQ) DeleteStaleNodeReputations(ctx context.Context, ts pgtype.Timestamptz) error {
 	f.delReps++
@@ -198,6 +208,9 @@ func TestPurgeStaleRoutes(t *testing.T) {
 	assert.Equal(t, []string{"111", "222"}, q.deletedNotIn[0])
 	assert.Equal(t, 1, q.delTested)
 	assert.Equal(t, 1, q.delReps)
+	assert.Equal(t, 1, q.delNonTarget)
+	require.Len(t, q.unconfirmed, 1)
+	assert.Equal(t, time.Unix(1_700_000_000, 0).Add(-24*time.Hour), q.unconfirmed[0].Time)
 }
 
 func TestUpdateRouteFee(t *testing.T) {

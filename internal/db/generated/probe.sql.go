@@ -25,7 +25,7 @@ func (q *Queries) DeleteOldProbeLogs(ctx context.Context) error {
 
 const getRebalanceRoute = `-- name: GetRebalanceRoute :one
 
-SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count, failure_count, last_success, last_failure, route_hex, last_fee_ppm FROM gui_rebalanceroute
+SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count, failure_count, last_success, last_failure, route_hex, last_fee_ppm, last_probed, probed_amount_sat FROM gui_rebalanceroute
 WHERE target_pubkey = $1 AND outgoing_chan_id = $2 AND route = $3
 `
 
@@ -52,6 +52,8 @@ func (q *Queries) GetRebalanceRoute(ctx context.Context, arg GetRebalanceRoutePa
 		&i.LastFailure,
 		&i.RouteHex,
 		&i.LastFeePpm,
+		&i.LastProbed,
+		&i.ProbedAmountSat,
 	)
 	return i, err
 }
@@ -87,21 +89,24 @@ func (q *Queries) InsertProbeLog(ctx context.Context, arg InsertProbeLogParams) 
 
 const insertRebalanceRoute = `-- name: InsertRebalanceRoute :exec
 INSERT INTO gui_rebalanceroute
-    (target_pubkey, outgoing_chan_id, route, final_cltv_delta, route_hex, last_fee_ppm, success_count, failure_count)
-VALUES ($1, $2, $3, $4, $5, $6, 0, 0)
+    (target_pubkey, outgoing_chan_id, route, final_cltv_delta, route_hex, last_fee_ppm, success_count, failure_count,
+     last_probed, probed_amount_sat)
+VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $7, $8)
 `
 
 type InsertRebalanceRouteParams struct {
-	TargetPubkey   string        `json:"target_pubkey"`
-	OutgoingChanID string        `json:"outgoing_chan_id"`
-	Route          string        `json:"route"`
-	FinalCltvDelta int32         `json:"final_cltv_delta"`
-	RouteHex       pgtype.Text   `json:"route_hex"`
-	LastFeePpm     pgtype.Float8 `json:"last_fee_ppm"`
+	TargetPubkey    string             `json:"target_pubkey"`
+	OutgoingChanID  string             `json:"outgoing_chan_id"`
+	Route           string             `json:"route"`
+	FinalCltvDelta  int32              `json:"final_cltv_delta"`
+	RouteHex        pgtype.Text        `json:"route_hex"`
+	LastFeePpm      pgtype.Float8      `json:"last_fee_ppm"`
+	LastProbed      pgtype.Timestamptz `json:"last_probed"`
+	ProbedAmountSat pgtype.Int8        `json:"probed_amount_sat"`
 }
 
-// get_or_create defaults: final_cltv_delta/route_hex/last_fee_ppm gesetzt;
-// success_count/failure_count = 0, last_success/last_failure = NULL.
+// A new route with success_count/failure_count = 0; last_probed and
+// probed_amount_sat are set when the route prober verified it.
 func (q *Queries) InsertRebalanceRoute(ctx context.Context, arg InsertRebalanceRouteParams) error {
 	_, err := q.db.Exec(ctx, insertRebalanceRoute,
 		arg.TargetPubkey,
@@ -110,22 +115,33 @@ func (q *Queries) InsertRebalanceRoute(ctx context.Context, arg InsertRebalanceR
 		arg.FinalCltvDelta,
 		arg.RouteHex,
 		arg.LastFeePpm,
+		arg.LastProbed,
+		arg.ProbedAmountSat,
 	)
 	return err
 }
 
-const updateRebalanceRouteHex = `-- name: UpdateRebalanceRouteHex :exec
-UPDATE gui_rebalanceroute SET route_hex = $2, last_fee_ppm = $3 WHERE id = $1
+const updateRebalanceRouteProbe = `-- name: UpdateRebalanceRouteProbe :exec
+UPDATE gui_rebalanceroute SET route_hex = $2, last_fee_ppm = $3, last_probed = $4, probed_amount_sat = $5
+WHERE id = $1
 `
 
-type UpdateRebalanceRouteHexParams struct {
-	ID         int64         `json:"id"`
-	RouteHex   pgtype.Text   `json:"route_hex"`
-	LastFeePpm pgtype.Float8 `json:"last_fee_ppm"`
+type UpdateRebalanceRouteProbeParams struct {
+	ID              int64              `json:"id"`
+	RouteHex        pgtype.Text        `json:"route_hex"`
+	LastFeePpm      pgtype.Float8      `json:"last_fee_ppm"`
+	LastProbed      pgtype.Timestamptz `json:"last_probed"`
+	ProbedAmountSat pgtype.Int8        `json:"probed_amount_sat"`
 }
 
-// obj.save(update_fields=['route_hex', 'last_fee_ppm'])
-func (q *Queries) UpdateRebalanceRouteHex(ctx context.Context, arg UpdateRebalanceRouteHexParams) error {
-	_, err := q.db.Exec(ctx, updateRebalanceRouteHex, arg.ID, arg.RouteHex, arg.LastFeePpm)
+// The route prober verified a known route again.
+func (q *Queries) UpdateRebalanceRouteProbe(ctx context.Context, arg UpdateRebalanceRouteProbeParams) error {
+	_, err := q.db.Exec(ctx, updateRebalanceRouteProbe,
+		arg.ID,
+		arg.RouteHex,
+		arg.LastFeePpm,
+		arg.LastProbed,
+		arg.ProbedAmountSat,
+	)
 	return err
 }

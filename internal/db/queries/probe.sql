@@ -6,15 +6,17 @@ SELECT * FROM gui_rebalanceroute
 WHERE target_pubkey = $1 AND outgoing_chan_id = $2 AND route = $3;
 
 -- name: InsertRebalanceRoute :exec
--- get_or_create defaults: final_cltv_delta/route_hex/last_fee_ppm gesetzt;
--- success_count/failure_count = 0, last_success/last_failure = NULL.
+-- A new route with success_count/failure_count = 0; last_probed and
+-- probed_amount_sat are set when the route prober verified it.
 INSERT INTO gui_rebalanceroute
-    (target_pubkey, outgoing_chan_id, route, final_cltv_delta, route_hex, last_fee_ppm, success_count, failure_count)
-VALUES ($1, $2, $3, $4, $5, $6, 0, 0);
+    (target_pubkey, outgoing_chan_id, route, final_cltv_delta, route_hex, last_fee_ppm, success_count, failure_count,
+     last_probed, probed_amount_sat)
+VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $7, $8);
 
--- name: UpdateRebalanceRouteHex :exec
--- obj.save(update_fields=['route_hex', 'last_fee_ppm'])
-UPDATE gui_rebalanceroute SET route_hex = $2, last_fee_ppm = $3 WHERE id = $1;
+-- name: UpdateRebalanceRouteProbe :exec
+-- The route prober verified a known route again.
+UPDATE gui_rebalanceroute SET route_hex = $2, last_fee_ppm = $3, last_probed = $4, probed_amount_sat = $5
+WHERE id = $1;
 
 -- name: InsertProbeLog :exec
 INSERT INTO gui_probelog

@@ -30,6 +30,7 @@ const (
 type rebalancerQuerier interface {
 	sourceQuerier
 	savedRoutesQuerier
+	attemptLogQuerier
 	purgeQuerier
 	sourceMapsQuerier
 	targetInfoQuerier
@@ -188,12 +189,12 @@ func (e *engine) runRebalancer(
 		rebalLog(fmt.Sprintf("%s starting rebalance for %s %s for %d sats and duration %d, using %d outbound channels",
 			worker, rebalance.TargetAlias, rebalance.LastHopPubkey, rebalance.Value, rebalance.Duration, len(chanIDs)))
 
-		var savedRoutes []db.GuiRebalanceroute
+		var savedRoutes []rankedRoute
 		if savedRoutesEnabled(ctx, q) {
 			purgeStaleRoutes(ctx, q, now())
 			routeLimit := getRouteLimit(ctx, q)
-			savedRoutes = getSavedRoutes(ctx, q, rebalance.LastHopPubkey, chanIDs, routeLimit, now())
-			rebalLog(fmt.Sprintf("Loaded %d saved routes to try", len(savedRoutes)))
+			savedRoutes = getSavedRoutes(ctx, q, rebalance.LastHopPubkey, chanIDs, routeLimit, int64(rebalance.Value), now())
+			rebalLog(fmt.Sprintf("Loaded %d saved routes to try (%s)", len(savedRoutes), countLists(savedRoutes)))
 		} else {
 			rebalLog("Saved routes disabled")
 		}
@@ -202,10 +203,13 @@ func (e *engine) runRebalancer(
 		savedSucceeded := false
 		triedSavedSources := make(map[string]struct{})
 
-		for _, sr := range savedRoutes {
-			if e.trySavedRoute(ctx, stub, routerstub, q, rebalance, sr, invoiceResp, sourceFeeMap,
+		for _, rr := range savedRoutes {
+			value := int64(rebalance.Value)
+			res := e.trySavedRoute(ctx, stub, routerstub, q, rebalance, rr.row, invoiceResp, sourceFeeMap,
 				targetFeeRate, arMaxCost, maxFeeRate, oppCostEnabled, feeLimitMsat, timeout,
-				&successfulOut, &successfulIn, triedSavedSources, &savedSucceeded, now) {
+				&successfulOut, &successfulIn, triedSavedSources, &savedSucceeded, now)
+			logRouteAttempt(ctx, q, rebalance.ID, rr, value, res, now())
+			if res.succeeded() {
 				break
 			}
 		}
