@@ -24,8 +24,8 @@ func reverseHex(b []byte) string {
 func (s *Server) handleOpenChannel(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		PeerPubkey *string `json:"peer_pubkey"`
-		LocalAmt   *int64  `json:"local_amt"`
-		SatPerByte *int64  `json:"sat_per_byte"`
+		LocalAmt   *drfInt `json:"local_amt"`
+		SatPerByte *drfInt `json:"sat_per_byte"`
 	}
 	if !decodeJSON(r, &body) || body.PeerPubkey == nil || body.LocalAmt == nil || body.SatPerByte == nil {
 		writeAPIError(w, "Invalid request!")
@@ -72,8 +72,8 @@ func (s *Server) handleOpenChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	stream, err := s.lnd.Lightning.OpenChannel(ctx, &lnrpc.OpenChannelRequest{
 		NodePubkey:         nodePubkey,
-		LocalFundingAmount: *body.LocalAmt,
-		SatPerByte:         *body.SatPerByte,
+		LocalFundingAmount: int64(*body.LocalAmt),
+		SatPerByte:         int64(*body.SatPerByte),
 	})
 	if err != nil {
 		writeAPIError(w, "Channel creation failed! Error: "+grpcErrorMsg(err))
@@ -94,15 +94,15 @@ func (s *Server) handleOpenChannel(w http.ResponseWriter, r *http.Request) {
 // initiates a force or graceful close and waits for the first close_pending update.
 func (s *Server) handleCloseChannel(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ChanID    *string `json:"chan_id"`
-		TargetFee *int64  `json:"target_fee"`
-		Force     *bool   `json:"force"`
+		ChanID    *string  `json:"chan_id"`
+		TargetFee *drfInt  `json:"target_fee"`
+		Force     *drfBool `json:"force"`
 	}
 	if !decodeJSON(r, &body) || body.ChanID == nil || body.TargetFee == nil {
 		writeAPIError(w, "Invalid request!")
 		return
 	}
-	force := body.Force != nil && *body.Force
+	force := body.Force != nil && bool(*body.Force)
 	chanID := *body.ChanID
 	ctx := r.Context()
 
@@ -131,7 +131,7 @@ func (s *Server) handleCloseChannel(w http.ResponseWriter, r *http.Request) {
 		req = &lnrpc.CloseChannelRequest{ChannelPoint: cp, Force: true}
 		label = "Channel force closed! Closing TXID: "
 	} else {
-		req = &lnrpc.CloseChannelRequest{ChannelPoint: cp, SatPerByte: *body.TargetFee}
+		req = &lnrpc.CloseChannelRequest{ChannelPoint: cp, SatPerByte: int64(*body.TargetFee)}
 		label = "Channel gracefully closed! Closing TXID: "
 	}
 	stream, err := s.lnd.Lightning.CloseChannel(ctx, req)

@@ -108,7 +108,8 @@ func TestOutboundFeeAppliesInboundOffset(t *testing.T) {
 
 	t.Run("chan_policy", func(t *testing.T) {
 		reset()
-		out := postViaServer(t, ts, "/api/chanpolicy/", `{"chan_id":"1","fee_rate":800}`)
+		// sent as the home page does: the input value as a string
+		out := postViaServer(t, ts, "/api/chanpolicy/", `{"chan_id":"1","fee_rate":"800"}`)
 		assert.EqualValues(t, 800, out["fee_rate"])
 		assert.EqualValues(t, -800, reqFor("1").GetInboundFee().GetFeeRatePpm(), "dynamic rate sent with the new fee")
 		_, inbound := fees("1")

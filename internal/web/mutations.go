@@ -16,16 +16,16 @@ import (
 // handleBumpFee calls walletrpc.BumpFee on the specified outpoint.
 func (s *Server) handleBumpFee(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Txid      *string `json:"txid"`
-		Index     *int64  `json:"index"`
-		TargetFee *int64  `json:"target_fee"`
-		Force     *bool   `json:"force"`
+		Txid      *string  `json:"txid"`
+		Index     *drfInt  `json:"index"`
+		TargetFee *drfInt  `json:"target_fee"`
+		Force     *drfBool `json:"force"`
 	}
 	if !decodeJSON(r, &body) || body.Txid == nil || body.Index == nil || body.TargetFee == nil {
 		writeAPIError(w, "Invalid request!")
 		return
 	}
-	force := body.Force != nil && *body.Force
+	force := body.Force != nil && bool(*body.Force)
 	_, err := s.lnd.Wallet.BumpFee(r.Context(), &walletrpc.BumpFeeRequest{
 		Outpoint:    &lnrpc.OutPoint{TxidStr: *body.Txid, OutputIndex: uint32(*body.Index)},
 		SatPerVbyte: uint64(*body.TargetFee),
@@ -35,8 +35,8 @@ func (s *Server) handleBumpFee(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, "Fee bump failed! Error: "+grpcErrorMsg(err))
 		return
 	}
-	msg := "Fee bumped to " + strconv.FormatInt(*body.TargetFee, 10) + " sats/vbyte for outpoint: " +
-		*body.Txid + ":" + strconv.FormatInt(*body.Index, 10)
+	msg := "Fee bumped to " + strconv.FormatInt(int64(*body.TargetFee), 10) + " sats/vbyte for outpoint: " +
+		*body.Txid + ":" + strconv.FormatInt(int64(*body.Index), 10)
 	writeJSON(w, http.StatusOK, newOrderedMap().Set("message", msg))
 }
 
@@ -152,14 +152,14 @@ func (s *Server) handleDisconnectPeer(w http.ResponseWriter, r *http.Request) {
 // handleAddInvoice creates an LND invoice for the requested amount.
 func (s *Server) handleAddInvoice(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Value *int64 `json:"value"`
+		Value *drfInt `json:"value"`
 	}
 	// value must be present and non-negative
-	if !decodeJSON(r, &body) || body.Value == nil || *body.Value < 0 {
+	if !decodeJSON(r, &body) || body.Value == nil || int64(*body.Value) < 0 {
 		writeAPIError(w, "Invalid request!")
 		return
 	}
-	resp, err := s.lnd.Lightning.AddInvoice(r.Context(), &lnrpc.Invoice{Value: *body.Value})
+	resp, err := s.lnd.Lightning.AddInvoice(r.Context(), &lnrpc.Invoice{Value: int64(*body.Value)})
 	if err != nil {
 		writeAPIError(w, "Invoice creation failed! Error: "+grpcErrorMsg(err))
 		return
@@ -194,13 +194,13 @@ func (s *Server) getNewAddress(ctx context.Context, legacy bool) (*lnrpc.NewAddr
 // handleNewAddress returns a new deposit address. Invalid body returns 400.
 func (s *Server) handleNewAddress(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Legacy *bool `json:"legacy"`
+		Legacy *drfBool `json:"legacy"`
 	}
 	if !decodeJSON(r, &body) { // legacy is optional, defaults to false
 		writeJSON(w, http.StatusBadRequest, newOrderedMap().Set("error", "Invalid request!"))
 		return
 	}
-	legacy := body.Legacy != nil && *body.Legacy
+	legacy := body.Legacy != nil && bool(*body.Legacy)
 	resp, err := s.getNewAddress(r.Context(), legacy)
 	if err != nil {
 		writeAPIError(w, "Address creation failed! Error: "+grpcErrorMsg(err))
@@ -214,7 +214,7 @@ func (s *Server) handleNewAddress(w http.ResponseWriter, r *http.Request) {
 // handleConsolidateUtxos sweeps all UTXOs to a new address at the specified fee rate.
 func (s *Server) handleConsolidateUtxos(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		SatPerVbyte *int64 `json:"sat_per_vbyte"`
+		SatPerVbyte *drfInt `json:"sat_per_vbyte"`
 	}
 	if !decodeJSON(r, &body) || body.SatPerVbyte == nil {
 		writeJSON(w, http.StatusBadRequest, newOrderedMap().Set("error", "Invalid request!"))

@@ -23,15 +23,15 @@ func channelPoint(fundingTxid string, outputIndex int32) *lnrpc.ChannelPoint {
 // syncs sibling channels. Returns the updated fields as a flat object.
 func (s *Server) handleChanPolicy(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ChanID         *string  `json:"chan_id"`
-		BaseFee        *int64   `json:"base_fee"`
-		FeeRate        *int64   `json:"fee_rate"`
-		InboundBaseFee *int64   `json:"inbound_base_fee"`
-		InboundFeeRate *int64   `json:"inbound_fee_rate"`
-		Disabled       *int64   `json:"disabled"`
-		Cltv           *int64   `json:"cltv"`
-		MinHtlc        *float64 `json:"min_htlc"`
-		MaxHtlc        *float64 `json:"max_htlc"`
+		ChanID         *string   `json:"chan_id"`
+		BaseFee        *drfInt   `json:"base_fee"`
+		FeeRate        *drfInt   `json:"fee_rate"`
+		InboundBaseFee *drfInt   `json:"inbound_base_fee"`
+		InboundFeeRate *drfInt   `json:"inbound_fee_rate"`
+		Disabled       *drfInt   `json:"disabled"`
+		Cltv           *drfInt   `json:"cltv"`
+		MinHtlc        *drfFloat `json:"min_htlc"`
+		MaxHtlc        *drfFloat `json:"max_htlc"`
 	}
 	// chan_id is a CharField with max_length=20; the channel must exist.
 	if !decodeJSON(r, &body) || body.ChanID == nil || len(*body.ChanID) > 20 {
@@ -53,7 +53,7 @@ func (s *Server) handleChanPolicy(w http.ResponseWriter, r *http.Request) {
 
 		baseFeeMsat := int64(ch.LocalBaseFee)
 		if body.BaseFee != nil {
-			baseFeeMsat = *body.BaseFee
+			baseFeeMsat = int64(*body.BaseFee)
 		}
 		feeRate := float64(ch.LocalFeeRate) / 1000000
 		if body.FeeRate != nil {
@@ -61,15 +61,15 @@ func (s *Server) handleChanPolicy(w http.ResponseWriter, r *http.Request) {
 		}
 		inboundBaseFeeMsat := int64(ch.LocalInboundBaseFee)
 		if body.InboundBaseFee != nil {
-			inboundBaseFeeMsat = *body.InboundBaseFee
+			inboundBaseFeeMsat = int64(*body.InboundBaseFee)
 		}
 		inboundFeeRate := int64(ch.LocalInboundFeeRate)
 		if body.InboundFeeRate != nil {
-			inboundFeeRate = *body.InboundFeeRate
+			inboundFeeRate = int64(*body.InboundFeeRate)
 		}
 		timeLockDelta := int64(ch.LocalCltv)
 		if body.Cltv != nil {
-			timeLockDelta = *body.Cltv
+			timeLockDelta = int64(*body.Cltv)
 		}
 		minHtlcMsat := ch.LocalMinHtlcMsat
 		if body.MinHtlc != nil {
@@ -121,10 +121,10 @@ func (s *Server) handleChanPolicy(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if body.BaseFee != nil {
-			if err := s.execChanPolicy(ctx, w, `UPDATE gui_channels SET local_base_fee=$2 WHERE chan_id=$1`, ch.ChanID, *body.BaseFee); err != nil {
+			if err := s.execChanPolicy(ctx, w, `UPDATE gui_channels SET local_base_fee=$2 WHERE chan_id=$1`, ch.ChanID, int64(*body.BaseFee)); err != nil {
 				return
 			}
-			returnResp.Set("base_fee", *body.BaseFee)
+			returnResp.Set("base_fee", int64(*body.BaseFee))
 		}
 		if body.FeeRate != nil {
 			newRate := int32(*body.FeeRate)
@@ -132,7 +132,7 @@ func (s *Server) handleChanPolicy(w http.ResponseWriter, r *http.Request) {
 				writeAPIError(w, "Channel policy update failed! Error: "+err.Error())
 				return
 			}
-			returnResp.Set("fee_rate", *body.FeeRate)
+			returnResp.Set("fee_rate", int64(*body.FeeRate))
 			_, updated, err := s.syncPeerOutboundFee(ctx, ch.RemotePubkey, ch.ChanID, newRate)
 			if err != nil {
 				writeAPIError(w, "Channel policy update failed! Error: "+grpcErrorMsg(err))
@@ -146,51 +146,51 @@ func (s *Server) handleChanPolicy(w http.ResponseWriter, r *http.Request) {
 			if err := s.execChanPolicy(ctx, w, `UPDATE gui_channels SET local_inbound_base_fee=$2 WHERE chan_id=$1`, ch.ChanID, int32(*body.InboundBaseFee)); err != nil {
 				return
 			}
-			returnResp.Set("inbound_base_fee", *body.InboundBaseFee)
+			returnResp.Set("inbound_base_fee", int64(*body.InboundBaseFee))
 		}
 		if body.InboundFeeRate != nil {
 			// same as the UI: an explicitly set rate wins over the offset automation
 			if err := s.execChanPolicy(ctx, w, `UPDATE gui_channels SET local_inbound_fee_rate=$2, inbound_offset=0 WHERE chan_id=$1`, ch.ChanID, int32(*body.InboundFeeRate)); err != nil {
 				return
 			}
-			returnResp.Set("inbound_fee_rate", *body.InboundFeeRate)
+			returnResp.Set("inbound_fee_rate", int64(*body.InboundFeeRate))
 			returnResp.Set("cleared_inbound_offset", ch.InboundOffset != 0)
 		}
 		if body.Cltv != nil {
 			if err := s.execChanPolicy(ctx, w, `UPDATE gui_channels SET local_cltv=$2 WHERE chan_id=$1`, ch.ChanID, int32(*body.Cltv)); err != nil {
 				return
 			}
-			returnResp.Set("cltv", *body.Cltv)
+			returnResp.Set("cltv", int64(*body.Cltv))
 		}
 		if body.MinHtlc != nil {
 			if err := s.execChanPolicy(ctx, w, `UPDATE gui_channels SET local_min_htlc_msat=$2 WHERE chan_id=$1`, ch.ChanID, int64(*body.MinHtlc*1000)); err != nil {
 				return
 			}
-			returnResp.Set("min_htlc", *body.MinHtlc)
+			returnResp.Set("min_htlc", float64(*body.MinHtlc))
 		}
 		if body.MaxHtlc != nil {
 			if err := s.execChanPolicy(ctx, w, `UPDATE gui_channels SET local_max_htlc_msat=$2 WHERE chan_id=$1`, ch.ChanID, int64(*body.MaxHtlc*1000)); err != nil {
 				return
 			}
-			returnResp.Set("max_htlc", *body.MaxHtlc)
+			returnResp.Set("max_htlc", float64(*body.MaxHtlc))
 		}
 	}
 
 	if body.Disabled != nil {
 		action := routerrpc.ChanStatusAction(0) // ENABLE
-		if *body.Disabled != 0 {
+		if int64(*body.Disabled) != 0 {
 			action = routerrpc.ChanStatusAction(1) // DISABLE
 		}
 		if _, err := s.lnd.Router.UpdateChanStatus(ctx, &routerrpc.UpdateChanStatusRequest{ChanPoint: cp, Action: action}); err != nil {
 			writeAPIError(w, "Channel policy update failed! Error: "+grpcErrorMsg(err))
 			return
 		}
-		if _, err := s.db.Exec(ctx, `UPDATE gui_channels SET local_disabled=$2 WHERE chan_id=$1`, ch.ChanID, *body.Disabled != 0); err != nil {
+		if _, err := s.db.Exec(ctx, `UPDATE gui_channels SET local_disabled=$2 WHERE chan_id=$1`, ch.ChanID, int64(*body.Disabled) != 0); err != nil {
 			writeAPIError(w, "Channel policy update failed! Error: "+err.Error())
 			return
 		}
 		// Bug fix: the disabled field is set to the disabled value, not the base_fee value.
-		returnResp.Set("disabled", *body.Disabled)
+		returnResp.Set("disabled", int64(*body.Disabled))
 	}
 
 	writeJSON(w, http.StatusOK, returnResp)
