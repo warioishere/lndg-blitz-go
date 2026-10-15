@@ -29,6 +29,8 @@ type Settings struct {
 	DATABASE_URL string
 
 	// Web layer settings.
+	// LOGIN_REQUIRED checks Basic Auth logins against the Django app's users
+	// unless WEB_BASIC_AUTH_USER/PASS are set (see internal/web/auth.go).
 	LOGIN_REQUIRED bool
 	DEBUG          bool
 	// WEB_BIND_ADDR is the host:port the HTTP server binds to.

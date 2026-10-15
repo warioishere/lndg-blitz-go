@@ -29,6 +29,7 @@ type Server struct {
 	txFees    txFeeFetcher
 	templates map[string]*template.Template
 	router    chi.Router
+	logins    djangoLogins
 }
 
 // Option configures the Server during construction.
@@ -70,8 +71,11 @@ func (s *Server) Handler() http.Handler { return s.router }
 func (s *Server) routes() chi.Router {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
-	if s.basicAuthEnabled() {
+	switch {
+	case s.basicAuthEnabled():
 		r.Use(s.basicAuth)
+	case s.cfg.LOGIN_REQUIRED:
+		r.Use(s.djangoBasicAuth)
 	}
 
 	// Static assets served under /static/.

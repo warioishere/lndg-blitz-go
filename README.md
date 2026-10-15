@@ -58,7 +58,7 @@ file.**
 | `WEB_BIND_ADDR` | `0.0.0.0:8889` | bind address of the HTTP server |
 | `WEB_BASIC_AUTH_USER` | _(empty)_ | when **both** auth vars are set, HTTP basic auth is enabled |
 | `WEB_BASIC_AUTH_PASS` | _(empty)_ | |
-| `LOGIN_REQUIRED` | `false` | gate for the auth middleware |
+| `LOGIN_REQUIRED` | `false` | without `WEB_BASIC_AUTH_*`: HTTP basic auth against the Django app's users (`auth_user` in the shared database, `pbkdf2_sha256` hashes); with no active user every request is refused |
 | `DEBUG` | `true` | debug flag |
 
 Example `lndg.conf`:
