@@ -25,11 +25,11 @@ func ffaChannelFrom(ch db.GuiChannel) ffaChannel {
 	}
 }
 
-// inboundOffsetRate is the inbound rate of af.InboundOffsetRate for the channel
-// once its outbound fee is newRate; ok is false without an inbound offset.
-func (s *Server) inboundOffsetRate(ctx context.Context, ch ffaChannel, newRate int) (int32, bool) {
-	rate, _, ok := af.InboundOffsetRate(af.InboundInput{
-		LocalFeeRate: newRate, InboundOffset: int(ch.inboundOffset),
+// inboundDynamicRate is the inbound rate of af.InboundDynamicRate for the
+// channel once its outbound fee is newRate; ok is false without dynamic inbound fees.
+func (s *Server) inboundDynamicRate(ctx context.Context, ch ffaChannel, newRate int) (int32, bool) {
+	rate, _, ok := af.InboundDynamicRate(af.InboundInput{
+		Dynamic: ch.inboundOffset != 0, LocalFeeRate: newRate,
 		ArMaxCost: int(ch.arMaxCost), ArInTarget: int(ch.arInTarget),
 		Capacity: ch.capacity, LocalBalance: ch.localBalance, PendingOutbound: ch.pendingOutbound,
 	}, s.settingFloatDefault(ctx, "AF-Exponent", 2.0))
@@ -72,7 +72,7 @@ func (s *Server) applyOutboundFee(ctx context.Context, ch ffaChannel, newRate fl
 		BaseFeeMsat: int64(ch.localBaseFee), FeeRate: newRate / 1000000, TimeLockDelta: uint32(ch.localCltv),
 	}
 	var inboundTarget *int32
-	if t, ok := s.inboundOffsetRate(ctx, ch, int(newRate)); ok {
+	if t, ok := s.inboundDynamicRate(ctx, ch, int(newRate)); ok {
 		inboundTarget = &t
 		req.InboundFee = &lnrpc.InboundFee{BaseFeeMsat: ch.localInboundBaseFee, FeeRatePpm: t}
 	}

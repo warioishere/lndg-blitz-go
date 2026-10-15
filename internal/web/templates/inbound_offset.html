@@ -2,41 +2,41 @@
 {{define "content"}}
 {{if .channels}}
 <div class="w3-container w3-padding-small">
-  <h2>Inbound Offset</h2>
-  <form method="post" id="bulkForm">
-    <input type="hidden" name="bulk" value="1">
+  <h2>Dynamic Inbound Fees</h2>
+  <p>Checked channels get an inbound discount while they are below their outbound target: up to Max Cost % of the outbound fee when empty, fading out to 0 at the target. Unchecked channels get no inbound discount.</p>
+  <form method="post" action="/inbound-offset/">
     <div class="w3-bar w3-border" style="margin-bottom:8px;display:flex;align-items:center;justify-content:center;">
-      <label class="w3-bar-item">Δ Offset:</label>
-      <input class="w3-bar-item" type="number" name="delta_offset" value="0" style="width:100px;text-align:center">
-      <button class="w3-bar-item w3-button w3-green" type="submit">Apply</button>
-      <a href="#" class="w3-bar-item w3-button w3-blue" onclick="toggleAll(true);return false;">Select All</a>
-      <a href="#" class="w3-bar-item w3-button w3-blue" onclick="toggleAll(false);return false;">Clear</a>
+      <button class="w3-bar-item w3-button w3-green" type="submit">Save</button>
+      <a href="#" class="w3-bar-item w3-button w3-blue" onclick="toggleAll(true);return false;">All On</a>
+      <a href="#" class="w3-bar-item w3-button w3-blue" onclick="toggleAll(false);return false;">All Off</a>
     </div>
-  <div class="w3-container w3-padding-small" style="overflow-x:auto;max-height:800px">
-    <table class="w3-table-all w3-centered w3-hoverable">
-      <tr>
-        <th></th>
-        <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Channel ID</th>
-        <th onclick="sortTable(event.target, 2, 'String', 0, 'a')">Peer Alias</th>
-        <th onclick="sortTable(event.target, 3, 'int')">Outbound PPM</th>
-        <th>Inbound Offset</th>
-      </tr>
-      {{range $channel := .channels}}
-      <tr>
-        <td><input type="checkbox" class="chanbox" name="channels" value="{{$channel.chan_id}}"></td>
-        <td title="{{$channel.funding_txid}}:{{$channel.output_index}}"><a href="/channel?={{$channel.chan_id}}" target="_blank">{{$channel.short_chan_id}}</a></td>
-        <td title="{{$channel.remote_pubkey}}">{{if not $channel.private}}<a href="{{$.graph_links}}/{{$.network}}node/{{$channel.remote_pubkey}}" target="_blank">{{end}}{{if eq (str $channel.alias) ""}}{{slice ":12" $channel.remote_pubkey}}{{else}}{{$channel.alias}}{{end}}{{if not $channel.private}}</a>{{end}}</td>
-        <td>{{$channel.local_fee_rate | intcomma}}</td>
-        <td>
-          <form action="/inbound-offset/" method="post" style="display:inline">
-            <input style="text-align:center" type="number" min="-100000" max="0" name="offset" value="{{default 0 $channel.inbound_offset}}">
-            <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
-          </form>
-        </td>
-      </tr>
-      {{end}}
-    </table>
-  </div>
+    <div class="w3-container w3-padding-small" style="overflow-x:auto;max-height:800px">
+      <table class="w3-table-all w3-centered w3-hoverable">
+        <tr>
+          <th onclick="sortTable(event.target, 0, 'String', 0, 'a')">Channel ID</th>
+          <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Peer Alias</th>
+          <th onclick="sortTable(event.target, 2, 'int')">Outbound PPM</th>
+          <th onclick="sortTable(event.target, 3, 'int')">Max Cost</th>
+          <th>Outbound / Target</th>
+          <th onclick="sortTable(event.target, 5, 'int')">Current Inbound PPM</th>
+          <th>Dynamic</th>
+        </tr>
+        {{range $channel := .channels}}
+        <tr>
+          <td title="{{$channel.funding_txid}}:{{$channel.output_index}}"><a href="/channel?={{$channel.chan_id}}" target="_blank">{{$channel.short_chan_id}}</a></td>
+          <td title="{{$channel.remote_pubkey}}">{{if not $channel.private}}<a href="{{$.graph_links}}/{{$.network}}node/{{$channel.remote_pubkey}}" target="_blank">{{end}}{{if eq (str $channel.alias) ""}}{{slice ":12" $channel.remote_pubkey}}{{else}}{{$channel.alias}}{{end}}{{if not $channel.private}}</a>{{end}}</td>
+          <td>{{$channel.local_fee_rate | intcomma}}</td>
+          <td>{{$channel.ar_max_cost}}%</td>
+          <td>{{default 0 $channel.out_percent}}% / {{$channel.out_target}}%</td>
+          <td>{{$channel.local_inbound_fee_rate | intcomma}}</td>
+          <td>
+            <input type="hidden" name="channels" value="{{$channel.chan_id}}">
+            <input type="checkbox" class="dynbox" name="dynamic" value="{{$channel.chan_id}}"{{if ne $channel.inbound_offset 0}} checked{{end}}>
+          </td>
+        </tr>
+        {{end}}
+      </table>
+    </div>
   </form>
 </div>
 {{else}}
@@ -49,7 +49,7 @@
 {{end}}
 <script>
 function toggleAll(val){
-  document.querySelectorAll('.chanbox').forEach(cb => cb.checked = val);
+  document.querySelectorAll('.dynbox').forEach(cb => cb.checked = val);
 }
 </script>
 {{end}}

@@ -55,7 +55,7 @@ func TestOutboundFeeAppliesInboundOffset(t *testing.T) {
 				"chan_id": c.id, "remote_pubkey": c.peer, "funding_txid": "ft" + c.id, "output_index": 0,
 				"alias": "a" + c.id, "is_open": true, "local_fee_rate": 500, "local_base_fee": 1000,
 				"local_cltv": 40, "inbound_offset": c.offset,
-				// empty channels with max cost 100%: the offset is the discount cap
+				// empty channels with max cost 100%: the discount is the whole outbound fee
 				"ar_max_cost": 100, "ar_in_target": 50, "capacity": 1000000, "local_balance": 0,
 			})
 		}
@@ -86,10 +86,10 @@ func TestOutboundFeeAppliesInboundOffset(t *testing.T) {
 		postForm("/update_setting/", url.Values{"key": {"ALL-oRate"}, "value": {"700"}})
 		rate, inbound := fees("1")
 		assert.EqualValues(t, 700, rate)
-		assert.EqualValues(t, -600, inbound, "primary channel gets its offset")
+		assert.EqualValues(t, -700, inbound, "dynamic channel: full cap while empty")
 		_, inbound = fees("2")
-		assert.EqualValues(t, -650, inbound, "sibling gets its offset")
-		assert.Nil(t, reqFor("3").GetInboundFee(), "no offset, no inbound fee sent")
+		assert.EqualValues(t, -700, inbound, "dynamic sibling too")
+		assert.Nil(t, reqFor("3").GetInboundFee(), "not dynamic: no inbound fee sent")
 		var logs int
 		require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM gui_inboundfeelog WHERE setting='Fee Adj Offset'`).Scan(&logs))
 		assert.Equal(t, 2, logs)
@@ -100,19 +100,19 @@ func TestOutboundFeeAppliesInboundOffset(t *testing.T) {
 		postForm("/update_channel/", url.Values{"chan_id": {"1"}, "target": {"600"}, "update_target": {"1"}})
 		rate, inbound := fees("1")
 		assert.EqualValues(t, 600, rate)
-		assert.EqualValues(t, -500, inbound)
+		assert.EqualValues(t, -600, inbound)
 		rate, inbound = fees("2")
 		assert.EqualValues(t, 600, rate)
-		assert.EqualValues(t, -550, inbound)
+		assert.EqualValues(t, -600, inbound)
 	})
 
 	t.Run("chan_policy", func(t *testing.T) {
 		reset()
 		out := postViaServer(t, ts, "/api/chanpolicy/", `{"chan_id":"1","fee_rate":800}`)
 		assert.EqualValues(t, 800, out["fee_rate"])
-		assert.EqualValues(t, -700, reqFor("1").GetInboundFee().GetFeeRatePpm(), "offset sent with the new rate")
+		assert.EqualValues(t, -800, reqFor("1").GetInboundFee().GetFeeRatePpm(), "dynamic rate sent with the new fee")
 		_, inbound := fees("1")
-		assert.EqualValues(t, -700, inbound)
+		assert.EqualValues(t, -800, inbound)
 
 		// a channel at its outbound target (50%) gets no discount
 		_, err := pool.Exec(ctx, `UPDATE gui_channels SET local_balance=500000 WHERE chan_id='2'`)

@@ -69,39 +69,38 @@ func TestInboundOffsetPostIntegration(t *testing.T) {
 		return string(b)
 	}
 
-	// Single: empty channel, offset -50 -> cap 150 -> inbound fee rate -150.
-	resp, err := client.PostForm(ts.URL+"/inbound-offset/", url.Values{"chan_id": {"600"}, "offset": {"-50"}})
+	// Channel 600 is switched on, channel 601 (dynamic before) off.
+	_, err := pool.Exec(ctx, `UPDATE gui_channels SET inbound_offset=-30, local_inbound_fee_rate=-70 WHERE chan_id='601'`)
+	require.NoError(t, err)
+	resp, err := client.PostForm(ts.URL+"/inbound-offset/", url.Values{"channels": {"600", "601"}, "dynamic": {"600"}})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusFound, resp.StatusCode)
-	require.Contains(t, flashMsg(resp), "Inbound fee rate for channel IOPeer (600) updated to a value of: -150")
-	require.EqualValues(t, -150, lastInbound)
+	require.Contains(t, flashMsg(resp), "Dynamic inbound fees switched on for 1 and off for 1 channel(s).")
 	var off, irate int
+	// empty channel, max cost 100% of 200 ppm -> -200
 	require.NoError(t, pool.QueryRow(ctx, `SELECT inbound_offset, local_inbound_fee_rate FROM gui_channels WHERE chan_id='600'`).Scan(&off, &irate))
-	require.Equal(t, -50, off)
-	require.Equal(t, -150, irate)
-	var logCount int
-	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM gui_inboundfeelog WHERE chan_id='600' AND setting='Manual Offset'`).Scan(&logCount))
-	require.Equal(t, 1, logCount)
-
-	// Bulk: delta -30 on selected empty channel 601 -> cap 70 -> rate -70.
-	resp, err = client.PostForm(ts.URL+"/inbound-offset/", url.Values{"bulk": {"1"}, "delta_offset": {"-30"}, "channels": {"601"}})
-	require.NoError(t, err)
-	require.Equal(t, http.StatusFound, resp.StatusCode)
-	require.Contains(t, flashMsg(resp), "Inbound offset adjusted by -30 for 1 channel(s).")
+	require.NotEqual(t, 0, off, "marked dynamic")
+	require.Equal(t, -200, irate)
 	require.NoError(t, pool.QueryRow(ctx, `SELECT inbound_offset, local_inbound_fee_rate FROM gui_channels WHERE chan_id='601'`).Scan(&off, &irate))
-	require.Equal(t, -30, off)
-	require.Equal(t, -70, irate)
-	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM gui_inboundfeelog WHERE chan_id='601' AND setting='Bulk Offset'`).Scan(&logCount))
-	require.Equal(t, 1, logCount)
+	require.Equal(t, 0, off)
+	require.Equal(t, 0, irate)
+	require.EqualValues(t, 0, lastInbound, "LND gets 0 for the channel switched off")
+	var logs int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM gui_inboundfeelog WHERE (chan_id='600' AND setting='Dynamic On') OR (chan_id='601' AND setting='Dynamic Off')`).Scan(&logs))
+	require.Equal(t, 2, logs)
 
-	// A channel at its outbound target (50%) gets no discount whatever the offset.
-	_, err = pool.Exec(ctx, `UPDATE gui_channels SET local_balance=500000 WHERE chan_id='600'`)
+	// Saving the same state changes nothing.
+	resp, err = client.PostForm(ts.URL+"/inbound-offset/", url.Values{"channels": {"600", "601"}, "dynamic": {"600"}})
 	require.NoError(t, err)
-	resp, err = client.PostForm(ts.URL+"/inbound-offset/", url.Values{"chan_id": {"600"}, "offset": {"-20"}})
+	require.Contains(t, flashMsg(resp), "switched on for 0 and off for 0 channel(s).")
+
+	// A balanced channel switched on gets no discount.
+	_, err = pool.Exec(ctx, `UPDATE gui_channels SET local_balance=500000 WHERE chan_id='601'`)
+	require.NoError(t, err)
+	resp, err = client.PostForm(ts.URL+"/inbound-offset/", url.Values{"channels": {"601"}, "dynamic": {"601"}})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusFound, resp.StatusCode)
-	require.EqualValues(t, 0, lastInbound)
-	require.NoError(t, pool.QueryRow(ctx, `SELECT inbound_offset, local_inbound_fee_rate FROM gui_channels WHERE chan_id='600'`).Scan(&off, &irate))
-	require.Equal(t, -20, off)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT inbound_offset, local_inbound_fee_rate FROM gui_channels WHERE chan_id='601'`).Scan(&off, &irate))
+	require.NotEqual(t, 0, off)
 	require.Equal(t, 0, irate)
 }

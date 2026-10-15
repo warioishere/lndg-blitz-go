@@ -9,24 +9,26 @@ func MaxCostDiscount(arMaxCost, localFeeRate int) float64 {
 	return (float64(arMaxCost) / 100.0) * float64(localFeeRate)
 }
 
-// InboundInput is the channel state the inbound offset rate depends on.
+// InboundInput is the channel state the dynamic inbound rate depends on.
+// Dynamic marks a channel whose inbound fee is managed (inbound_offset != 0).
 type InboundInput struct {
-	LocalFeeRate, InboundOffset, ArMaxCost, ArInTarget int
-	Capacity, LocalBalance, PendingOutbound            int64
+	Dynamic                                 bool
+	LocalFeeRate, ArMaxCost, ArInTarget     int
+	Capacity, LocalBalance, PendingOutbound int64
 }
 
-// InboundOffsetRate is the inbound fee rate of a channel with an inbound offset.
-// The discount is capped by the offset (outbound fee + offset) and by
-// MaxCostDiscount, and follows the channel's liquidity: the full cap while the
-// channel is empty, cap * (1 - fill^exponent) below its outbound target (fill =
-// outbound share / target), none at or above the target. A discount is paid to
-// refill the channel, so it fades out as the channel reaches its balance.
-// discountCap is the cap in ppm; ok is false for a channel without an offset.
-func InboundOffsetRate(in InboundInput, exponent float64) (rate int, discountCap float64, ok bool) {
-	if in.InboundOffset == 0 {
+// InboundDynamicRate is the inbound fee rate of a channel with dynamic inbound
+// fees. The discount cap is MaxCostDiscount; the discount follows the channel's
+// liquidity: the full cap while the channel is empty, cap * (1 - fill^exponent)
+// below its outbound target (fill = outbound share / target), none at or above
+// the target. A discount is paid to refill the channel, so it fades out as the
+// channel reaches its balance. discountCap is the cap in ppm; ok is false for a
+// channel without dynamic inbound fees.
+func InboundDynamicRate(in InboundInput, exponent float64) (rate int, discountCap float64, ok bool) {
+	if !in.Dynamic {
 		return 0, 0, false
 	}
-	discountCap = math.Min(float64(in.LocalFeeRate+in.InboundOffset), MaxCostDiscount(in.ArMaxCost, in.LocalFeeRate))
+	discountCap = MaxCostDiscount(in.ArMaxCost, in.LocalFeeRate)
 	if discountCap <= 0 {
 		return 0, 0, true
 	}

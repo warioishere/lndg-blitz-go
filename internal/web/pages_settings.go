@@ -190,11 +190,13 @@ func (s *Server) handleEmergencyFees(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleInboundOffset renders the inbound offset page with open channels ordered
-// by alias and IO settings. POST/bulk update is handled in Layer 6.
+// handleInboundOffset renders the dynamic inbound fee page: open channels ordered
+// by alias with their outbound share and target, and the IO settings.
 func (s *Server) handleInboundOffset(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.queryMaps(r.Context(),
-		`SELECT * FROM gui_channels WHERE is_open = true ORDER BY alias`)
+		`SELECT *, ((local_balance + pending_outbound) * 100 / NULLIF(capacity, 0))::integer AS out_percent,
+		        100 - ar_in_target AS out_target
+		   FROM gui_channels WHERE is_open = true ORDER BY alias`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

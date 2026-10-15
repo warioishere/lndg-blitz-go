@@ -25,9 +25,9 @@ type inboundOffsetsQuerier interface {
 // moves do not each send a channel update into the network.
 const inboundMinChange = 0.05
 
-// InboundOffsets sets the inbound fee rate of each channel with an inbound offset
-// to af.InboundOffsetRate: a discount that refills the channel up to its outbound
-// target, capped by the offset and by what the rebalancer may pay.
+// InboundOffsets sets the inbound fee rate of each channel with dynamic inbound
+// fees (inbound_offset != 0) to af.InboundDynamicRate: a discount that refills
+// the channel up to its outbound target, capped by what the rebalancer may pay.
 func InboundOffsets(ctx context.Context, q inboundOffsetsQuerier, client policyClient) error {
 	enabled, err := settingGateEnabled(ctx, q, "IO-Enabled")
 	if err != nil {
@@ -84,8 +84,8 @@ func InboundOffsets(ctx context.Context, q inboundOffsetsQuerier, client policyC
 		if ch.OffsetUpdated.Valid && !ch.OffsetUpdated.Time.Before(threshold) {
 			continue
 		}
-		target, discountCap, _ := af.InboundOffsetRate(af.InboundInput{
-			LocalFeeRate: int(ch.LocalFeeRate), InboundOffset: int(ch.InboundOffset),
+		target, discountCap, _ := af.InboundDynamicRate(af.InboundInput{
+			Dynamic: ch.InboundOffset != 0, LocalFeeRate: int(ch.LocalFeeRate),
 			ArMaxCost: int(ch.ArMaxCost), ArInTarget: int(ch.ArInTarget),
 			Capacity: ch.Capacity, LocalBalance: ch.LocalBalance, PendingOutbound: ch.PendingOutbound,
 		}, exponent)

@@ -392,23 +392,37 @@ func TestInboundOffsetPageIntegration(t *testing.T) {
 	defer cleanup()
 
 	insertRow(t, pool, "gui_channels", map[string]any{
-		"chan_id":        "701x1x0",
-		"short_chan_id":  "701x1x0",
-		"remote_pubkey":  "03abcabcabc",
-		"alias":          "OffsetPeer",
-		"private":        false,
-		"is_open":        true,
-		"local_fee_rate": 100,
-		"inbound_offset": -50,
-		"last_update":    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		"chan_id":                "701x1x0",
+		"short_chan_id":          "701x1x0",
+		"remote_pubkey":          "03abcabcabc",
+		"alias":                  "OffsetPeer",
+		"private":                false,
+		"is_open":                true,
+		"local_fee_rate":         100,
+		"inbound_offset":         -50,
+		"capacity":               1000000,
+		"local_balance":          250000,
+		"ar_in_target":           50,
+		"ar_max_cost":            90,
+		"local_inbound_fee_rate": -68,
+		"last_update":            time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	insertRow(t, pool, "gui_channels", map[string]any{
+		"chan_id": "702x1x0", "short_chan_id": "702x1x0", "remote_pubkey": "03def", "alias": "PlainPeer",
+		"private": false, "is_open": true, "local_fee_rate": 100, "inbound_offset": 0,
+		"last_update": time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 
 	srv := NewServer(&config.Settings{}, pool)
 	html := getPage(t, srv, "/inbound-offset/")
 	require.Contains(t, html, "<title>LNDg - Inbound Offset</title>")
-	require.Contains(t, html, "Inbound Offset")
+	require.Contains(t, html, "Dynamic Inbound Fees")
 	require.Contains(t, html, "OffsetPeer")
-	require.Contains(t, html, `value="-50"`)
+	require.Contains(t, html, `value="701x1x0" checked>`, "inbound_offset != 0: dynamic")
+	require.Contains(t, html, `value="702x1x0">`, "inbound_offset 0: not dynamic")
+	require.Contains(t, html, "<td>25% / 50%</td>")
+	require.Contains(t, html, "<td>90%</td>")
+	require.Contains(t, html, "<td>-68</td>", "current inbound rate")
 	require.Contains(t, html, "Inbound Offset Settings") // IO partial
 	require.Contains(t, html, "IO Update")
 }
