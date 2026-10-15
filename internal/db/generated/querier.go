@@ -81,13 +81,13 @@ type Querier interface {
 	GetPeer(ctx context.Context, pubkey string) (GuiPeer, error)
 	GetPeerAlias(ctx context.Context, pubkey string) (pgtype.Text, error)
 	GetPendingChannelByFunding(ctx context.Context, arg GetPendingChannelByFundingParams) (GuiPendingchannel, error)
+	// Probe-Subsystem (jobs.py:1064-1316): QueryRoutes-Binaersuche fuer AR-Targets,
+	// RebalanceRoute get_or_create und ProbeLog (gui_probelog = Schema A).
 	GetRebalanceRoute(ctx context.Context, arg GetRebalanceRouteParams) (GuiRebalanceroute, error)
 	// get_target_info: erstes is_open+auto_rebalance-Channel zu remote_pubkey. ORDER BY
 	// chan_id wie Djangos .first() (Primaerschluessel), sonst ist die Wahl bei mehreren
 	// Channels zum selben Peer zufaellig.
 	GetTargetChannelInfo(ctx context.Context, remotePubkey string) (GetTargetChannelInfoRow, error)
-	// _schedule_rebalance: existiert ein status in {0,1} Rebalance fuer den Ziel-Peer?
-	HasActiveRebalanceForPubkey(ctx context.Context, lastHopPubkey string) (bool, error)
 	IncrNodeReputationFailure(ctx context.Context, arg IncrNodeReputationFailureParams) error
 	// get_or_create(pubkey) + success_count += 1 + last_success = now.
 	IncrNodeReputationSuccess(ctx context.Context, arg IncrNodeReputationSuccessParams) error
@@ -103,7 +103,9 @@ type Querier interface {
 	InsertForward(ctx context.Context, arg InsertForwardParams) error
 	// GraphEvent.objects.create(...); timestamp = now (Django-Default).
 	InsertGraphEvent(ctx context.Context, arg InsertGraphEventParams) error
-	// GraphProbeLog.objects.create(...); timestamp = now (Django-Default).
+	// One forced-route probe through the new peer; rebalance_scheduled marks a
+	// purchase over the verified route. routes_new and routes_existing belong to
+	// the generic probe and stay 0.
 	InsertGraphProbeLog(ctx context.Context, arg InsertGraphProbeLogParams) error
 	InsertHistFailedHTLC(ctx context.Context, arg InsertHistFailedHTLCParams) error
 	InsertInboundFeeLog(ctx context.Context, arg InsertInboundFeeLogParams) error
@@ -141,7 +143,6 @@ type Querier interface {
 	// graph_watcher.py — Channel-Graph-Watcher Queries.
 	// _load_ar_targets: remote_pubkeys offener AR-Channels.
 	ListAutoRebalancePeerPubkeys(ctx context.Context) ([]string, error)
-	ListChanIDsByPubkey(ctx context.Context, remotePubkey string) ([]string, error)
 	// _refresh_alias_cache: dict(Channels.objects.values_list('chan_id', 'alias')).
 	ListChannelAliases(ctx context.Context) ([]ListChannelAliasesRow, error)
 	// get_source_fee_map + get_source_diff_map (chan_id__in). Beide Maps aus einer Query.
@@ -149,8 +150,6 @@ type Querier interface {
 	// Queries fuer die [Data]-Jobs (jobs.py).
 	ListEpEnabledChannels(ctx context.Context) ([]GuiChannel, error)
 	ListEpEnabledChannelsByIDs(ctx context.Context, dollar_1 []string) ([]GuiChannel, error)
-	// outbound_cans: is_open, exclude(auto_rebalance=True, ar_source=False).
-	ListGraphOutboundCans(ctx context.Context) ([]string, error)
 	ListInactivePeerPubkeys(ctx context.Context) ([]string, error)
 	// inbound_offsets: is_open=true, inbound_offset != 0 (jobs.py:780).
 	ListInboundOffsetChannels(ctx context.Context) ([]GuiChannel, error)
@@ -160,10 +159,6 @@ type Querier interface {
 	// _trigger_probe targets: offene AR-Channels zu remote_pubkey. ORDER BY chan_id wie
 	// Djangos targets.first() (Primaerschluessel); targets[0] bestimmt Fee und Budget.
 	ListOpenARChannelsByPubkey(ctx context.Context, remotePubkey string) ([]GuiChannel, error)
-	// Probe-Subsystem (jobs.py:1064-1316): QueryRoutes-Binaersuche fuer AR-Targets,
-	// RebalanceRoute get_or_create und ProbeLog (gui_probelog = Schema A).
-	// targets = Channels.objects.filter(is_open=True, auto_rebalance=True)
-	ListOpenAutoRebalanceChannels(ctx context.Context) ([]GuiChannel, error)
 	ListOpenChannelIDs(ctx context.Context) ([]string, error)
 	// Queries fuer den Auto-Fee-Lauf (af.py). Forwards-Aggregate, Rebalance-Payments
 	// fuer avg-cost, FailedHTLCs. amt_out_msat >= 1000000 entspricht dem Basisfilter
@@ -171,17 +166,11 @@ type Querier interface {
 	ListOpenChannels(ctx context.Context) ([]GuiChannel, error)
 	// Invoice-Queries fuer update_invoices / update_invoice.
 	ListOpenInvoices(ctx context.Context) ([]ListOpenInvoicesRow, error)
-	// outbound_cans = Channels.objects.filter(is_open=True)
-	//   .exclude(auto_rebalance=True, ar_source=False)  -> NOT (auto_rebalance AND NOT ar_source)
-	// Liefert zugleich local_fee_rate fuer die source_fee_map (gleiche Zeilenmenge).
-	ListOutboundCandidates(ctx context.Context) ([]ListOutboundCandidatesRow, error)
 	// clean_payments: exclude status=1, cleaned=false, creation_date<=cutoff, order by index, top 10.
 	ListPaymentsToClean(ctx context.Context, creationDate pgtype.Timestamptz) ([]ListPaymentsToCleanRow, error)
 	ListPeersNoAlias(ctx context.Context) ([]GuiPeer, error)
 	// get_pending_rebals: Rebalancer.objects.filter(status=0).order_by('id').
 	ListPendingRebalances(ctx context.Context) ([]GuiRebalancer, error)
-	// recent_routes: RebalanceRoute.filter(target_pubkey).order_by('-id')[:10].
-	ListRecentRoutesForTarget(ctx context.Context, targetPubkey string) ([]ListRecentRoutesForTargetRow, error)
 	// _remaining_drain: alle offenen AR-Channels zu remote_pubkey.
 	ListRemainingDrainChannels(ctx context.Context, remotePubkey string) ([]ListRemainingDrainChannelsRow, error)
 	// tested: NOT(success_count=0 AND failure_count=0), order_by('-weighted_ratio').

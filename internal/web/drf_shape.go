@@ -84,7 +84,7 @@ var drfShapes = map[string]drfShape{
 		{"id", "id"}, {"timestamp", "timestamp"}, {"targets_scanned", "targets_scanned"}, {"routes_found", "routes_found"}, {"routes_existing", "routes_existing"}, {"errors", "errors"}, {"duration_ms", "duration_ms"}, {"details", "details"},
 	}},
 	"graphprobelogs": {pk: "id", fields: []drfField{
-		{"id", "id"}, {"timestamp", "timestamp"}, {"target_pubkey", "target_pubkey"}, {"target_alias", "target_alias"}, {"target_fee", "target_fee"}, {"target_max_cost", "target_max_cost"}, {"trigger_chan_id", "trigger_chan_id"}, {"other_pubkey", "other_pubkey"}, {"other_alias", "other_alias"}, {"other_fee_ppm", "other_fee_ppm"}, {"budget_ppm", "budget_ppm"}, {"sources_tried", "sources_tried"}, {"routes_new", "routes_new"}, {"routes_existing", "routes_existing"}, {"errors", "errors"}, {"routes_via_new_peer", "routes_via_new_peer"}, {"rebalance_scheduled", "rebalance_scheduled"}, {"details", "details"},
+		{"id", "id"}, {"timestamp", "timestamp"}, {"target_pubkey", "target_pubkey"}, {"target_alias", "target_alias"}, {"target_fee", "target_fee"}, {"target_max_cost", "target_max_cost"}, {"trigger_chan_id", "trigger_chan_id"}, {"other_pubkey", "other_pubkey"}, {"other_alias", "other_alias"}, {"other_fee_ppm", "other_fee_ppm"}, {"budget_ppm", "budget_ppm"}, {"sources_tried", "sources_tried"}, {"routes_new", "routes_new"}, {"routes_existing", "routes_existing"}, {"errors", "errors"}, {"routes_via_new_peer", "routes_via_new_peer"}, {"rebalance_scheduled", "rebalance_scheduled"}, {"details", "details"}, {"buy_ppm", "buy_ppm"}, {"via_fee_ppm", "via_fee_ppm"}, {"via_amount_sat", "via_amount_sat"}, {"buy_status", "buy_status"},
 	}},
 }
 

@@ -201,6 +201,10 @@ type GuiGraphprobelog struct {
 	RoutesViaNewPeer   int32              `json:"routes_via_new_peer"`
 	RebalanceScheduled bool               `json:"rebalance_scheduled"`
 	Details            string             `json:"details"`
+	BuyPpm             pgtype.Int4        `json:"buy_ppm"`
+	ViaFeePpm          pgtype.Int4        `json:"via_fee_ppm"`
+	ViaAmountSat       pgtype.Int8        `json:"via_amount_sat"`
+	BuyStatus          pgtype.Int4        `json:"buy_status"`
 }
 
 type GuiHistfailedhtlc struct {

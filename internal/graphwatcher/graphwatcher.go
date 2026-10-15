@@ -1,11 +1,14 @@
 // Package graphwatcher subscribes to the LND channel graph, detects new
-// channels to auto-rebalance targets, probes routes via jobs.ProbeTargets,
-// and schedules rebalances when viable routes are found.
+// channels to auto-rebalance targets and, when the new peer's fee toward the
+// target is below the target's buy price, probes refill routes through that
+// new channel (jobs.ProbeVia) and buys over a verified route that costs less
+// than the buy price.
 package graphwatcher
 
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -13,11 +16,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"google.golang.org/grpc"
 
+	af "github.com/warioishere/lndg-blitz-go/internal/af"
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/jobs"
 	lnd "github.com/warioishere/lndg-blitz-go/internal/lnd"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
-	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
 // Querier bundles all database access required by graphwatcher.
@@ -27,15 +30,13 @@ type Querier interface {
 	UpsertNodeCache(ctx context.Context, arg db.UpsertNodeCacheParams) error
 	ListAutoRebalancePeerPubkeys(ctx context.Context) ([]string, error)
 	ListOpenARChannelsByPubkey(ctx context.Context, remotePubkey string) ([]db.GuiChannel, error)
-	ListGraphOutboundCans(ctx context.Context) ([]string, error)
-	ListChannelFeeAndDiffByIDs(ctx context.Context, dollar_1 []string) ([]db.ListChannelFeeAndDiffByIDsRow, error)
-	ListRecentRoutesForTarget(ctx context.Context, targetPubkey string) ([]db.ListRecentRoutesForTargetRow, error)
-	HasActiveRebalanceForPubkey(ctx context.Context, lastHopPubkey string) (bool, error)
+	RebalPaymentsForChannel(ctx context.Context, arg db.RebalPaymentsForChannelParams) ([]db.RebalPaymentsForChannelRow, error)
 	InsertGraphProbeLog(ctx context.Context, arg db.InsertGraphProbeLogParams) error
 	InsertGraphEvent(ctx context.Context, arg db.InsertGraphEventParams) error
 	UpdateGraphEventRoutesFound(ctx context.Context, arg db.UpdateGraphEventRoutesFoundParams) error
 	DeleteOldGraphEvents(ctx context.Context) error
 	InsertRebalancerRecord(ctx context.Context, arg db.InsertRebalancerRecordParams) (int64, error)
+	UpdateRebalancerRecord(ctx context.Context, arg db.UpdateRebalancerRecordParams) error
 }
 
 // Client bundles the LND RPCs needed by graphwatcher (subset of LightningClient).
@@ -43,10 +44,12 @@ type Client interface {
 	jobs.ProbeLightningClient // GetInfo, QueryRoutes
 	GetNodeInfo(ctx context.Context, in *lnrpc.NodeInfoRequest, opts ...grpc.CallOption) (*lnrpc.NodeInfo, error)
 	GetChanInfo(ctx context.Context, in *lnrpc.ChanInfoRequest, opts ...grpc.CallOption) (*lnrpc.ChannelEdge, error)
+	AddInvoice(ctx context.Context, in *lnrpc.Invoice, opts ...grpc.CallOption) (*lnrpc.AddInvoiceResponse, error)
 	SubscribeChannelGraph(ctx context.Context, in *lnrpc.GraphTopologySubscription, opts ...grpc.CallOption) (grpc.ServerStreamingClient[lnrpc.GraphTopologyUpdate], error)
 }
 
-// Deps bundles all external dependencies. Router is used by ProbeTargets (BuildRoute/SendToRouteV2).
+// Deps bundles all external dependencies. Router is used by jobs.ProbeVia and
+// buyVia (BuildRoute/SendToRouteV2).
 type Deps struct {
 	Q      Querier
 	LN     Client
@@ -60,15 +63,6 @@ func gwLog(msg string) {
 }
 
 func chanIDStr(id uint64) string { return strconv.FormatUint(id, 10) }
-
-func formatChanIDList(cids []string) string { return "[" + strings.Join(cids, ", ") + "]" }
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 // getSetting returns the value of a local setting, or def if not found.
 func getSetting(ctx context.Context, q Querier, key, def string) string {
@@ -137,17 +131,29 @@ func (d Deps) getAlias(ctx context.Context, pubkey string) string {
 	return pubkey
 }
 
-// triggerProbe probes routes to a target pubkey from all eligible outbound sources,
-// logs the results, and schedules a rebalance if any route was found. Returns total_new.
-func (d Deps) triggerProbe(ctx context.Context, selfPubkey, targetPubkey, otherPubkey string, otherFeePpm pgtype.Int4, chanID string, now time.Time) (int, error) {
+// probePlan is what probeGate hands to triggerProbe: the target's open AR
+// channels (targets[0] sets fee and budget) and the gate's prices in ppm.
+type probePlan struct {
+	targets   []db.GuiChannel
+	buyPpm    int
+	budgetPpm int
+}
+
+// probeGate decides whether a new channel of another node to the target is
+// worth a probe: the target has an open AR channel with remote balance above
+// reserve, and the node's fee toward the target is below the buy price there.
+// The buy price is the target's rebalance cost as the FLP floor computes it
+// (af.AvgRebalanceCostPPM over FLP-Lookback rebalances, source fee included),
+// or the budget (target fee * ar_max_cost %) without rebalance history. A nil
+// plan comes with the reason it was skipped.
+func (d Deps) probeGate(ctx context.Context, targetPubkey string, otherFeePpm int64) (*probePlan, string, error) {
 	targets, err := d.Q.ListOpenARChannelsByPubkey(ctx, targetPubkey)
 	if err != nil {
-		return 0, err
+		return nil, "", err
 	}
 	if len(targets) == 0 {
-		return 0, nil
+		return nil, "no open AR channel", nil
 	}
-	ch := targets[0]
 	allFull := true
 	for _, c := range targets {
 		if c.RemoteBalance > int64(c.LocalChanReserve) {
@@ -156,142 +162,115 @@ func (d Deps) triggerProbe(ctx context.Context, selfPubkey, targetPubkey, otherP
 		}
 	}
 	if allFull {
-		gwLog(fmt.Sprintf("%s - skip, all channels full", ch.Alias))
-		return 0, nil
+		return nil, "all channels full", nil
 	}
-	outboundCans, err := d.Q.ListGraphOutboundCans(ctx)
+	ch := targets[0]
+	plan := &probePlan{targets: targets, budgetPpm: int(float64(int(ch.LocalFeeRate)*int(ch.ArMaxCost)) / 100)}
+	pays, err := d.Q.RebalPaymentsForChannel(ctx, db.RebalPaymentsForChannelParams{
+		RebalChan: pgtype.Text{String: ch.ChanID, Valid: true},
+		Limit:     int32(atoiOr(getSetting(ctx, d.Q, "FLP-Lookback", "10"), 10)),
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	plan.buyPpm = plan.budgetPpm
+	if v := af.AvgRebalanceCostPPM(pays); v != nil {
+		plan.buyPpm = *v
+	}
+	if otherFeePpm >= int64(plan.buyPpm) {
+		return nil, fmt.Sprintf("peer fee %d ppm not below buy price %d ppm", otherFeePpm, plan.buyPpm), nil
+	}
+	return plan, "", nil
+}
+
+// triggerProbe probes refill routes of the target that run through the other
+// node's new channel (jobs.ProbeVia), buys over a verified route that costs
+// less than the buy price (buyVia), and logs both to GraphProbeLog. No route is
+// stored. Returns the number of verified routes.
+func (d Deps) triggerProbe(ctx context.Context, selfPubkey string, plan *probePlan, otherPubkey string, otherFeePpm int64, chanID string, now time.Time) (int, error) {
+	channels, err := d.Q.ListActiveOpenPublicChannels(ctx)
 	if err != nil {
 		return 0, err
-	}
-	feeRows, err := d.Q.ListChannelFeeAndDiffByIDs(ctx, outboundCans)
-	if err != nil {
-		return 0, err
-	}
-	sourceFeeMap := make(map[string]int, len(feeRows))
-	for _, r := range feeRows {
-		sourceFeeMap[r.ChanID] = int(r.LocalFeeRate)
 	}
 	maxFeeRate := atoiOr(getSetting(ctx, d.Q, "AR-MaxFeeRate", "500"), 500)
 	maxPerTarget := atoiOr(getSetting(ctx, d.Q, "QR-MaxPerTarget", "5"), 5)
 
-	otherAlias := "?"
-	if otherPubkey != "" {
-		otherAlias = d.getAlias(ctx, otherPubkey)
-	}
-	budgetPpm := int(float64(int(ch.LocalFeeRate)*int(ch.ArMaxCost)) / 100)
-	sourcesTried := minInt(len(outboundCans), maxPerTarget)
-	gwLog(fmt.Sprintf("Probing %s (fee=%d ppm) triggered by new channel %s from %s (fee=%s ppm)",
-		ch.Alias, ch.LocalFeeRate, chanID, otherAlias, int4Str(otherFeePpm)))
-	gwLog(fmt.Sprintf("  trying %d of %d outbound sources, budget = %d * %d%% = %d ppm",
-		sourcesTried, len(outboundCans), ch.LocalFeeRate, ch.ArMaxCost, budgetPpm))
+	ch := plan.targets[0]
+	otherAlias := d.getAlias(ctx, otherPubkey)
+	gwLog(fmt.Sprintf("Probing %s via %s (fee=%d ppm, buy price %d ppm, budget %d ppm) triggered by new channel %s",
+		ch.Alias, otherAlias, otherFeePpm, plan.buyPpm, plan.budgetPpm, chanID))
 
-	totalNew, totalExisting, totalErrors, err := jobs.ProbeTargets(ctx, d.LN, d.Router, d.Q, selfPubkey, targets, outboundCans, sourceFeeMap, maxFeeRate, maxPerTarget)
+	attempts, err := jobs.ProbeVia(ctx, d.LN, d.Router, selfPubkey, ch, otherPubkey, channels, maxFeeRate, maxPerTarget)
 	if err != nil {
 		return 0, err
 	}
-
-	recent, err := d.Q.ListRecentRoutesForTarget(ctx, targetPubkey)
-	if err != nil {
-		return 0, err
+	var lines []string
+	addLine := func(l string) {
+		lines = append(lines, l)
+		gwLog("  " + l)
 	}
-	var routeLines []string
-	routesViaNew := 0
-	for _, rr := range recent {
-		hops := strings.Split(rr.Route, "-")
-		viaNew := false
-		if otherPubkey != "" {
-			for _, h := range hops {
-				if h == otherPubkey {
-					viaNew = true
-					break
-				}
+	verified, failed := 0, 0
+	var viaFee pgtype.Int4
+	var viaAmount pgtype.Int8
+	var best *jobs.ViaAttempt
+	for i, a := range attempts {
+		head := fmt.Sprintf("out=%s (source fee %d ppm), %d hops", a.SourceChanID, a.SourceFeeRate, len(a.HopKeys))
+		if !a.Verified {
+			failed++
+			addLine(head + ": failed")
+			continue
+		}
+		verified++
+		best = &attempts[i]
+		routePpm := 0.0 // no fee ppm from the probe: the route charged no fees
+		if a.FeePpm != nil {
+			routePpm = *a.FeePpm
+		}
+		viaFee = pgtype.Int4{Int32: int32(math.Round(routePpm)) + int32(a.SourceFeeRate), Valid: true}
+		viaAmount = pgtype.Int8{Int64: a.AmountSat, Valid: true}
+		addLine(fmt.Sprintf("%s: verified %d sat @ %d ppm incl. source fee", head, a.AmountSat, viaFee.Int32))
+	}
+	if len(attempts) == 0 {
+		addLine("no route to " + otherAlias + " from any source")
+	}
+
+	var buyStatus pgtype.Int4
+	bought := false
+	switch {
+	case best == nil:
+	case int(viaFee.Int32) >= plan.buyPpm:
+		addLine(fmt.Sprintf("no purchase: %d ppm not below buy price %d ppm", viaFee.Int32, plan.buyPpm))
+	default:
+		rec, sent, berr := d.buyVia(ctx, ch, *best, plan.buyPpm)
+		switch {
+		case berr != nil && !sent:
+			addLine("purchase error: " + berr.Error())
+		case !sent:
+			addLine(fmt.Sprintf("no purchase: rebuilt route not below buy price %d ppm", plan.buyPpm))
+		default:
+			bought = true
+			buyStatus = pgtype.Int4{Int32: rec.Status, Valid: true}
+			if rec.Status == rebalSucceeded {
+				addLine(fmt.Sprintf("bought %d sat for %.3f sat fees (rebalance %d)", rec.Value, rec.FeesPaid.Float64, rec.ID))
+			} else {
+				addLine(fmt.Sprintf("purchase of %d sat failed with status %d (rebalance %d)", rec.Value, rec.Status, rec.ID))
+			}
+			if berr != nil {
+				addLine("error saving rebalance record: " + berr.Error())
 			}
 		}
-		if viaNew {
-			routesViaNew++
-		}
-		feeStr := "? ppm"
-		if rr.LastFeePpm.Valid && rr.LastFeePpm.Float64 != 0 {
-			feeStr = fmt.Sprintf("%d ppm", int(rr.LastFeePpm.Float64))
-		}
-		marker := ""
-		if viaNew {
-			marker = " ← via new peer!"
-		}
-		line := fmt.Sprintf("%d hops, %s, out=%s%s", len(hops), feeStr, rr.OutgoingChanID, marker)
-		routeLines = append(routeLines, line)
-		gwLog(fmt.Sprintf("  route: %s", line))
-	}
-	gwLog(fmt.Sprintf("  result: %d new, %d existing, %d errors, %d via new peer", totalNew, totalExisting, totalErrors, routesViaNew))
-
-	scheduled := false
-	if totalNew+totalExisting > 0 {
-		if serr := d.scheduleRebalance(ctx, targetPubkey, targets, outboundCans, sourceFeeMap, maxFeeRate, now); serr != nil {
-			return 0, serr
-		}
-		scheduled = true
-	} else {
-		gwLog("  no routes found, skipping rebalance")
 	}
 
 	if err := d.Q.InsertGraphProbeLog(ctx, db.InsertGraphProbeLogParams{
-		Timestamp: pgtype.Timestamptz{Time: now, Valid: true}, TargetPubkey: targetPubkey, TargetAlias: ch.Alias,
+		Timestamp: pgtype.Timestamptz{Time: now, Valid: true}, TargetPubkey: ch.RemotePubkey, TargetAlias: ch.Alias,
 		TargetFee: ch.LocalFeeRate, TargetMaxCost: ch.ArMaxCost, TriggerChanID: chanID,
-		OtherPubkey: otherPubkey, OtherAlias: otherAlias, OtherFeePpm: otherFeePpm,
-		BudgetPpm: int32(budgetPpm), SourcesTried: int32(sourcesTried),
-		RoutesNew: int32(totalNew), RoutesExisting: int32(totalExisting), Errors: int32(totalErrors),
-		RoutesViaNewPeer: int32(routesViaNew), RebalanceScheduled: scheduled, Details: strings.Join(routeLines, "\n"),
+		OtherPubkey: otherPubkey, OtherAlias: otherAlias, OtherFeePpm: pgtype.Int4{Int32: int32(otherFeePpm), Valid: true},
+		BudgetPpm: int32(plan.budgetPpm), SourcesTried: int32(len(attempts)), Errors: int32(failed),
+		RoutesViaNewPeer: int32(verified), RebalanceScheduled: bought, Details: strings.Join(lines, "\n"),
+		BuyPpm: pgtype.Int4{Int32: int32(plan.buyPpm), Valid: true}, ViaFeePpm: viaFee, ViaAmountSat: viaAmount,
+		BuyStatus: buyStatus,
 	}); err != nil {
 		return 0, err
 	}
-	return totalNew, nil
-}
-
-// scheduleRebalance inserts a rebalancer record for the target if no active rebalance exists,
-// the channel has usable remote balance, and the computed fee rate is positive.
-func (d Deps) scheduleRebalance(ctx context.Context, targetPubkey string, targets []db.GuiChannel, outboundCans []string, sourceFeeMap map[string]int, maxFeeRate int, now time.Time) error {
-	active, err := d.Q.HasActiveRebalanceForPubkey(ctx, targetPubkey)
-	if err != nil {
-		return err
-	}
-	if active {
-		return nil
-	}
-	if len(targets) == 0 {
-		return nil
-	}
-	ch := targets[0]
-	if ch.RemoteBalance <= int64(ch.LocalChanReserve) {
-		return nil
-	}
-	targetTime := atoiOr(getSetting(ctx, d.Q, "AR-Time", "5"), 5)
-	minSourceFee := 0
-	first := true
-	for _, v := range sourceFeeMap {
-		if first || v < minSourceFee {
-			minSourceFee = v
-			first = false
-		}
-	}
-	feeRate := minInt(maxFeeRate, int(float64(ch.LocalFeeRate)*(float64(ch.ArMaxCost)/100))-minSourceFee)
-	if feeRate <= 0 {
-		return nil
-	}
-	feeLimit := pyround.Round(float64(feeRate)*float64(ch.ArAmtTarget)*0.000001, 3)
-	if _, err := d.Q.InsertRebalancerRecord(ctx, db.InsertRebalancerRecordParams{
-		Requested: pgtype.Timestamptz{Time: now, Valid: true}, Value: int32(ch.ArAmtTarget), FeeLimit: feeLimit,
-		OutgoingChanIds: formatChanIDList(outboundCans), LastHopPubkey: targetPubkey, TargetAlias: ch.Alias,
-		Duration: int32(targetTime), Status: 0,
-	}); err != nil {
-		return err
-	}
-	gwLog(fmt.Sprintf("Scheduled rebalance for %s: %d sats @ max %d ppm (bypassing ar_in_target)", ch.Alias, ch.ArAmtTarget, feeRate))
-	return nil
-}
-
-func int4Str(v pgtype.Int4) string {
-	if !v.Valid {
-		return "None"
-	}
-	return strconv.Itoa(int(v.Int32))
+	return verified, nil
 }

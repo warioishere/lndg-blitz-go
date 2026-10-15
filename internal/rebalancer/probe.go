@@ -221,12 +221,7 @@ func (e *engine) trySingleSource(
 			}
 			hopKeys = append(hopKeys, b)
 		}
-		var cltvDelta int32
-		if len(hops) >= 2 {
-			cltvDelta = int32(hops[len(hops)-1].GetExpiry()) - int32(hops[len(hops)-2].GetExpiry())
-		} else {
-			cltvDelta = 144
-		}
+		const cltvDelta = FinalCltvDelta
 
 		// BuildRoute with payment_addr so the payment can actually be sent over this route.
 		build, berr := routerstub.BuildRoute(ctx, &routerrpc.BuildRouteRequest{
@@ -320,7 +315,7 @@ func (e *engine) trySingleSource(
 			probed := probeRouteAmount(ctx, routerstub, hopKeys, sourceChanID, cltvDelta, int64(rebalance.Value))
 			if probed > 0 {
 				rebalLog(fmt.Sprintf("Probe found max %d sats via %s", probed, srcLabel))
-				probeInvoice, aerr := stub.AddInvoice(ctx, &lnrpc.Invoice{Value: probed, Expiry: int64(timeout / time.Second)})
+				probeInvoice, aerr := stub.AddInvoice(ctx, &lnrpc.Invoice{Value: probed, Expiry: int64(timeout / time.Second), CltvExpiry: FinalCltvDelta})
 				if aerr != nil {
 					return nil, aerr
 				}

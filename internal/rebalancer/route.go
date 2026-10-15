@@ -42,14 +42,10 @@ func routePath(r *lnrpc.Route) string {
 	return strings.Join(parts, "-")
 }
 
-// routeCltv returns the CLTV delta of the final hop, or 144 for single-hop routes.
-func routeCltv(r *lnrpc.Route) int {
-	hops := r.GetHops()
-	if len(hops) >= 2 {
-		return int(hops[len(hops)-1].GetExpiry()) - int(hops[len(hops)-2].GetExpiry())
-	}
-	return 144
-}
+// FinalCltvDelta is the final CLTV delta of every rebalance route and the
+// CltvExpiry of every rebalance invoice, so route and invoice always agree. A
+// route cannot tell it: LND gives the last two hops of a route the same expiry.
+const FinalCltvDelta = 144
 
 // routeQuerier bundles the DB access required by the route-record functions.
 type routeQuerier interface {
@@ -78,7 +74,6 @@ func updateRoute(ctx context.Context, q routeQuerier, pubkey, chanID, routeHex s
 		return
 	}
 	path := routePath(parsed)
-	cltv := routeCltv(parsed)
 
 	key := db.GetRebalanceRouteParams{TargetPubkey: pubkey, OutgoingChanID: chanID, Route: path}
 	ro, gerr := q.GetRebalanceRoute(ctx, key)
@@ -86,23 +81,21 @@ func updateRoute(ctx context.Context, q routeQuerier, pubkey, chanID, routeHex s
 		// Insert new record with defaults; last_fee_ppm is left NULL.
 		if e := q.InsertRebalanceRoute(ctx, db.InsertRebalanceRouteParams{
 			TargetPubkey: pubkey, OutgoingChanID: chanID, Route: path,
-			FinalCltvDelta: int32(cltv), RouteHex: textOf(routeHex), LastFeePpm: pgtype.Float8{},
+			FinalCltvDelta: FinalCltvDelta, RouteHex: textOf(routeHex), LastFeePpm: pgtype.Float8{},
 		}); e != nil {
 			rebalLog(fmt.Sprintf("Error updating route record: %s", e))
 			return
 		}
 		ro = db.GuiRebalanceroute{
 			TargetPubkey: pubkey, OutgoingChanID: chanID, Route: path,
-			FinalCltvDelta: int32(cltv), RouteHex: textOf(routeHex),
+			FinalCltvDelta: FinalCltvDelta, RouteHex: textOf(routeHex),
 		}
 	} else if gerr != nil {
 		rebalLog(fmt.Sprintf("Error updating route record: %s", gerr))
 		return
 	}
 
-	if ro.FinalCltvDelta != int32(cltv) {
-		ro.FinalCltvDelta = int32(cltv)
-	}
+	ro.FinalCltvDelta = FinalCltvDelta
 	if !ro.RouteHex.Valid || ro.RouteHex.String == "" {
 		ro.RouteHex = textOf(routeHex)
 	}

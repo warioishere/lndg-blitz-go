@@ -1,5 +1,5 @@
 // Command jobs connects a pgxpool and shared LND channel to jobs.DataLoop,
-// running the background data-collection loop.
+// running the background data-collection loop, and to jobs.ProbeLoop.
 package main
 
 import (
@@ -53,6 +53,14 @@ func run() error {
 		pool.Reset,
 		20*time.Second,
 	)
+
+	// The route prober runs beside the Data loop on the same shared channel.
+	go jobs.ProbeLoop(ctx, db.New(pool), lnd.GetSharedChannel, func(d time.Duration) {
+		select {
+		case <-time.After(d):
+		case <-ctx.Done():
+		}
+	})
 
 	if err := jobs.DataLoop(ctx, deps); err != nil && ctx.Err() == nil {
 		return err

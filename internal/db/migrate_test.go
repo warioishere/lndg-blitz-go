@@ -121,7 +121,7 @@ func TestMigrateTakesOverDjangoDatabase(t *testing.T) {
 	var version int
 	var dirty bool
 	require.NoError(t, conn.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty))
-	assert.Equal(t, 3, version)
+	assert.Equal(t, 4, version)
 	assert.False(t, dirty)
 	var value string
 	require.NoError(t, conn.QueryRow(ctx, `SELECT value FROM gui_localsettings WHERE key='AR-Enabled'`).Scan(&value))
@@ -132,4 +132,7 @@ func TestMigrateTakesOverDjangoDatabase(t *testing.T) {
 	var hasShadow bool
 	require.NoError(t, conn.QueryRow(ctx, `SELECT to_regclass('public.shadow_fee_log') IS NOT NULL`).Scan(&hasShadow))
 	assert.True(t, hasShadow, "000003 applied")
+	var hasVia bool
+	require.NoError(t, conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='gui_graphprobelog' AND column_name='via_fee_ppm')`).Scan(&hasVia))
+	assert.True(t, hasVia, "000004 applied")
 }

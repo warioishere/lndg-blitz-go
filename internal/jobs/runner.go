@@ -7,7 +7,6 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
-	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc/routerrpc"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc/signrpc"
 )
 
@@ -41,8 +40,7 @@ func BuildDataDeps(q DataQuerier, getConn func() (*grpc.ClientConn, error), rese
 				LightningClient: lnrpc.NewLightningClient(conn),
 				signer:          signrpc.NewSignerClient(conn),
 			}
-			routerstub := routerrpc.NewRouterClient(conn)
-			return RunDataJobs(ctx, q, stub, routerstub)
+			return RunDataJobs(ctx, q, stub)
 		},
 		ResetChannel: resetConn,
 		ResetPool:    resetPool,

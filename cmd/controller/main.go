@@ -92,6 +92,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("connecting to lnd: %w", err)
 	}
+	probeConn, err := lnd.Connect()
+	if err != nil {
+		return fmt.Errorf("connecting to lnd: %w", err)
+	}
 
 	q := db.New(pool)
 	sleep := func(d time.Duration) {
@@ -114,6 +118,11 @@ func run() error {
 	start(func() {
 		deps := jobs.BuildDataDeps(q, jobsConn.get, jobsConn.reset, pool.Reset, 20*time.Second)
 		_ = jobs.DataLoop(ctx, deps)
+	})
+
+	// route prober for the rebalancer (own loop: a run takes minutes).
+	start(func() {
+		jobs.ProbeLoop(ctx, q, func() (*grpc.ClientConn, error) { return probeConn, nil }, sleep)
 	})
 
 	// rebalancer.

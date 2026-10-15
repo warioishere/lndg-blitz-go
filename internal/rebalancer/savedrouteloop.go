@@ -54,7 +54,7 @@ func (e *engine) trySavedRoute(
 	hasHex := sr.RouteHex.Valid && sr.RouteHex.String != ""
 	var parsedSr *lnrpc.Route
 	var hopKeys [][]byte
-	var cltvDelta int32
+	const cltvDelta = FinalCltvDelta
 
 	if hasHex {
 		p, err := parseRouteHex(sr.RouteHex.String)
@@ -71,14 +71,6 @@ func (e *engine) trySavedRoute(
 			}
 			hopKeys = append(hopKeys, b)
 		}
-		hops := p.GetHops()
-		if sr.FinalCltvDelta != 0 {
-			cltvDelta = sr.FinalCltvDelta
-		} else if len(hops) >= 2 {
-			cltvDelta = int32(hops[len(hops)-1].GetExpiry()) - int32(hops[len(hops)-2].GetExpiry())
-		} else {
-			cltvDelta = 144
-		}
 	} else {
 		for _, k := range strings.Split(sr.Route, "-") {
 			b, derr := hex.DecodeString(k)
@@ -87,11 +79,6 @@ func (e *engine) trySavedRoute(
 				return false
 			}
 			hopKeys = append(hopKeys, b)
-		}
-		if sr.FinalCltvDelta != 0 {
-			cltvDelta = sr.FinalCltvDelta
-		} else {
-			cltvDelta = 144
 		}
 	}
 
@@ -213,7 +200,7 @@ func (e *engine) trySavedRoute(
 		probed := probeRouteAmount(ctx, routerstub, hopKeys, sr.OutgoingChanID, cltvDelta, int64(rebalance.Value))
 		if probed > 0 {
 			rebalLog(fmt.Sprintf("Probe found max %d sats (was %d)", probed, rebalance.Value))
-			probeInvoice, aerr := stub.AddInvoice(ctx, &lnrpc.Invoice{Value: probed, Expiry: int64(timeout / time.Second)})
+			probeInvoice, aerr := stub.AddInvoice(ctx, &lnrpc.Invoice{Value: probed, Expiry: int64(timeout / time.Second), CltvExpiry: FinalCltvDelta})
 			if aerr != nil {
 				handleErr(aerr)
 				return false

@@ -106,6 +106,32 @@ func annotateChannels(chs []db.GuiChannel, valueSubtract float64, integerMode bo
 	return out
 }
 
+// isOutCan reports whether an annotated channel can be a rebalance source:
+// percent_outbound >= ar_out_target, not local_disabled, ar_source or not
+// auto_rebalance.
+func isOutCan(a annotatedChannel) bool {
+	c := a.ch
+	return a.percentOutbound >= float64(c.ArOutTarget) && !c.LocalDisabled && (c.ArSource || !c.AutoRebalance)
+}
+
+// needsRefill reports whether autoSchedule rebalances into an annotated
+// channel: auto_rebalance, inbound_can >= 1, not remote_disabled.
+func needsRefill(a annotatedChannel) bool {
+	return a.ch.AutoRebalance && a.inboundCan >= 1 && !a.ch.RemoteDisabled
+}
+
+// SourceFor reports whether ch is a source the rebalancer uses for a rebalance
+// of value sats (the getOutCans rule, value subtracted from its outbound).
+// The channel to the target itself is not excluded here.
+func SourceFor(ch db.GuiChannel, value int64) bool {
+	return isOutCan(annotateChannel(ch, float64(value), true))
+}
+
+// NeedsRefill reports whether autoSchedule would rebalance into ch.
+func NeedsRefill(ch db.GuiChannel) bool {
+	return needsRefill(annotateChannel(ch, 0, true))
+}
+
 // getOutCans returns chan_ids that are eligible outbound sources:
 // percent_outbound >= ar_out_target, not local_disabled,
 // (ar_source OR not auto_rebalance), remote_pubkey != last_hop;
@@ -113,20 +139,9 @@ func annotateChannels(chs []db.GuiChannel, valueSubtract float64, integerMode bo
 func (e *engine) getOutCans(annotated []annotatedChannel, lastHopPubkey string) []string {
 	filtered := make([]annotatedChannel, 0, len(annotated))
 	for _, a := range annotated {
-		c := a.ch
-		if a.percentOutbound < float64(c.ArOutTarget) {
-			continue
+		if isOutCan(a) && a.ch.RemotePubkey != lastHopPubkey {
+			filtered = append(filtered, a)
 		}
-		if c.LocalDisabled {
-			continue
-		}
-		if !c.ArSource && c.AutoRebalance {
-			continue
-		}
-		if c.RemotePubkey == lastHopPubkey {
-			continue
-		}
-		filtered = append(filtered, a)
 	}
 	sort.SliceStable(filtered, func(i, j int) bool { return filtered[i].ch.HtlcCount < filtered[j].ch.HtlcCount })
 	result := make([]string, 0, len(filtered))

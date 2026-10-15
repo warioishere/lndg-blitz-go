@@ -24,7 +24,6 @@ type DataQuerier interface {
 	inboundOffsetsQuerier
 	maxhtlcQuerier
 	boostQuerier
-	probeQuerier
 	aggQuerier
 }
 
@@ -40,12 +39,11 @@ type DataLightningClient interface {
 	onchainClient
 	closuresClient
 	cleanClient
-	probeLightningClient
 }
 
-// RunDataJobs runs all 17 Data jobs in a fixed order. The first error aborts
+// RunDataJobs runs all 16 Data jobs in a fixed order. The first error aborts
 // the run; remaining jobs are skipped.
-func RunDataJobs(ctx context.Context, q DataQuerier, stub DataLightningClient, routerstub probeRouterClient) error {
+func RunDataJobs(ctx context.Context, q DataQuerier, stub DataLightningClient) error {
 	if err := UpdatePeers(ctx, q, stub); err != nil {
 		return err
 	}
@@ -89,9 +87,6 @@ func RunDataJobs(ctx context.Context, q DataQuerier, stub DataLightningClient, r
 		return err
 	}
 	if err := FailedHtlcBoostJob(ctx, q, stub); err != nil {
-		return err
-	}
-	if err := ProbeRoutesJob(ctx, q, stub, routerstub); err != nil {
 		return err
 	}
 	return AggFailedHtlcs(ctx, q)

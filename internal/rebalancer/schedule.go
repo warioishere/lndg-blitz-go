@@ -105,14 +105,9 @@ func (e *engine) autoSchedule(ctx context.Context, q scheduleQuerier, now func()
 	// Outbound candidates (no last-hop exclusion), sorted by htlc_count.
 	outFiltered := make([]annotatedChannel, 0, len(annotated))
 	for _, a := range annotated {
-		c := a.ch
-		if a.percentOutbound < float64(c.ArOutTarget) || c.LocalDisabled {
-			continue
+		if isOutCan(a) {
+			outFiltered = append(outFiltered, a)
 		}
-		if !c.ArSource && c.AutoRebalance {
-			continue
-		}
-		outFiltered = append(outFiltered, a)
 	}
 	sort.SliceStable(outFiltered, func(i, j int) bool { return outFiltered[i].ch.HtlcCount < outFiltered[j].ch.HtlcCount })
 	outboundCans := make([]string, 0, len(outFiltered))
@@ -130,11 +125,10 @@ func (e *engine) autoSchedule(ctx context.Context, q scheduleQuerier, now func()
 	// sorted by inbound_can descending.
 	inboundList := make([]annotatedChannel, 0, len(annotated))
 	for _, a := range annotated {
-		c := a.ch
-		if !c.AutoRebalance || a.inboundCan < 1 || c.RemoteDisabled {
+		if !needsRefill(a) {
 			continue
 		}
-		if _, sched := scheduledSet[c.RemotePubkey]; sched {
+		if _, sched := scheduledSet[a.ch.RemotePubkey]; sched {
 			continue
 		}
 		inboundList = append(inboundList, a)

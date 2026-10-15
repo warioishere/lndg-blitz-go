@@ -87,12 +87,13 @@
           <th>Trigger</th>
           <th>New Peer</th>
           <th>Peer Fee</th>
+          <th>Buy Price</th>
           <th>Budget</th>
           <th>Sources</th>
-          <th>New Routes</th>
-          <th>Existing</th>
           <th>Via New Peer</th>
-          <th>Rebalance</th>
+          <th>Route Cost</th>
+          <th>Amount</th>
+          <th>Bought</th>
         </tr>
       </thead>
       <tbody id="probeLogTable"></tbody>
@@ -119,7 +120,7 @@
             <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
           </form>
           <form action="/update_setting/" method="post">
-            <label for="gw_cooldown"><b>Cooldown per target</b> (seconds):</label>
+            <label for="gw_cooldown"><b>Cooldown per target and new peer</b> (seconds):</label>
             <input class="w3-input w3-border" id="gw_cooldown" name="value" type="number" min="30" max="3600" value="{{.gw_cooldown}}">
             <input type="hidden" name="key" value="GW-Cooldown">
             <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
@@ -238,15 +239,11 @@ function renderEvents() {
     } else {
       probeCell.innerText = '---';
     }
-    // Routes found - link to saved routes filtered by target
+    // Verified routes through the new peer (details in the Probe Log tab)
     const routesCell = row.insertCell();
     if (ev.routes_found > 0) {
-      const rLink = document.createElement('a');
-      rLink.href = '/rebalanceroutes';
-      rLink.target = '_blank';
-      rLink.innerText = ev.routes_found;
-      rLink.className = 'w3-text-green';
-      routesCell.appendChild(rLink);
+      routesCell.innerText = ev.routes_found;
+      routesCell.className = 'w3-text-green';
     } else {
       routesCell.innerText = ev.probe_triggered ? '0' : '---';
     }
@@ -347,7 +344,7 @@ async function loadProbeLogs() {
   logs.forEach(log => {
     const row = table.insertRow();
     if (log.routes_via_new_peer > 0) row.className = 'w3-pale-green';
-    else if (log.routes_new === 0 && log.routes_existing === 0) row.className = 'w3-pale-red';
+    else row.className = 'w3-pale-red';
     row.insertCell().innerText = formatDate(log.timestamp);
     // Target
     const tCell = row.insertCell();
@@ -370,23 +367,26 @@ async function loadProbeLogs() {
       pCell.innerText = '---';
     }
     row.insertCell().innerText = log.other_fee_ppm != null ? log.other_fee_ppm + ' ppm' : '---';
+    row.insertCell().innerText = log.buy_ppm != null ? log.buy_ppm + ' ppm' : '---';
     row.insertCell().innerText = log.budget_ppm + ' ppm';
     row.insertCell().innerText = log.sources_tried;
-    // Routes
-    const newCell = row.insertCell();
-    newCell.innerText = log.routes_new;
-    if (log.routes_new > 0) newCell.className = 'w3-text-green';
-    row.insertCell().innerText = log.routes_existing;
     // Via new peer
     const viaCell = row.insertCell();
     viaCell.innerText = log.routes_via_new_peer;
     if (log.routes_via_new_peer > 0) viaCell.className = 'w3-text-green w3-bold';
-    // Rebalance scheduled
-    const rebCell = row.insertCell();
-    if (log.rebalance_scheduled) {
-      rebCell.innerHTML = '<span class="w3-tag w3-green w3-tiny">Yes</span>';
+    // Verified route through the new peer: cost incl. source fee, and amount
+    const costCell = row.insertCell();
+    costCell.innerText = log.via_fee_ppm != null ? log.via_fee_ppm + ' ppm' : '---';
+    if (log.via_fee_ppm != null && log.buy_ppm != null && log.via_fee_ppm < log.buy_ppm) costCell.className = 'w3-text-green w3-bold';
+    row.insertCell().innerText = log.via_amount_sat != null ? log.via_amount_sat.toLocaleString() + ' sat' : '---';
+    // Purchase over the verified route (gui_rebalancer status)
+    const buyCell = row.insertCell();
+    if (log.buy_status === 2) {
+      buyCell.innerHTML = '<span class="w3-tag w3-green w3-tiny">Yes</span>';
+    } else if (log.buy_status != null) {
+      buyCell.innerHTML = '<span class="w3-tag w3-red w3-tiny">Failed (' + log.buy_status + ')</span>';
     } else {
-      rebCell.innerText = '---';
+      buyCell.innerText = '---';
     }
     // Click to show details
     if (log.details) {

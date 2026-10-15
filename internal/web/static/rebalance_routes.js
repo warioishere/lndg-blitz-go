@@ -284,7 +284,7 @@ function showProbeDetail(idx) {
   if (!log.details || log.details.length === 0) {
     const row = table.insertRow();
     const cell = row.insertCell();
-    cell.colSpan = 5;
+    cell.colSpan = 9;
     cell.innerText = 'No target details available';
     cell.className = 'w3-text-grey';
   } else {
@@ -298,10 +298,15 @@ function showProbeDetail(idx) {
       link.target = '_blank';
       link.innerText = d.alias || d.pubkey.substring(0, 20) + '...';
       nameCell.appendChild(link);
+      const opt = v => v != null ? v : '---';
+      row.insertCell().innerText = opt(d.sources);
+      row.insertCell().innerText = opt(d.no_budget);
+      row.insertCell().innerText = opt(d.no_route);
       row.insertCell().innerText = d.out_chans_tried;
       row.insertCell().innerText = d.new;
       row.insertCell().innerText = d.existing;
-      row.insertCell().innerText = d.errors;
+      row.insertCell().innerText = opt(d.probe_failed);
+      row.insertCell().innerText = opt(d.rpc_errors);
     });
   }
   panel.style.display = 'block';

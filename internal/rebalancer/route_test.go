@@ -113,7 +113,7 @@ func TestUpdateRoute_NewSuccess(t *testing.T) {
 	updateRoute(context.Background(), q, "target", "555", routeHexOf(twoHopRoute()), true, false, now)
 	require.Len(t, q.inserted, 1)
 	assert.Equal(t, "aa-bb", q.inserted[0].Route)
-	assert.Equal(t, int32(-100), q.inserted[0].FinalCltvDelta) // 800000-800100
+	assert.Equal(t, int32(FinalCltvDelta), q.inserted[0].FinalCltvDelta)
 	require.Len(t, q.updated, 1)
 	u := q.updated[0]
 	assert.Equal(t, int32(1), u.SuccessCount)

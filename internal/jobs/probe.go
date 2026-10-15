@@ -5,8 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +18,7 @@ import (
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc/routerrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/rebalancer"
 )
 
 // probeLightningClient is the LightningClient subset required by the probe subsystem.
@@ -37,9 +38,7 @@ type probeQuerier interface {
 	GetLocalSetting(ctx context.Context, key string) (db.GuiLocalsetting, error)
 	GetOrCreateLocalSetting(ctx context.Context, arg db.GetOrCreateLocalSettingParams) (db.GuiLocalsetting, error)
 	UpsertLocalSetting(ctx context.Context, arg db.UpsertLocalSettingParams) error
-	ListOpenAutoRebalanceChannels(ctx context.Context) ([]db.GuiChannel, error)
-	ListOutboundCandidates(ctx context.Context) ([]db.ListOutboundCandidatesRow, error)
-	ListChanIDsByPubkey(ctx context.Context, remotePubkey string) ([]string, error)
+	ListActiveOpenPublicChannels(ctx context.Context) ([]db.GuiChannel, error)
 	GetRebalanceRoute(ctx context.Context, arg db.GetRebalanceRouteParams) (db.GuiRebalanceroute, error)
 	InsertRebalanceRoute(ctx context.Context, arg db.InsertRebalanceRouteParams) error
 	UpdateRebalanceRouteHex(ctx context.Context, arg db.UpdateRebalanceRouteHexParams) error
@@ -48,7 +47,9 @@ type probeQuerier interface {
 	GetPeerAlias(ctx context.Context, pubkey string) (pgtype.Text, error)
 }
 
-// probeTargetDetail holds per-target probe statistics written to the ProbeLog details JSON.
+// probeTargetDetail holds per-target probe statistics written to the ProbeLog
+// details JSON. Errors is ProbeFailed + RPCErrors; OutChansTried counts the
+// sources that had a route (or an RPC error) and used up a QR-MaxPerTarget slot.
 type probeTargetDetail struct {
 	Pubkey        string `json:"pubkey"`
 	Alias         string `json:"alias"`
@@ -57,6 +58,11 @@ type probeTargetDetail struct {
 	Errors        int    `json:"errors"`
 	Verified      int    `json:"verified"`
 	OutChansTried int    `json:"out_chans_tried"`
+	Sources       int    `json:"sources"`
+	NoBudget      int    `json:"no_budget"`
+	NoRoute       int    `json:"no_route"`
+	ProbeFailed   int    `json:"probe_failed"`
+	RPCErrors     int    `json:"rpc_errors"`
 }
 
 func maxInt64(a, b int64) int64 {
@@ -196,87 +202,87 @@ type (
 	ProbeQuerier         = probeQuerier
 )
 
-// ProbeTargets is the exported entry point for probeTargets, returning only the
-// new/existing/errors counters without the per-target detail list.
-func ProbeTargets(ctx context.Context, stub ProbeLightningClient, routerstub ProbeRouterClient, q ProbeQuerier, selfPubkey string, targets []db.GuiChannel, outboundCans []string, sourceFeeMap map[string]int, maxFeeRate, maxPerTarget int) (int, int, int, error) {
-	n, e, er, _, err := probeTargets(ctx, stub, routerstub, q, selfPubkey, targets, outboundCans, sourceFeeMap, maxFeeRate, maxPerTarget)
-	return n, e, er, err
+// probeSource is a channel to probe from, with the fee limit for its probes.
+type probeSource struct {
+	chanID      string
+	feeRate     int
+	feeLimitSat int64
 }
 
-// probeTargets probes auto-rebalance targets using random-preimage HTLCs and
-// stores only verified routes. Returns new/existing/error counts and per-target details.
-func probeTargets(ctx context.Context, stub probeLightningClient, routerstub probeRouterClient, q probeQuerier, selfPubkey string, targets []db.GuiChannel, outboundCans []string, sourceFeeMap map[string]int, maxFeeRate, maxPerTarget int) (int, int, int, []probeTargetDetail, error) {
-	const probeBufferPpm = 100
+// probeSources returns the channels to probe from for a refill of target,
+// cheapest fee first (then by chan_id): the sources the rebalancer uses for a rebalance of
+// ar_amt_target sats (rebalancer.SourceFor), not a channel to the target, with
+// a fee budget above zero. noBudget counts the sources left out for their budget.
+func probeSources(channels []db.GuiChannel, target db.GuiChannel, maxFeeRate int) (sources []probeSource, noBudget int) {
+	for _, c := range channels {
+		if c.RemotePubkey == target.RemotePubkey || !rebalancer.SourceFor(c, target.ArAmtTarget) {
+			continue
+		}
+		limit := probeFeeLimitSat(target, int(c.LocalFeeRate), maxFeeRate)
+		if limit <= 0 {
+			noBudget++
+			continue
+		}
+		sources = append(sources, probeSource{chanID: c.ChanID, feeRate: int(c.LocalFeeRate), feeLimitSat: limit})
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		if sources[i].feeRate != sources[j].feeRate {
+			return sources[i].feeRate < sources[j].feeRate
+		}
+		return sources[i].chanID < sources[j].chanID
+	})
+	return sources, noBudget
+}
+
+// probeTargets probes the channels the rebalancer would refill now
+// (rebalancer.NeedsRefill) using random-preimage HTLCs and stores only verified
+// routes. Per target it probes up to maxPerTarget sources from probeSources that
+// have a route. channels is the rebalancer's channel set (active, open, public),
+// sorted by chan_id. Returns new/existing/error counts and per-target details.
+func probeTargets(ctx context.Context, stub probeLightningClient, routerstub probeRouterClient, q probeQuerier, selfPubkey string, channels []db.GuiChannel, maxFeeRate, maxPerTarget int) (int, int, int, []probeTargetDetail, error) {
 	probedPubkeys := map[string]bool{}
 	totalNew, totalExisting, totalErrors := 0, 0, 0
 	targetDetails := []probeTargetDetail{}
 
-	for _, chn := range targets {
-		if probedPubkeys[chn.RemotePubkey] {
+	for _, chn := range channels {
+		if probedPubkeys[chn.RemotePubkey] || !rebalancer.NeedsRefill(chn) {
 			continue
 		}
 		probedPubkeys[chn.RemotePubkey] = true
-		targetNew, targetExisting, targetErrors, targetVerified := 0, 0, 0, 0
-
-		peerChanIDs, err := q.ListChanIDsByPubkey(ctx, chn.RemotePubkey)
+		lastHop, err := hex.DecodeString(chn.RemotePubkey)
 		if err != nil {
 			return 0, 0, 0, nil, err
 		}
-		peerSet := map[string]bool{}
-		for _, c := range peerChanIDs {
-			peerSet[c] = true
-		}
-		var outChans []string
-		for _, c := range outboundCans {
-			if !peerSet[c] {
-				outChans = append(outChans, c)
-			}
-		}
-		limit := maxPerTarget
-		if limit > len(outChans) {
-			limit = len(outChans)
-		}
+		sources, noBudget := probeSources(channels, chn, maxFeeRate)
+		d := probeTargetDetail{Pubkey: chn.RemotePubkey, Sources: len(sources), NoBudget: noBudget}
 
-		for _, outChan := range outChans[:limit] {
-			sourceFeeRate := sourceFeeMap[outChan]
-			inner := int(float64(chn.LocalFeeRate)*(float64(chn.ArMaxCost)/100)) - sourceFeeRate
-			budgetPpm := maxFeeRate
-			if inner < budgetPpm {
-				budgetPpm = inner
+		for _, src := range sources {
+			if d.OutChansTried >= maxPerTarget {
+				break
 			}
-			feeLimitSat := int64(float64(int64(budgetPpm+probeBufferPpm)*chn.ArAmtTarget) / 1000000)
-			if feeLimitSat <= 0 {
-				continue
+			outChanU, perr := strconv.ParseUint(src.chanID, 10, 64)
+			if perr != nil {
+				return 0, 0, 0, nil, perr
 			}
-
-			outChanU, perr := strconv.ParseUint(outChan, 10, 64)
-			lastHop, herr := hex.DecodeString(chn.RemotePubkey)
-			var response *lnrpc.QueryRoutesResponse
-			var qerr error
-			if perr != nil || herr != nil {
-				qerr = errors.New("parse error")
-			} else {
-				response, qerr = stub.QueryRoutes(ctx, &lnrpc.QueryRoutesRequest{
-					PubKey:            selfPubkey,
-					Amt:               chn.ArAmtTarget,
-					OutgoingChanIds:   []uint64{outChanU},
-					LastHopPubkey:     lastHop,
-					FeeLimit:          &lnrpc.FeeLimit{Limit: &lnrpc.FeeLimit_Fixed{Fixed: feeLimitSat}},
-					UseMissionControl: true,
-				})
-			}
+			response, qerr := stub.QueryRoutes(ctx, &lnrpc.QueryRoutesRequest{
+				PubKey:            selfPubkey,
+				Amt:               chn.ArAmtTarget,
+				OutgoingChanIds:   []uint64{outChanU},
+				LastHopPubkey:     lastHop,
+				FeeLimit:          &lnrpc.FeeLimit{Limit: &lnrpc.FeeLimit_Fixed{Fixed: src.feeLimitSat}},
+				UseMissionControl: true,
+			})
 			if qerr != nil {
-				targetErrors++
+				d.RPCErrors++
+				d.OutChansTried++
 				continue
 			}
-			if response == nil || len(response.GetRoutes()) == 0 {
+			if len(response.GetRoutes()) == 0 || len(response.GetRoutes()[0].GetHops()) == 0 {
+				d.NoRoute++
 				continue
 			}
-			route := response.GetRoutes()[0]
-			hops := route.GetHops()
-			if len(hops) == 0 {
-				continue
-			}
+			d.OutChansTried++
+			hops := response.GetRoutes()[0].GetHops()
 			hopPubkeys := make([][]byte, 0, len(hops))
 			for _, h := range hops {
 				b, e := hex.DecodeString(h.GetPubKey())
@@ -285,13 +291,9 @@ func probeTargets(ctx context.Context, stub probeLightningClient, routerstub pro
 				}
 				hopPubkeys = append(hopPubkeys, b)
 			}
-			cltv := 144
-			if len(hops) >= 2 {
-				cltv = int(hops[len(hops)-1].GetExpiry()) - int(hops[len(hops)-2].GetExpiry())
-			}
-			verifiedHex, maxAmountSat, verifiedFeePpm := probeWithBinarySearch(ctx, routerstub, outChan, hopPubkeys, int32(cltv), chn.ArAmtTarget, feeLimitSat)
+			verifiedHex, maxAmountSat, verifiedFeePpm := probeWithBinarySearch(ctx, routerstub, src.chanID, hopPubkeys, rebalancer.FinalCltvDelta, chn.ArAmtTarget, src.feeLimitSat)
 			if verifiedHex == nil || maxAmountSat <= 0 {
-				targetErrors++
+				d.ProbeFailed++
 				continue
 			}
 			pathParts := make([]string, 0, len(hops))
@@ -312,13 +314,13 @@ func probeTargets(ctx context.Context, stub probeLightningClient, routerstub pro
 				}
 				if e := q.InsertRebalanceRoute(ctx, db.InsertRebalanceRouteParams{
 					TargetPubkey: chn.RemotePubkey, OutgoingChanID: routeOutChan, Route: path,
-					FinalCltvDelta: int32(cltv),
+					FinalCltvDelta: rebalancer.FinalCltvDelta,
 					RouteHex:       pgtype.Text{String: *verifiedHex, Valid: true},
 					LastFeePpm:     feePpm,
 				}); e != nil {
 					return 0, 0, 0, nil, e
 				}
-				targetNew++
+				d.New++
 			case gerr != nil:
 				return 0, 0, 0, nil, gerr
 			default:
@@ -331,30 +333,23 @@ func probeTargets(ctx context.Context, stub probeLightningClient, routerstub pro
 				}); e != nil {
 					return 0, 0, 0, nil, e
 				}
-				targetExisting++
+				d.Existing++
 			}
-			targetVerified++
+			d.Verified++
 		}
 
-		totalNew += targetNew
-		totalExisting += targetExisting
-		totalErrors += targetErrors
+		d.Errors = d.ProbeFailed + d.RPCErrors
+		totalNew += d.New
+		totalExisting += d.Existing
+		totalErrors += d.Errors
 		alias, isNone, err := peerAliasOpt(ctx, q, chn.RemotePubkey)
 		if err != nil {
 			return 0, 0, 0, nil, err
 		}
-		if isNone {
-			alias = ""
+		if !isNone {
+			d.Alias = alias
 		}
-		targetDetails = append(targetDetails, probeTargetDetail{
-			Pubkey:        chn.RemotePubkey,
-			Alias:         alias,
-			New:           targetNew,
-			Existing:      targetExisting,
-			Errors:        targetErrors,
-			Verified:      targetVerified,
-			OutChansTried: limit,
-		})
+		targetDetails = append(targetDetails, d)
 	}
 	return totalNew, totalExisting, totalErrors, targetDetails, nil
 }
@@ -377,8 +372,8 @@ func parseISO(s string) (time.Time, error) {
 }
 
 // ProbeRoutesJob runs the route probe when QR-Enabled is set and enough time has
-// elapsed since QR-LastProbe. It probes auto-rebalance targets and writes a
-// ProbeLog entry (keeping at most 100 records).
+// elapsed since QR-LastProbe. It probes the channels the rebalancer would refill
+// now (probeTargets) and writes a ProbeLog entry (keeping at most 100 records).
 func ProbeRoutesJob(ctx context.Context, q probeQuerier, stub probeLightningClient, routerstub probeRouterClient) error {
 	enabled, err := settingGateEnabled(ctx, q, "QR-Enabled")
 	if err != nil {
@@ -410,20 +405,11 @@ func ProbeRoutesJob(ctx context.Context, q probeQuerier, stub probeLightningClie
 	}
 
 	probeStart := time.Now()
-	targets, err := q.ListOpenAutoRebalanceChannels(ctx)
+	channels, err := q.ListActiveOpenPublicChannels(ctx)
 	if err != nil {
 		return err
 	}
-	outRows, err := q.ListOutboundCandidates(ctx)
-	if err != nil {
-		return err
-	}
-	outboundCans := make([]string, 0, len(outRows))
-	sourceFeeMap := make(map[string]int, len(outRows))
-	for _, r := range outRows {
-		outboundCans = append(outboundCans, r.ChanID)
-		sourceFeeMap[r.ChanID] = int(r.LocalFeeRate)
-	}
+	sort.SliceStable(channels, func(i, j int) bool { return channels[i].ChanID < channels[j].ChanID })
 
 	// Read AR-MaxFeeRate; use 500 as default when the key is absent.
 	maxFeeRate := 500
@@ -445,7 +431,7 @@ func ProbeRoutesJob(ctx context.Context, q probeQuerier, stub probeLightningClie
 	}
 	selfPubkey := selfInfo.GetIdentityPubkey()
 
-	totalNew, totalExisting, totalErrors, details, err := probeTargets(ctx, stub, routerstub, q, selfPubkey, targets, outboundCans, sourceFeeMap, maxFeeRate, maxPerTarget)
+	totalNew, totalExisting, totalErrors, details, err := probeTargets(ctx, stub, routerstub, q, selfPubkey, channels, maxFeeRate, maxPerTarget)
 	if err != nil {
 		return err
 	}
@@ -479,4 +465,21 @@ func ProbeRoutesJob(ctx context.Context, q probeQuerier, stub probeLightningClie
 		dataLog(fmt.Sprintf("QueryRoutes probe completed: %d targets, %d existing routes, %d errors (%dms)", len(details), totalExisting, totalErrors, durationMs))
 	}
 	return nil
+}
+
+// ProbeLoop runs ProbeRoutesJob in its own loop, apart from the Data jobs: a
+// probe run takes minutes and would hold them up. Every minute it checks whether
+// a run is due (QR-Enabled, QR-UpdateHours); getConn returns the LND connection
+// the stubs are built from.
+func ProbeLoop(ctx context.Context, q probeQuerier, getConn func() (*grpc.ClientConn, error), sleep func(time.Duration)) {
+	for ctx.Err() == nil {
+		conn, err := getConn()
+		if err == nil {
+			err = ProbeRoutesJob(ctx, q, lnrpc.NewLightningClient(conn), routerrpc.NewRouterClient(conn))
+		}
+		if err != nil && ctx.Err() == nil {
+			dataLog(fmt.Sprintf("Error probing routes: %s", err))
+		}
+		sleep(time.Minute)
+	}
 }

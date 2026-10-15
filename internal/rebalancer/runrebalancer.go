@@ -180,7 +180,7 @@ func (e *engine) runRebalancer(
 		}
 
 		timeout := time.Duration(rebalance.Duration) * 60 * time.Second
-		invoiceResp, err := stub.AddInvoice(ctx, &lnrpc.Invoice{Value: int64(rebalance.Value), Expiry: int64(timeout / time.Second)})
+		invoiceResp, err := stub.AddInvoice(ctx, &lnrpc.Invoice{Value: int64(rebalance.Value), Expiry: int64(timeout / time.Second), CltvExpiry: FinalCltvDelta})
 		if err != nil {
 			return err
 		}

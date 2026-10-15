@@ -13,8 +13,9 @@ import (
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 )
 
-// probeClock tracks the last probe time per target pubkey. The mutex protects
-// concurrent writes from the main loop and probe goroutines.
+// probeClock tracks the last probe time per target and new peer (key
+// "target|peer"). The mutex protects concurrent writes from the main loop and
+// probe goroutines.
 type probeClock struct {
 	mu   sync.Mutex
 	last map[string]time.Time
@@ -118,7 +119,9 @@ func (d Deps) runSession(ctx context.Context) {
 
 // handleChannelUpdate processes a channel update event. It ignores channels
 // that are older than 144 blocks or do not involve an AR target, deduplicates
-// per (channel, advertiser) pair, and dispatches a probe if the cooldown has elapsed.
+// per (channel, advertiser) pair, and dispatches a probe right away when the new
+// peer's policy toward the target is known and enabled, the cooldown for the
+// pair (target, new peer) has elapsed and probeGate lets it through.
 func (d Deps) handleChannelUpdate(ctx context.Context, cu *lnrpc.ChannelEdgeUpdate, arTargets map[string]struct{}, chainHeight uint32, chanState map[string]struct{}, cooldown int, clock *probeClock, selfPubkey string, eventCount *int) error {
 	adv := cu.GetAdvertisingNode()
 	conn := cu.GetConnectingNode()
@@ -157,19 +160,23 @@ func (d Deps) handleChannelUpdate(ctx context.Context, cu *lnrpc.ChannelEdgeUpda
 	const eventType = "new_channel"
 	gwLog(fmt.Sprintf("new_channel %s (height %d, age %d blocks)", cid, fundingHeight, age))
 
+	// The fee that matters is the new peer's policy toward the target; an
+	// update advertised by the target carries the target's policy instead.
 	feePpm := advFeePpm
 	baseFee := advBaseFee
 	disabled := advDisabled
-	if adv != otherPk {
+	policyKnown := adv == otherPk
+	if !policyKnown {
 		if info, e := d.LN.GetChanInfo(ctx, &lnrpc.ChanInfoRequest{ChanId: chanID}); e == nil {
+			var pol *lnrpc.RoutingPolicy
 			if info.GetNode1Pub() == otherPk {
-				feePpm = info.GetNode1Policy().GetFeeRateMilliMsat()
-				baseFee = info.GetNode1Policy().GetFeeBaseMsat()
-				disabled = info.GetNode1Policy().GetDisabled()
+				pol = info.GetNode1Policy()
 			} else if info.GetNode2Pub() == otherPk {
-				feePpm = info.GetNode2Policy().GetFeeRateMilliMsat()
-				baseFee = info.GetNode2Policy().GetFeeBaseMsat()
-				disabled = info.GetNode2Policy().GetDisabled()
+				pol = info.GetNode2Policy()
+			}
+			if pol != nil {
+				feePpm, baseFee, disabled = pol.GetFeeRateMilliMsat(), pol.GetFeeBaseMsat(), pol.GetDisabled()
+				policyKnown = true
 			}
 		}
 	}
@@ -181,20 +188,37 @@ func (d Deps) handleChannelUpdate(ctx context.Context, cu *lnrpc.ChannelEdgeUpda
 	}
 
 	probeTriggered := false
-	lastT := clock.get(targetPk)
-	if d.Now().Sub(lastT).Seconds() >= float64(cooldown) {
-		probeTriggered = true
-		clock.set(targetPk, d.Now())
-		otherFee := pgtype.Int4{Int32: int32(feePpm), Valid: true}
-		go d.dispatchProbe(ctx, selfPubkey, targetPk, targetAlias, cid, eventType, clock, otherPk, otherFee)
-	} else {
+	clockKey := targetPk + "|" + otherPk
+	lastT := clock.get(clockKey)
+	switch {
+	case !policyKnown:
+		gwLog(fmt.Sprintf("new_channel on %s (%s), policy of %s not known yet", targetAlias, cid, otherAlias))
+	case disabled:
+		gwLog(fmt.Sprintf("new_channel on %s (%s), %s disabled toward the target", targetAlias, cid, otherAlias))
+	case d.Now().Sub(lastT).Seconds() < float64(cooldown):
 		remaining := int(float64(cooldown) - d.Now().Sub(lastT).Seconds())
 		gwLog(fmt.Sprintf("new_channel on %s (%s), cooldown %ds remaining", targetAlias, cid, remaining))
+	default:
+		plan, skip, gerr := d.probeGate(ctx, targetPk, feePpm)
+		switch {
+		case gerr != nil:
+			gwLog(fmt.Sprintf("Probe error for %s: %s", targetAlias, gerr))
+		case plan == nil:
+			gwLog(fmt.Sprintf("new_channel on %s (%s) from %s, skip: %s", targetAlias, cid, otherAlias, skip))
+		default:
+			probeTriggered = true
+			clock.set(clockKey, d.Now())
+			go d.dispatchProbe(ctx, selfPubkey, plan, targetAlias, cid, eventType, clock, clockKey, otherPk, feePpm)
+		}
 	}
 
+	feeLogged := pgtype.Int4{}
+	if policyKnown {
+		feeLogged = pgtype.Int4{Int32: int32(feePpm), Valid: true}
+	}
 	if err := d.Q.InsertGraphEvent(ctx, db.InsertGraphEventParams{
 		Timestamp: pgtype.Timestamptz{Time: d.Now(), Valid: true}, EventType: eventType, ChanID: cid, Capacity: capacity,
-		FeePpm: pgtype.Int4{Int32: int32(feePpm), Valid: true}, BaseFeeMsat: baseFee,
+		FeePpm: feeLogged, BaseFeeMsat: baseFee,
 		TargetPubkey: targetPk, TargetAlias: targetAlias, OtherNode: otherPk, OtherAlias: otherAlias,
 		Disabled: disabled, ProbeTriggered: probeTriggered, RoutesFound: 0, PolicyNode: adv,
 	}); err != nil {
@@ -244,17 +268,17 @@ func (d Deps) handleClosedChan(ctx context.Context, cc *lnrpc.ClosedChannelUpdat
 }
 
 // dispatchProbe runs triggerProbe in a goroutine, updates the probe clock on
-// completion, and writes the routes-found count back to the graph event record.
-func (d Deps) dispatchProbe(ctx context.Context, selfPubkey, targetPk, targetAlias, cid, eventType string, clock *probeClock, otherPk string, otherFeePpm pgtype.Int4) {
-	routes, err := d.triggerProbe(ctx, selfPubkey, targetPk, otherPk, otherFeePpm, cid, d.Now())
+// completion, and writes the verified-route count back to the graph event record.
+func (d Deps) dispatchProbe(ctx context.Context, selfPubkey string, plan *probePlan, targetAlias, cid, eventType string, clock *probeClock, clockKey, otherPk string, otherFeePpm int64) {
+	routes, err := d.triggerProbe(ctx, selfPubkey, plan, otherPk, otherFeePpm, cid, d.Now())
 	if err != nil {
 		gwLog(fmt.Sprintf("Probe error for %s: %s", targetAlias, err))
 		return
 	}
-	clock.set(targetPk, d.Now())
+	clock.set(clockKey, d.Now())
 	if routes > 0 {
 		if uerr := d.Q.UpdateGraphEventRoutesFound(ctx, db.UpdateGraphEventRoutesFoundParams{
-			TargetPubkey: targetPk, ChanID: cid, EventType: eventType, RoutesFound: int32(routes),
+			TargetPubkey: plan.targets[0].RemotePubkey, ChanID: cid, EventType: eventType, RoutesFound: int32(routes),
 		}); uerr != nil {
 			gwLog(fmt.Sprintf("Probe error for %s: %s", targetAlias, uerr))
 		}

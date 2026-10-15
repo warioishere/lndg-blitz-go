@@ -23,20 +23,6 @@ func (q *Queries) DeleteOldGraphEvents(ctx context.Context) error {
 	return err
 }
 
-const hasActiveRebalanceForPubkey = `-- name: HasActiveRebalanceForPubkey :one
-SELECT EXISTS (
-    SELECT 1 FROM gui_rebalancer WHERE last_hop_pubkey = $1 AND status IN (0, 1)
-) AS active
-`
-
-// _schedule_rebalance: existiert ein status in {0,1} Rebalance fuer den Ziel-Peer?
-func (q *Queries) HasActiveRebalanceForPubkey(ctx context.Context, lastHopPubkey string) (bool, error) {
-	row := q.db.QueryRow(ctx, hasActiveRebalanceForPubkey, lastHopPubkey)
-	var active bool
-	err := row.Scan(&active)
-	return active, err
-}
-
 const insertGraphEvent = `-- name: InsertGraphEvent :exec
 INSERT INTO gui_graphevent
     (timestamp, event_type, chan_id, capacity, fee_ppm, base_fee_msat, target_pubkey,
@@ -86,8 +72,11 @@ const insertGraphProbeLog = `-- name: InsertGraphProbeLog :exec
 INSERT INTO gui_graphprobelog
     (timestamp, target_pubkey, target_alias, target_fee, target_max_cost, trigger_chan_id,
      other_pubkey, other_alias, other_fee_ppm, budget_ppm, sources_tried, routes_new,
-     routes_existing, errors, routes_via_new_peer, rebalance_scheduled, details)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+     routes_existing, errors, routes_via_new_peer, rebalance_scheduled, details,
+     buy_ppm, via_fee_ppm, via_amount_sat, buy_status)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0,
+        0, $12, $13, $14, $15,
+        $16, $17, $18, $19)
 `
 
 type InsertGraphProbeLogParams struct {
@@ -102,15 +91,19 @@ type InsertGraphProbeLogParams struct {
 	OtherFeePpm        pgtype.Int4        `json:"other_fee_ppm"`
 	BudgetPpm          int32              `json:"budget_ppm"`
 	SourcesTried       int32              `json:"sources_tried"`
-	RoutesNew          int32              `json:"routes_new"`
-	RoutesExisting     int32              `json:"routes_existing"`
 	Errors             int32              `json:"errors"`
 	RoutesViaNewPeer   int32              `json:"routes_via_new_peer"`
 	RebalanceScheduled bool               `json:"rebalance_scheduled"`
 	Details            string             `json:"details"`
+	BuyPpm             pgtype.Int4        `json:"buy_ppm"`
+	ViaFeePpm          pgtype.Int4        `json:"via_fee_ppm"`
+	ViaAmountSat       pgtype.Int8        `json:"via_amount_sat"`
+	BuyStatus          pgtype.Int4        `json:"buy_status"`
 }
 
-// GraphProbeLog.objects.create(...); timestamp = now (Django-Default).
+// One forced-route probe through the new peer; rebalance_scheduled marks a
+// purchase over the verified route. routes_new and routes_existing belong to
+// the generic probe and stay 0.
 func (q *Queries) InsertGraphProbeLog(ctx context.Context, arg InsertGraphProbeLogParams) error {
 	_, err := q.db.Exec(ctx, insertGraphProbeLog,
 		arg.Timestamp,
@@ -124,12 +117,14 @@ func (q *Queries) InsertGraphProbeLog(ctx context.Context, arg InsertGraphProbeL
 		arg.OtherFeePpm,
 		arg.BudgetPpm,
 		arg.SourcesTried,
-		arg.RoutesNew,
-		arg.RoutesExisting,
 		arg.Errors,
 		arg.RoutesViaNewPeer,
 		arg.RebalanceScheduled,
 		arg.Details,
+		arg.BuyPpm,
+		arg.ViaFeePpm,
+		arg.ViaAmountSat,
+		arg.BuyStatus,
 	)
 	return err
 }
@@ -154,33 +149,6 @@ func (q *Queries) ListAutoRebalancePeerPubkeys(ctx context.Context) ([]string, e
 			return nil, err
 		}
 		items = append(items, remote_pubkey)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listGraphOutboundCans = `-- name: ListGraphOutboundCans :many
-SELECT chan_id FROM gui_channels
-WHERE is_open = true AND NOT (auto_rebalance = true AND ar_source = false)
-ORDER BY chan_id
-`
-
-// outbound_cans: is_open, exclude(auto_rebalance=True, ar_source=False).
-func (q *Queries) ListGraphOutboundCans(ctx context.Context) ([]string, error) {
-	rows, err := q.db.Query(ctx, listGraphOutboundCans)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []string{}
-	for rows.Next() {
-		var chan_id string
-		if err := rows.Scan(&chan_id); err != nil {
-			return nil, err
-		}
-		items = append(items, chan_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -275,38 +243,6 @@ func (q *Queries) ListOpenARChannelsByPubkey(ctx context.Context, remotePubkey s
 			&i.FlpSafety,
 			&i.HtlcBoostChecked,
 		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listRecentRoutesForTarget = `-- name: ListRecentRoutesForTarget :many
-SELECT route, last_fee_ppm, outgoing_chan_id FROM gui_rebalanceroute
-WHERE target_pubkey = $1 ORDER BY id DESC LIMIT 10
-`
-
-type ListRecentRoutesForTargetRow struct {
-	Route          string        `json:"route"`
-	LastFeePpm     pgtype.Float8 `json:"last_fee_ppm"`
-	OutgoingChanID string        `json:"outgoing_chan_id"`
-}
-
-// recent_routes: RebalanceRoute.filter(target_pubkey).order_by('-id')[:10].
-func (q *Queries) ListRecentRoutesForTarget(ctx context.Context, targetPubkey string) ([]ListRecentRoutesForTargetRow, error) {
-	rows, err := q.db.Query(ctx, listRecentRoutesForTarget, targetPubkey)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListRecentRoutesForTargetRow{}
-	for rows.Next() {
-		var i ListRecentRoutesForTargetRow
-		if err := rows.Scan(&i.Route, &i.LastFeePpm, &i.OutgoingChanID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

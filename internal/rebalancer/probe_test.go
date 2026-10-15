@@ -138,8 +138,10 @@ func TestTrySingleSourceSuccess(t *testing.T) {
 		info: &lnrpc.GetInfoResponse{IdentityPubkey: "self"},
 		qr:   sampleQR(),
 	}
+	var builtCltv []int32
 	r := &fakeRouter{
 		buildFn: func(req *routerrpc.BuildRouteRequest) (*routerrpc.BuildRouteResponse, error) {
+			builtCltv = append(builtCltv, req.FinalCltvDelta)
 			return &routerrpc.BuildRouteResponse{Route: &lnrpc.Route{
 				TotalAmtMsat: 100_050_000, TotalFeesMsat: 50_000,
 				Hops: []*lnrpc.Hop{{PubKey: "aa", ChanId: 111}, {PubKey: "bb", ChanId: 222}},
@@ -172,6 +174,7 @@ func TestTrySingleSourceSuccess(t *testing.T) {
 	require.Len(t, q.updated, 1)
 	assert.Equal(t, int32(1), q.updated[0].SuccessCount)
 	assert.Equal(t, []string{"aa", "bb"}, q.repSuccess)
+	assert.Equal(t, []int32{FinalCltvDelta}, builtCltv) // not derived from the QueryRoutes expiries
 }
 
 func TestTrySingleSourceOppCostRejected(t *testing.T) {

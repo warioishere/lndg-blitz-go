@@ -11,30 +11,18 @@ SELECT * FROM gui_channels
 WHERE is_open = true AND auto_rebalance = true AND remote_pubkey = $1
 ORDER BY chan_id;
 
--- name: ListGraphOutboundCans :many
--- outbound_cans: is_open, exclude(auto_rebalance=True, ar_source=False).
-SELECT chan_id FROM gui_channels
-WHERE is_open = true AND NOT (auto_rebalance = true AND ar_source = false)
-ORDER BY chan_id;
-
--- name: ListRecentRoutesForTarget :many
--- recent_routes: RebalanceRoute.filter(target_pubkey).order_by('-id')[:10].
-SELECT route, last_fee_ppm, outgoing_chan_id FROM gui_rebalanceroute
-WHERE target_pubkey = $1 ORDER BY id DESC LIMIT 10;
-
--- name: HasActiveRebalanceForPubkey :one
--- _schedule_rebalance: existiert ein status in {0,1} Rebalance fuer den Ziel-Peer?
-SELECT EXISTS (
-    SELECT 1 FROM gui_rebalancer WHERE last_hop_pubkey = $1 AND status IN (0, 1)
-) AS active;
-
 -- name: InsertGraphProbeLog :exec
--- GraphProbeLog.objects.create(...); timestamp = now (Django-Default).
+-- One forced-route probe through the new peer; rebalance_scheduled marks a
+-- purchase over the verified route. routes_new and routes_existing belong to
+-- the generic probe and stay 0.
 INSERT INTO gui_graphprobelog
     (timestamp, target_pubkey, target_alias, target_fee, target_max_cost, trigger_chan_id,
      other_pubkey, other_alias, other_fee_ppm, budget_ppm, sources_tried, routes_new,
-     routes_existing, errors, routes_via_new_peer, rebalance_scheduled, details)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17);
+     routes_existing, errors, routes_via_new_peer, rebalance_scheduled, details,
+     buy_ppm, via_fee_ppm, via_amount_sat, buy_status)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0,
+        0, $12, $13, $14, $15,
+        $16, $17, $18, $19);
 
 -- name: InsertGraphEvent :exec
 -- GraphEvent.objects.create(...); timestamp = now (Django-Default).
