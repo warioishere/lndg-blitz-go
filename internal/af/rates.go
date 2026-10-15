@@ -93,7 +93,7 @@ func (s *Settings) applyOutboundRate(r *ChannelFeeRow) {
 func (s *Settings) applyInboundRate(r *ChannelFeeRow) {
 	nir := float64(r.LocalInboundFeeRate) + r.InboundAdjustment
 	nir = math.RoundToEven(nir/float64(s.Increment)) * float64(s.Increment)
-	lower := -((float64(r.ArMaxCost) / 100.0) * float64(r.LocalFeeRate))
+	lower := -MaxCostDiscount(r.ArMaxCost, r.LocalFeeRate)
 	nir = clipF(nir, lower, 0)
 	r.NewInboundRate = nir
 	r.InboundAdjustment = r.NewInboundRate - float64(r.LocalInboundFeeRate)

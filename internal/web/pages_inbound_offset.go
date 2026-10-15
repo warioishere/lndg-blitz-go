@@ -7,27 +7,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 )
-
-// ioChannel holds the channel fields needed for inbound offset operations.
-type ioChannel struct {
-	chanID                                          string
-	alias, fundingTxid                              string
-	inboundOffset, localFeeRate, localBaseFee       int32
-	localCltv, localInboundBaseFee, localInboundFee int32
-	outputIndex                                     int32
-}
-
-const ioChannelCols = `chan_id, COALESCE(alias,''), inbound_offset, local_fee_rate, local_base_fee,
-	local_cltv, local_inbound_base_fee, local_inbound_fee_rate, funding_txid, output_index`
-
-func scanIOChannel(row interface{ Scan(...any) error }) (ioChannel, error) {
-	var c ioChannel
-	err := row.Scan(&c.chanID, &c.alias, &c.inboundOffset, &c.localFeeRate, &c.localBaseFee,
-		&c.localCltv, &c.localInboundBaseFee, &c.localInboundFee, &c.fundingTxid, &c.outputIndex)
-	return c, err
-}
 
 // handleInboundOffsetPost handles single or bulk inbound offset adjustments via
 // UpdateChannelPolicy (inbound_fee, LND v0.18+) and logs changes to InboundFeeLog.
@@ -54,39 +37,19 @@ func (s *Server) inboundOffsetBulk(ctx context.Context, w http.ResponseWriter, r
 	}
 
 	selected := r.PostForm["channels"]
-	var rows interface {
-		Next() bool
-		Scan(...any) error
-		Close()
-		Err() error
-	}
+	var rows pgx.Rows
+	var qerr error
 	if len(selected) > 0 {
-		rr, qerr := s.db.Query(ctx, `SELECT `+ioChannelCols+` FROM gui_channels WHERE chan_id = ANY($1) ORDER BY chan_id`, selected)
-		if qerr != nil {
-			http.Error(w, qerr.Error(), http.StatusInternalServerError)
-			return
-		}
-		rows = rr
+		rows, qerr = s.db.Query(ctx, `SELECT `+ffaColumns+` FROM gui_channels WHERE chan_id = ANY($1) ORDER BY chan_id`, selected)
 	} else {
-		rr, qerr := s.db.Query(ctx, `SELECT `+ioChannelCols+` FROM gui_channels WHERE is_open = true ORDER BY chan_id`)
-		if qerr != nil {
-			http.Error(w, qerr.Error(), http.StatusInternalServerError)
-			return
-		}
-		rows = rr
+		rows, qerr = s.db.Query(ctx, `SELECT `+ffaColumns+` FROM gui_channels WHERE is_open = true ORDER BY chan_id`)
 	}
-	var channels []ioChannel
-	for rows.Next() {
-		c, serr := scanIOChannel(rows)
-		if serr != nil {
-			rows.Close()
-			http.Error(w, serr.Error(), http.StatusInternalServerError)
-			return
-		}
-		channels = append(channels, c)
+	if qerr != nil {
+		http.Error(w, qerr.Error(), http.StatusInternalServerError)
+		return
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	channels, err := scanFFAChannels(rows)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -110,11 +73,9 @@ func (s *Server) inboundOffsetBulk(ctx context.Context, w http.ResponseWriter, r
 		if newOffset > 0 {
 			newOffset = 0
 		}
-		balance := ch.localFeeRate + newOffset
-		var targetFeeRate int32
-		if balance > 0 {
-			targetFeeRate = -balance
-		}
+		withOffset := ch
+		withOffset.inboundOffset = newOffset
+		targetFeeRate, _ := s.inboundOffsetRate(ctx, withOffset, int(ch.localFeeRate))
 		if _, err := s.lnd.Lightning.UpdateChannelPolicy(ctx, &lnrpc.PolicyUpdateRequest{
 			Scope:         &lnrpc.PolicyUpdateRequest_ChanPoint{ChanPoint: channelPoint(ch.fundingTxid, ch.outputIndex)},
 			BaseFeeMsat:   int64(ch.localBaseFee),
@@ -126,7 +87,7 @@ func (s *Server) inboundOffsetBulk(ctx context.Context, w http.ResponseWriter, r
 			continue
 		}
 		now := time.Now()
-		oldRate := ch.localInboundFee
+		oldRate := ch.localInboundFeeRate
 		if _, err := s.db.Exec(ctx, `UPDATE gui_channels SET inbound_offset=$2, local_inbound_fee_rate=$3, offset_updated=$4 WHERE chan_id=$1`,
 			ch.chanID, newOffset, targetFeeRate, now); err != nil {
 			f.add("Error updating " + ch.alias + ": " + err.Error())
@@ -154,19 +115,20 @@ func (s *Server) inboundOffsetSingle(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 	chanID := strconv.FormatInt(chanIDInt, 10)
-	row := s.db.QueryRow(ctx, `SELECT `+ioChannelCols+` FROM gui_channels WHERE chan_id=$1`, chanID)
-	ch, err := scanIOChannel(row)
-	if err != nil {
+	rows, err := s.db.Query(ctx, `SELECT `+ffaColumns+` FROM gui_channels WHERE chan_id=$1`, chanID)
+	var found []ffaChannel
+	if err == nil {
+		found, err = scanFFAChannels(rows)
+	}
+	if err != nil || len(found) == 0 {
 		f.add(invalidRequest)
 		s.redirect(w, r, refererOr(r, "/"), f)
 		return
 	}
-
-	balance := ch.localFeeRate + int32(offset)
-	var targetFeeRate int32
-	if balance > 0 {
-		targetFeeRate = -balance
-	}
+	ch := found[0]
+	withOffset := ch
+	withOffset.inboundOffset = int32(offset)
+	targetFeeRate, _ := s.inboundOffsetRate(ctx, withOffset, int(ch.localFeeRate))
 	// GetInfo/LND/DB errors flash 'Error updating channel: {e}'.
 	fail := func(e error) {
 		f.add("Error updating channel: " + e.Error())
@@ -193,7 +155,7 @@ func (s *Server) inboundOffsetSingle(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 	now := time.Now()
-	oldRate := ch.localInboundFee
+	oldRate := ch.localInboundFeeRate
 	if _, err := s.db.Exec(ctx, `UPDATE gui_channels SET inbound_offset=$2, local_inbound_fee_rate=$3, offset_updated=$4 WHERE chan_id=$1`,
 		chanID, int32(offset), targetFeeRate, now); err != nil {
 		fail(err)

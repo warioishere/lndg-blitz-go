@@ -11,6 +11,8 @@ type ffaChannel struct {
 	chanID, alias, remotePubkey, fundingTxid              string
 	localFeeRate, localBaseFee, localCltv, inboundOffset  int32
 	localInboundBaseFee, localInboundFeeRate, outputIndex int32
+	arInTarget, arMaxCost                                 int32
+	capacity, localBalance, pendingOutbound               int64
 }
 
 // handleFullFeeAdjPost adjusts the outbound fee rate of all (or selected) channels

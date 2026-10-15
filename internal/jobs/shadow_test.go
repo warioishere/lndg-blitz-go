@@ -44,50 +44,6 @@ func TestIdleDropRate(t *testing.T) {
 	}
 }
 
-func TestRebateCapRate(t *testing.T) {
-	for _, c := range []struct {
-		name   string
-		target int
-		cost   *int
-		rate   int
-		ok     bool
-	}{
-		{"discount above rebalance cost - 10%: capped", -3100, intp(2600), -2340, true},
-		{"discount within the cap", -2000, intp(2600), 0, false},
-		{"no discount", 0, intp(2600), 0, false},
-		{"no rebalance history", -3100, nil, 0, false},
-	} {
-		rate, ok := rebateCapRate(c.target, c.cost)
-		assert.Equal(t, c.ok, ok, c.name)
-		assert.Equal(t, c.rate, rate, c.name)
-	}
-}
-
-// The offset job logs the capped rate and still applies its own target.
-func TestInboundOffsets_ShadowRebateCap(t *testing.T) {
-	q := &fakeFeeQ{
-		settings: map[string]string{"IO-Enabled": "1", "FLP-Lookback": "10"},
-		channels: []db.GuiChannel{{
-			ChanID: "c1", IsOpen: true, InboundOffset: -100, LocalFeeRate: 3200, LocalBaseFee: 1000, LocalCltv: 40,
-			FundingTxid: "abc", Alias: "peer1", Capacity: 1000000, LocalBalance: 600000,
-		}},
-		// two rebalances at 2500 ppm and 2700 ppm, no source fee -> cost 2600
-		pays: map[string][]db.RebalPaymentsForChannelRow{"c1": {{Fee: 250, Value: 100000}, {Fee: 270, Value: 100000}}},
-	}
-	client := &fakePolicyClient{version: "0.21.0-beta"}
-	require.NoError(t, InboundOffsets(context.Background(), q, client))
-
-	require.Len(t, client.policyReqs, 1)
-	assert.Equal(t, int32(-3100), client.policyReqs[0].InboundFee.FeeRatePpm, "shadow mode: target applied unchanged")
-	require.Len(t, q.shadow, 1)
-	s := q.shadow[0]
-	assert.Equal(t, "rebate_cap", s.Rule)
-	assert.Equal(t, int32(2600), s.AvgRebalanceCost)
-	assert.Equal(t, int32(-3100), s.CurrentValue)
-	assert.Equal(t, int32(-2340), s.ProposedValue)
-	assert.Equal(t, int32(60), s.OutPercent)
-}
-
 // AF logs the idle drop for a full channel without sales and still applies its own rate.
 func TestAutoFees_ShadowIdleDrop(t *testing.T) {
 	old := time.Now().Add(-72 * time.Hour)

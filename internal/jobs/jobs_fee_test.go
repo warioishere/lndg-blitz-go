@@ -28,8 +28,6 @@ type fakeFeeQ struct {
 	htlcChecked  []db.SetChannelHtlcBoostCheckedParams
 	feeRateUp    []db.UpdateChannelFeeRateParams
 	failedCounts map[string]int64
-	shadow       []db.InsertShadowFeeLogParams
-	pays         map[string][]db.RebalPaymentsForChannelRow
 }
 
 func (f *fakeFeeQ) ListInboundOffsetChannels(ctx context.Context) ([]db.GuiChannel, error) {
@@ -40,13 +38,6 @@ func (f *fakeFeeQ) ListInboundOffsetChannels(ctx context.Context) ([]db.GuiChann
 		}
 	}
 	return out, nil
-}
-func (f *fakeFeeQ) InsertShadowFeeLog(ctx context.Context, arg db.InsertShadowFeeLogParams) error {
-	f.shadow = append(f.shadow, arg)
-	return nil
-}
-func (f *fakeFeeQ) RebalPaymentsForChannel(ctx context.Context, arg db.RebalPaymentsForChannelParams) ([]db.RebalPaymentsForChannelRow, error) {
-	return f.pays[arg.RebalChan.String], nil
 }
 func (f *fakeFeeQ) InsertInboundFeeLog(ctx context.Context, arg db.InsertInboundFeeLogParams) error {
 	f.inboundLogs = append(f.inboundLogs, arg)
@@ -255,13 +246,13 @@ func TestInboundOffsets_AppliesTarget(t *testing.T) {
 		channels: []db.GuiChannel{{
 			ChanID: "c1", IsOpen: true, InboundOffset: -10, LocalFeeRate: 200,
 			LocalInboundFeeRate: 0, LocalBaseFee: 1000, LocalCltv: 40, FundingTxid: "abc",
-			Alias: "peer1",
+			Alias: "peer1", ArMaxCost: 95, ArInTarget: 50, Capacity: 1000000,
 		}},
 	}
 	client := &fakePolicyClient{version: "0.21.0-beta"}
 	require.NoError(t, InboundOffsets(context.Background(), q, client))
 	require.Len(t, client.policyReqs, 1)
-	// balance = 200 + (-10) = 190 > 0 -> target = -190
+	// empty channel: the full cap min(200 - 10, 95% of 200) = 190 -> target = -190
 	require.NotNil(t, client.policyReqs[0].InboundFee)
 	assert.Equal(t, int32(-190), client.policyReqs[0].InboundFee.FeeRatePpm)
 	require.Len(t, q.inboundUp, 1)
@@ -290,6 +281,7 @@ func TestInboundOffsets_LeavesAutoFeesChannels(t *testing.T) {
 			}
 			q := &fakeFeeQ{settings: settings, channels: []db.GuiChannel{{
 				ChanID: "c1", IsOpen: true, AutoFees: true, InboundOffset: -10, LocalFeeRate: 200, FundingTxid: "abc",
+				ArMaxCost: 95, ArInTarget: 50, Capacity: 1000000,
 			}}}
 			client := &fakePolicyClient{version: "0.21.0-beta"}
 			require.NoError(t, InboundOffsets(context.Background(), q, client))
@@ -347,4 +339,38 @@ func TestFailedHtlcBoostJob_BelowThresholdMarksOnly(t *testing.T) {
 	require.Len(t, q.htlcChecked, 1, "still marks checked")
 	assert.Empty(t, client.policyReqs, "no boost below threshold")
 	assert.Empty(t, q.feeRateUp)
+}
+
+// Small liquidity moves do not push an update; reaching the target clears the discount.
+func TestInboundOffsets_DynamicUpdates(t *testing.T) {
+	ch := db.GuiChannel{
+		ChanID: "c1", IsOpen: true, InboundOffset: -100, LocalFeeRate: 2321, LocalBaseFee: 1000, LocalCltv: 40,
+		FundingTxid: "abc", Alias: "p1", ArMaxCost: 93, ArInTarget: 50, Capacity: 20_000_000,
+	}
+	run := func(local int64, current int32) (*fakeFeeQ, *fakePolicyClient) {
+		c := ch
+		c.LocalBalance, c.LocalInboundFeeRate = local, current
+		q := &fakeFeeQ{settings: map[string]string{"IO-Enabled": "1", "AF-Exponent": "2.0"}, channels: []db.GuiChannel{c}}
+		client := &fakePolicyClient{version: "0.21.0-beta"}
+		require.NoError(t, InboundOffsets(context.Background(), q, client))
+		return q, client
+	}
+
+	// 25% out -> -1619; current -1700 differs by 81 < 5% of the cap (108): no update
+	q, client := run(5_000_000, -1700)
+	assert.Empty(t, client.policyReqs)
+	assert.Empty(t, q.inboundLogs)
+	require.Len(t, q.inboundUp, 1, "the check time is still recorded")
+	assert.Equal(t, int32(-1700), q.inboundUp[0].LocalInboundFeeRate)
+
+	// current -2159 (empty before) -> -1619: a large move is pushed and logged
+	q, client = run(5_000_000, -2159)
+	require.Len(t, client.policyReqs, 1)
+	assert.Equal(t, int32(-1619), client.policyReqs[0].InboundFee.FeeRatePpm)
+	require.Len(t, q.inboundLogs, 1)
+
+	// at the target a small leftover discount is cleared to 0
+	q, client = run(10_000_000, -40)
+	require.Len(t, client.policyReqs, 1)
+	assert.Equal(t, int32(0), client.policyReqs[0].InboundFee.FeeRatePpm)
 }

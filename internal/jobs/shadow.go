@@ -13,7 +13,7 @@ import (
 )
 
 // Fee rules in shadow mode: the jobs compute what the rule would set and write it
-// to shadow_fee_log; nothing is applied. Both rules use the channel's rebalance
+// to shadow_fee_log; nothing is applied. The rules use the channel's rebalance
 // cost as the FLP floor computes it (af.AvgRebalanceCostPPM over the last
 // FLP-Lookback rebalances, source fee included).
 const (
@@ -48,21 +48,6 @@ func idleDropRate(row *af.ChannelFeeRow, now time.Time) (rate int, ok bool) {
 		return 0, false
 	}
 	return floor, true
-}
-
-// rebateCapRate is the inbound rate of the rebate-cap rule: an inbound discount
-// is never larger than refilling the channel by rebalancing costs, minus margin.
-// target is the offset job's rate (zero or negative); ok is false when the
-// discount is already within the cap or the channel has no rebalance cost.
-func rebateCapRate(target int, avgCost *int) (rate int, ok bool) {
-	if avgCost == nil {
-		return 0, false
-	}
-	capAbs := int(float64(*avgCost) * (1 - shadowCostMargin))
-	if -target <= capAbs {
-		return 0, false
-	}
-	return -capAbs, true
 }
 
 func hoursSince(t *time.Time, now time.Time) pgtype.Float8 {

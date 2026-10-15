@@ -3,9 +3,8 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
 
 	af "github.com/warioishere/lndg-blitz-go/internal/af"
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
@@ -19,12 +18,16 @@ type inboundOffsetsQuerier interface {
 	GetChannel(ctx context.Context, chanID string) (db.GuiChannel, error)
 	InsertInboundFeeLog(ctx context.Context, arg db.InsertInboundFeeLogParams) error
 	UpdateChannelInboundOffset(ctx context.Context, arg db.UpdateChannelInboundOffsetParams) error
-	RebalPaymentsForChannel(ctx context.Context, arg db.RebalPaymentsForChannelParams) ([]db.RebalPaymentsForChannelRow, error)
-	shadowLogQuerier
 }
 
-// InboundOffsets sets the inbound fee rate on each eligible channel so that
-// the sum of local fee rate and inbound offset nets to zero (or stays negative).
+// inboundMinChange is the smallest change of the computed inbound rate, as a
+// share of the channel's discount cap, that is pushed to LND. Small liquidity
+// moves do not each send a channel update into the network.
+const inboundMinChange = 0.05
+
+// InboundOffsets sets the inbound fee rate of each channel with an inbound offset
+// to af.InboundOffsetRate: a discount that refills the channel up to its outbound
+// target, capped by the offset and by what the rebalancer may pay.
 func InboundOffsets(ctx context.Context, q inboundOffsetsQuerier, client policyClient) error {
 	enabled, err := settingGateEnabled(ctx, q, "IO-Enabled")
 	if err != nil {
@@ -63,7 +66,7 @@ func InboundOffsets(ctx context.Context, q inboundOffsetsQuerier, client policyC
 		return err
 	}
 
-	lookback, err := getOrCreateInt(ctx, q, "FLP-Lookback", "10")
+	exponent, err := getOrCreateFloat(ctx, q, "AF-Exponent", "2.0")
 	if err != nil {
 		return err
 	}
@@ -81,12 +84,20 @@ func InboundOffsets(ctx context.Context, q inboundOffsetsQuerier, client policyC
 		if ch.OffsetUpdated.Valid && !ch.OffsetUpdated.Time.Before(threshold) {
 			continue
 		}
-		balance := int(ch.LocalFeeRate) + int(ch.InboundOffset)
-		target := 0
-		if balance > 0 {
-			target = -balance
+		target, discountCap, _ := af.InboundOffsetRate(af.InboundInput{
+			LocalFeeRate: int(ch.LocalFeeRate), InboundOffset: int(ch.InboundOffset),
+			ArMaxCost: int(ch.ArMaxCost), ArInTarget: int(ch.ArInTarget),
+			Capacity: ch.Capacity, LocalBalance: ch.LocalBalance, PendingOutbound: ch.PendingOutbound,
+		}, exponent)
+		current := int(ch.LocalInboundFeeRate)
+		if target == current || (target != 0 && math.Abs(float64(target-current)) < inboundMinChange*discountCap) {
+			if e := q.UpdateChannelInboundOffset(ctx, db.UpdateChannelInboundOffsetParams{
+				ChanID: ch.ChanID, LocalInboundFeeRate: ch.LocalInboundFeeRate, OffsetUpdated: ts(now),
+			}); e != nil {
+				return e
+			}
+			continue
 		}
-		shadowRebateCap(ctx, q, ch, target, lookback, now)
 		inboundBaseFee := int32(0)
 		if ch.LocalInboundBaseFee != 0 {
 			inboundBaseFee = ch.LocalInboundBaseFee
@@ -102,13 +113,11 @@ func InboundOffsets(ctx context.Context, q inboundOffsetsQuerier, client policyC
 			dataLog(fmt.Sprintf("Error updating inbound offset for %s: %s", ch.ChanID, e))
 			continue
 		}
-		if int(ch.LocalInboundFeeRate) != target {
-			if e := q.InsertInboundFeeLog(ctx, db.InsertInboundFeeLogParams{
-				Timestamp: ts(now), ChanID: ch.ChanID, PeerAlias: ch.Alias,
-				Setting: "Offset Job", OldValue: ch.LocalInboundFeeRate, NewValue: int32(target),
-			}); e != nil {
-				return e
-			}
+		if e := q.InsertInboundFeeLog(ctx, db.InsertInboundFeeLogParams{
+			Timestamp: ts(now), ChanID: ch.ChanID, PeerAlias: ch.Alias,
+			Setting: "Offset Job", OldValue: ch.LocalInboundFeeRate, NewValue: int32(target),
+		}); e != nil {
+			return e
 		}
 		if e := q.UpdateChannelInboundOffset(ctx, db.UpdateChannelInboundOffsetParams{
 			ChanID: ch.ChanID, LocalInboundFeeRate: int32(target), OffsetUpdated: ts(now),
@@ -117,30 +126,4 @@ func InboundOffsets(ctx context.Context, q inboundOffsetsQuerier, client policyC
 		}
 	}
 	return nil
-}
-
-// shadowRebateCap logs the inbound rate the rebate-cap rule would set instead of target.
-func shadowRebateCap(ctx context.Context, q inboundOffsetsQuerier, ch db.GuiChannel, target, lookback int, now time.Time) {
-	pays, err := q.RebalPaymentsForChannel(ctx, db.RebalPaymentsForChannelParams{
-		RebalChan: pgtype.Text{String: ch.ChanID, Valid: true}, Limit: int32(lookback),
-	})
-	if err != nil {
-		dataLog(fmt.Sprintf("Error reading rebalance cost for %s: %s", ch.ChanID, err))
-		return
-	}
-	cost := af.AvgRebalanceCostPPM(pays)
-	rate, ok := rebateCapRate(target, cost)
-	if !ok {
-		return
-	}
-	outPercent := 0
-	if ch.Capacity > 0 {
-		outPercent = int(ch.LocalBalance * 100 / ch.Capacity)
-	}
-	logShadow(ctx, q, db.InsertShadowFeeLogParams{
-		Timestamp: ts(now), Rule: "rebate_cap", ChanID: ch.ChanID, PeerAlias: ch.Alias,
-		LocalFeeRate: ch.LocalFeeRate, LocalInboundFeeRate: ch.LocalInboundFeeRate,
-		AvgRebalanceCost: int32(*cost), OutPercent: int32(outPercent),
-		CurrentValue: int32(target), ProposedValue: int32(rate),
-	})
 }

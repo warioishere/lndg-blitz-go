@@ -55,6 +55,8 @@ func TestOutboundFeeAppliesInboundOffset(t *testing.T) {
 				"chan_id": c.id, "remote_pubkey": c.peer, "funding_txid": "ft" + c.id, "output_index": 0,
 				"alias": "a" + c.id, "is_open": true, "local_fee_rate": 500, "local_base_fee": 1000,
 				"local_cltv": 40, "inbound_offset": c.offset,
+				// empty channels with max cost 100%: the offset is the discount cap
+				"ar_max_cost": 100, "ar_in_target": 50, "capacity": 1000000, "local_balance": 0,
 			})
 		}
 	}
@@ -111,6 +113,14 @@ func TestOutboundFeeAppliesInboundOffset(t *testing.T) {
 		assert.EqualValues(t, -700, reqFor("1").GetInboundFee().GetFeeRatePpm(), "offset sent with the new rate")
 		_, inbound := fees("1")
 		assert.EqualValues(t, -700, inbound)
+
+		// a channel at its outbound target (50%) gets no discount
+		_, err := pool.Exec(ctx, `UPDATE gui_channels SET local_balance=500000 WHERE chan_id='2'`)
+		require.NoError(t, err)
+		postViaServer(t, ts, "/api/chanpolicy/", `{"chan_id":"2","fee_rate":800}`)
+		assert.EqualValues(t, 0, reqFor("2").GetInboundFee().GetFeeRatePpm(), "balanced channel: no discount")
+		_, inbound = fees("2")
+		assert.EqualValues(t, 0, inbound)
 
 		reqs = nil
 		postViaServer(t, ts, "/api/chanpolicy/", `{"chan_id":"3","inbound_fee_rate":0}`)

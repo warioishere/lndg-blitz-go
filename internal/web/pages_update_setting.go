@@ -12,7 +12,8 @@ import (
 
 // ffaColumns are the channel columns scanned into ffaChannel, in scan order.
 const ffaColumns = `chan_id, COALESCE(alias,''), remote_pubkey, local_fee_rate, local_base_fee, local_cltv,
-	inbound_offset, local_inbound_base_fee, local_inbound_fee_rate, funding_txid, output_index`
+	inbound_offset, local_inbound_base_fee, local_inbound_fee_rate, funding_txid, output_index,
+	ar_in_target, ar_max_cost, capacity, local_balance, pending_outbound`
 
 // scanFFAChannels reads ffaColumns rows into ffaChannel values and closes rows.
 func scanFFAChannels(rows pgx.Rows) ([]ffaChannel, error) {
@@ -21,7 +22,8 @@ func scanFFAChannels(rows pgx.Rows) ([]ffaChannel, error) {
 	for rows.Next() {
 		var c ffaChannel
 		if err := rows.Scan(&c.chanID, &c.alias, &c.remotePubkey, &c.localFeeRate, &c.localBaseFee, &c.localCltv,
-			&c.inboundOffset, &c.localInboundBaseFee, &c.localInboundFeeRate, &c.fundingTxid, &c.outputIndex); err != nil {
+			&c.inboundOffset, &c.localInboundBaseFee, &c.localInboundFeeRate, &c.fundingTxid, &c.outputIndex,
+			&c.arInTarget, &c.arMaxCost, &c.capacity, &c.localBalance, &c.pendingOutbound); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

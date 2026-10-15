@@ -109,7 +109,7 @@ func (s *Server) handleChanPolicy(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else if body.FeeRate != nil && versionAtLeast(info.GetVersion(), 0.18) {
-			if t, ok := offsetInboundFee(ch.InboundOffset, float64(*body.FeeRate)); ok {
+			if t, ok := s.inboundOffsetRate(ctx, ffaChannelFrom(ch), int(*body.FeeRate)); ok {
 				offsetTarget = &t
 				req.InboundFee = &lnrpc.InboundFee{BaseFeeMsat: ch.LocalInboundBaseFee, FeeRatePpm: t}
 			}

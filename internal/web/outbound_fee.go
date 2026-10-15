@@ -2,9 +2,9 @@ package web
 
 import (
 	"context"
-	"math"
 	"time"
 
+	af "github.com/warioishere/lndg-blitz-go/internal/af"
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 )
@@ -20,19 +20,20 @@ func ffaChannelFrom(ch db.GuiChannel) ffaChannel {
 		localFeeRate: ch.LocalFeeRate, localBaseFee: ch.LocalBaseFee, localCltv: ch.LocalCltv,
 		inboundOffset: ch.InboundOffset, localInboundBaseFee: ch.LocalInboundBaseFee,
 		localInboundFeeRate: ch.LocalInboundFeeRate, fundingTxid: ch.FundingTxid, outputIndex: ch.OutputIndex,
+		arInTarget: ch.ArInTarget, arMaxCost: ch.ArMaxCost,
+		capacity: ch.Capacity, localBalance: ch.LocalBalance, pendingOutbound: ch.PendingOutbound,
 	}
 }
 
-// offsetInboundFee returns the inbound fee rate the channel's inbound offset
-// implies for a new outbound rate; ok is false when the channel has no offset.
-func offsetInboundFee(inboundOffset int32, newRate float64) (target int32, ok bool) {
-	if inboundOffset == 0 {
-		return 0, false
-	}
-	if balance := newRate + float64(inboundOffset); balance > 0 {
-		return int32(math.RoundToEven(-balance)), true
-	}
-	return 0, true
+// inboundOffsetRate is the inbound rate of af.InboundOffsetRate for the channel
+// once its outbound fee is newRate; ok is false without an inbound offset.
+func (s *Server) inboundOffsetRate(ctx context.Context, ch ffaChannel, newRate int) (int32, bool) {
+	rate, _, ok := af.InboundOffsetRate(af.InboundInput{
+		LocalFeeRate: newRate, InboundOffset: int(ch.inboundOffset),
+		ArMaxCost: int(ch.arMaxCost), ArInTarget: int(ch.arInTarget),
+		Capacity: ch.capacity, LocalBalance: ch.localBalance, PendingOutbound: ch.pendingOutbound,
+	}, s.settingFloatDefault(ctx, "AF-Exponent", 2.0))
+	return int32(rate), ok
 }
 
 // recordOutboundFee is the DB side of a manual outbound fee change already
@@ -71,7 +72,7 @@ func (s *Server) applyOutboundFee(ctx context.Context, ch ffaChannel, newRate fl
 		BaseFeeMsat: int64(ch.localBaseFee), FeeRate: newRate / 1000000, TimeLockDelta: uint32(ch.localCltv),
 	}
 	var inboundTarget *int32
-	if t, ok := offsetInboundFee(ch.inboundOffset, newRate); ok {
+	if t, ok := s.inboundOffsetRate(ctx, ch, int(newRate)); ok {
 		inboundTarget = &t
 		req.InboundFee = &lnrpc.InboundFee{BaseFeeMsat: ch.localInboundBaseFee, FeeRatePpm: t}
 	}
