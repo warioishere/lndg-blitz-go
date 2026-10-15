@@ -6,6 +6,7 @@ sql:
     schema:
       - "internal/db/migrations/000001_initial_schema.up.sql"
       - "internal/db/migrations/000002_payments_source_fee_rate.up.sql"
+      - "internal/db/migrations/000003_shadow_fee_log.up.sql"
     queries: "internal/db/queries"
     gen:
       go:

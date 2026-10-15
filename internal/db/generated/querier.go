@@ -122,6 +122,7 @@ type Querier interface {
 	// target_alias, duration=1, status=1).save(); requested=now (Django-Default).
 	InsertRebalancerRecord(ctx context.Context, arg InsertRebalancerRecordParams) (int64, error)
 	InsertResolution(ctx context.Context, arg InsertResolutionParams) error
+	InsertShadowFeeLog(ctx context.Context, arg InsertShadowFeeLogParams) error
 	// Forwards-Queries fuer update_forwards / emergency_forward_check.
 	LatestForward(ctx context.Context) (LatestForwardRow, error)
 	// run_rebalancer Orchestrator-Queries.

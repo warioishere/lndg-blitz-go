@@ -420,3 +420,18 @@ type GuiTradesale struct {
 	SaleLimit    pgtype.Int4        `json:"sale_limit"`
 	SaleCount    int32              `json:"sale_count"`
 }
+
+type ShadowFeeLog struct {
+	ID                  int64              `json:"id"`
+	Timestamp           pgtype.Timestamptz `json:"timestamp"`
+	Rule                string             `json:"rule"`
+	ChanID              string             `json:"chan_id"`
+	PeerAlias           string             `json:"peer_alias"`
+	LocalFeeRate        int32              `json:"local_fee_rate"`
+	LocalInboundFeeRate int32              `json:"local_inbound_fee_rate"`
+	AvgRebalanceCost    int32              `json:"avg_rebalance_cost"`
+	OutPercent          int32              `json:"out_percent"`
+	HoursSinceOut       pgtype.Float8      `json:"hours_since_out"`
+	CurrentValue        int32              `json:"current_value"`
+	ProposedValue       int32              `json:"proposed_value"`
+}

@@ -19,6 +19,7 @@ type autoFeesQuerier interface {
 	InsertAutofee(ctx context.Context, arg db.InsertAutofeeParams) error
 	InsertInboundFeeLog(ctx context.Context, arg db.InsertInboundFeeLogParams) error
 	UpdateChannelAutoFees(ctx context.Context, arg db.UpdateChannelAutoFeesParams) error
+	shadowLogQuerier
 }
 
 // AutoFees computes fee targets via af.Main and pushes eligible changes to LND and the DB.
@@ -54,10 +55,23 @@ func autoFeesBody(ctx context.Context, q autoFeesQuerier, client policyClient, i
 	if err != nil {
 		return err
 	}
+	alias := make(map[string]string, len(channels))
+	for _, c := range channels {
+		alias[c.ChanID] = c.Alias
+	}
 	for _, row := range rows {
 		// Only apply updates where the channel is eligible and at least one fee changed.
 		if !row.Eligible {
 			continue
+		}
+		if rate, ok := idleDropRate(row, now); ok {
+			logShadow(ctx, q, db.InsertShadowFeeLogParams{
+				Timestamp: ts(now), Rule: "idle_drop", ChanID: row.ChanID, PeerAlias: alias[row.ChanID],
+				LocalFeeRate: int32(row.LocalFeeRate), LocalInboundFeeRate: int32(row.LocalInboundFeeRate),
+				AvgRebalanceCost: int32(*row.AvgRebalanceCost), OutPercent: int32(row.OutPercent),
+				HoursSinceOut: hoursSince(row.LastForwardOut, now),
+				CurrentValue:  int32(row.NewRate), ProposedValue: int32(rate),
+			})
 		}
 		if row.Adjustment == 0 && row.InboundAdjustment == 0 {
 			continue

@@ -21,6 +21,8 @@ type fakeAfQ struct {
 	autofees    []db.InsertAutofeeParams
 	inboundLogs []db.InsertInboundFeeLogParams
 	autoFeesUp  []db.UpdateChannelAutoFeesParams
+	shadow      []db.InsertShadowFeeLogParams
+	pays        map[string][]db.RebalPaymentsForChannelRow
 }
 
 // --- settings ---
@@ -54,7 +56,11 @@ func (f *fakeAfQ) AnyLocalSettingExists(ctx context.Context, keys []string) (boo
 
 // --- fetch (all empty) ---
 func (f *fakeAfQ) RebalPaymentsForChannel(ctx context.Context, arg db.RebalPaymentsForChannelParams) ([]db.RebalPaymentsForChannelRow, error) {
-	return nil, nil
+	return f.pays[arg.RebalChan.String], nil
+}
+func (f *fakeAfQ) InsertShadowFeeLog(ctx context.Context, arg db.InsertShadowFeeLogParams) error {
+	f.shadow = append(f.shadow, arg)
+	return nil
 }
 func (f *fakeAfQ) ForwardsInSumFee(ctx context.Context, t pgtype.Timestamptz) ([]db.ForwardsInSumFeeRow, error) {
 	return nil, nil

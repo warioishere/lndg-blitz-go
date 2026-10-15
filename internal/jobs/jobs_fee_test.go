@@ -28,6 +28,8 @@ type fakeFeeQ struct {
 	htlcChecked  []db.SetChannelHtlcBoostCheckedParams
 	feeRateUp    []db.UpdateChannelFeeRateParams
 	failedCounts map[string]int64
+	shadow       []db.InsertShadowFeeLogParams
+	pays         map[string][]db.RebalPaymentsForChannelRow
 }
 
 func (f *fakeFeeQ) ListInboundOffsetChannels(ctx context.Context) ([]db.GuiChannel, error) {
@@ -38,6 +40,13 @@ func (f *fakeFeeQ) ListInboundOffsetChannels(ctx context.Context) ([]db.GuiChann
 		}
 	}
 	return out, nil
+}
+func (f *fakeFeeQ) InsertShadowFeeLog(ctx context.Context, arg db.InsertShadowFeeLogParams) error {
+	f.shadow = append(f.shadow, arg)
+	return nil
+}
+func (f *fakeFeeQ) RebalPaymentsForChannel(ctx context.Context, arg db.RebalPaymentsForChannelParams) ([]db.RebalPaymentsForChannelRow, error) {
+	return f.pays[arg.RebalChan.String], nil
 }
 func (f *fakeFeeQ) InsertInboundFeeLog(ctx context.Context, arg db.InsertInboundFeeLogParams) error {
 	f.inboundLogs = append(f.inboundLogs, arg)

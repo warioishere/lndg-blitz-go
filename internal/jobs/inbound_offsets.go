@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
+	af "github.com/warioishere/lndg-blitz-go/internal/af"
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 )
@@ -16,6 +19,8 @@ type inboundOffsetsQuerier interface {
 	GetChannel(ctx context.Context, chanID string) (db.GuiChannel, error)
 	InsertInboundFeeLog(ctx context.Context, arg db.InsertInboundFeeLogParams) error
 	UpdateChannelInboundOffset(ctx context.Context, arg db.UpdateChannelInboundOffsetParams) error
+	RebalPaymentsForChannel(ctx context.Context, arg db.RebalPaymentsForChannelParams) ([]db.RebalPaymentsForChannelRow, error)
+	shadowLogQuerier
 }
 
 // InboundOffsets sets the inbound fee rate on each eligible channel so that
@@ -58,6 +63,11 @@ func InboundOffsets(ctx context.Context, q inboundOffsetsQuerier, client policyC
 		return err
 	}
 
+	lookback, err := getOrCreateInt(ctx, q, "FLP-Lookback", "10")
+	if err != nil {
+		return err
+	}
+
 	for _, ch0 := range channels {
 		if afEnabled && afInbound && ch0.AutoFees {
 			continue
@@ -76,6 +86,7 @@ func InboundOffsets(ctx context.Context, q inboundOffsetsQuerier, client policyC
 		if balance > 0 {
 			target = -balance
 		}
+		shadowRebateCap(ctx, q, ch, target, lookback, now)
 		inboundBaseFee := int32(0)
 		if ch.LocalInboundBaseFee != 0 {
 			inboundBaseFee = ch.LocalInboundBaseFee
@@ -106,4 +117,30 @@ func InboundOffsets(ctx context.Context, q inboundOffsetsQuerier, client policyC
 		}
 	}
 	return nil
+}
+
+// shadowRebateCap logs the inbound rate the rebate-cap rule would set instead of target.
+func shadowRebateCap(ctx context.Context, q inboundOffsetsQuerier, ch db.GuiChannel, target, lookback int, now time.Time) {
+	pays, err := q.RebalPaymentsForChannel(ctx, db.RebalPaymentsForChannelParams{
+		RebalChan: pgtype.Text{String: ch.ChanID, Valid: true}, Limit: int32(lookback),
+	})
+	if err != nil {
+		dataLog(fmt.Sprintf("Error reading rebalance cost for %s: %s", ch.ChanID, err))
+		return
+	}
+	cost := af.AvgRebalanceCostPPM(pays)
+	rate, ok := rebateCapRate(target, cost)
+	if !ok {
+		return
+	}
+	outPercent := 0
+	if ch.Capacity > 0 {
+		outPercent = int(ch.LocalBalance * 100 / ch.Capacity)
+	}
+	logShadow(ctx, q, db.InsertShadowFeeLogParams{
+		Timestamp: ts(now), Rule: "rebate_cap", ChanID: ch.ChanID, PeerAlias: ch.Alias,
+		LocalFeeRate: ch.LocalFeeRate, LocalInboundFeeRate: ch.LocalInboundFeeRate,
+		AvgRebalanceCost: int32(*cost), OutPercent: int32(outPercent),
+		CurrentValue: int32(target), ProposedValue: int32(rate),
+	})
 }
