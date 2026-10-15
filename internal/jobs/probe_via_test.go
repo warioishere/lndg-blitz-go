@@ -126,11 +126,11 @@ func TestProbeViaNoRoute(t *testing.T) {
 
 func TestProbeFeeLimitSat(t *testing.T) {
 	target := db.GuiChannel{LocalFeeRate: 1000, ArMaxCost: 80, ArAmtTarget: 100000}
-	// min(7000, 800-50) + 100 buffer = 850 ppm on 100k sat
-	assert.Equal(t, int64(85), probeFeeLimitSat(target, 50, 7000))
-	// capped by AR-MaxFeeRate: 300 + 100 = 400 ppm
-	assert.Equal(t, int64(40), probeFeeLimitSat(target, 50, 300))
-	// source fee eats the budget: no limit, also not the buffer
+	// min(7000, 800-50) = 750 ppm on 100k sat
+	assert.Equal(t, int64(75), probeFeeLimitSat(target, 50, 7000))
+	// capped by AR-MaxFeeRate: 300 ppm
+	assert.Equal(t, int64(30), probeFeeLimitSat(target, 50, 300))
+	// source fee eats the budget: no limit
 	assert.Equal(t, int64(0), probeFeeLimitSat(target, 1000, 7000))
 	assert.Equal(t, int64(0), probeFeeLimitSat(target, 800, 7000)) // budget exactly 0
 }

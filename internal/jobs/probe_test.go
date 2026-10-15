@@ -410,7 +410,7 @@ func TestProbeSources(t *testing.T) {
 	}
 	assert.Equal(t, []string{"111", "777", "888"}, ids) // cheapest first, then chan_id
 	assert.Equal(t, 1, noBudget)                        // 999: 600 ppm eats the 520 ppm budget
-	assert.Equal(t, int64(57), got[0].feeLimitSat)      // (520 - 50 + 100) ppm of 100k
+	assert.Equal(t, int64(47), got[0].feeLimitSat)      // (520 - 50) ppm of 100k
 }
 
 func TestProbeTargetsOnlyChannelsThatNeedRefill(t *testing.T) {

@@ -24,10 +24,10 @@ type ViaAttempt struct {
 
 // probeFeeLimitSat is the fee budget for refilling target from a source channel
 // with the given fee: target fee * ar_max_cost % minus the source fee, capped at
-// maxFeeRate, plus a 100 ppm probing buffer, for ar_amt_target sats. It is 0
-// when the source fee leaves no budget.
+// maxFeeRate, for ar_amt_target sats. It is the budget the rebalancer's
+// opportunity-cost check allows, so a route probed above it is never paid. It
+// is 0 when the source fee leaves no budget.
 func probeFeeLimitSat(target db.GuiChannel, sourceFeeRate, maxFeeRate int) int64 {
-	const probeBufferPpm = 100
 	inner := int(float64(target.LocalFeeRate)*(float64(target.ArMaxCost)/100)) - sourceFeeRate
 	budgetPpm := maxFeeRate
 	if inner < budgetPpm {
@@ -36,7 +36,7 @@ func probeFeeLimitSat(target db.GuiChannel, sourceFeeRate, maxFeeRate int) int64
 	if budgetPpm <= 0 {
 		return 0
 	}
-	return int64(float64(int64(budgetPpm+probeBufferPpm)*target.ArAmtTarget) / 1000000)
+	return int64(float64(int64(budgetPpm)*target.ArAmtTarget) / 1000000)
 }
 
 // ProbeVia probes routes self -> ... -> via -> target -> self, so a refill of
