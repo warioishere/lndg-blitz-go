@@ -403,7 +403,7 @@ func TestProbeSources(t *testing.T) {
 	channels := []db.GuiChannel{target, sourceChan("888", 100), sourceChan("777", 100), sourceChan("111", 50),
 		sourceChan("999", 600), arNoSource, lowOut, disabled, ownToTarget}
 
-	got, noBudget := probeSources(channels, target, 7000)
+	got, noBudget := probeSources(channels, target, budgetOf(target), 7000)
 	var ids []string
 	for _, s := range got {
 		ids = append(ids, s.chanID)
@@ -459,4 +459,11 @@ func nowISOForTest() string {
 	// A value parseISO accepts and that is "now-ish"; use a far-future date so the
 	// 6h gate always treats it as recent (now - future < 6h is true since negative).
 	return "2099-01-01T00:00:00.000000"
+}
+
+func (f *fakeProbeQ) NkForwardFlows(ctx context.Context, arg db.NkForwardFlowsParams) ([]db.NkForwardFlowsRow, error) {
+	return nil, nil
+}
+func (f *fakeProbeQ) NkBalanceOutFlows(ctx context.Context, arg db.NkBalanceOutFlowsParams) ([]db.NkBalanceOutFlowsRow, error) {
+	return nil, nil
 }

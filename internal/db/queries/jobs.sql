@@ -45,8 +45,9 @@ WHERE chan_id_out = $1 AND timestamp >= $2 AND wire_failure = 15
 SELECT * FROM gui_channels WHERE chan_id = $1;
 
 -- name: ListInboundOffsetChannels :many
--- inbound_offsets: is_open=true, inbound_offset != 0 (jobs.py:780).
-SELECT * FROM gui_channels WHERE is_open = true AND inbound_offset <> 0 ORDER BY chan_id;
+-- inbound_offsets: is_open=true, inbound_offset != 0 (jobs.py:780); NK channels
+-- get their inbound discount from the NK job.
+SELECT * FROM gui_channels WHERE is_open = true AND inbound_offset <> 0 AND af_mode <> 'nk' ORDER BY chan_id;
 
 -- name: ListAutoFeesChannels :many
 -- auto_fees: is_open + is_active + private=false + auto_fees=true (jobs.py:716).

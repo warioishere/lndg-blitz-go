@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 
+	af "github.com/warioishere/lndg-blitz-go/internal/af"
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc/routerrpc"
@@ -45,6 +46,8 @@ type probeQuerier interface {
 	InsertProbeLog(ctx context.Context, arg db.InsertProbeLogParams) error
 	DeleteOldProbeLogs(ctx context.Context) error
 	GetPeerAlias(ctx context.Context, pubkey string) (pgtype.Text, error)
+	NkForwardFlows(ctx context.Context, arg db.NkForwardFlowsParams) ([]db.NkForwardFlowsRow, error)
+	NkBalanceOutFlows(ctx context.Context, arg db.NkBalanceOutFlowsParams) ([]db.NkBalanceOutFlowsRow, error)
 }
 
 // probeTargetDetail holds per-target probe statistics written to the ProbeLog
@@ -213,12 +216,12 @@ type probeSource struct {
 // cheapest fee first (then by chan_id): the sources the rebalancer uses for a rebalance of
 // ar_amt_target sats (rebalancer.SourceFor), not a channel to the target, with
 // a fee budget above zero. noBudget counts the sources left out for their budget.
-func probeSources(channels []db.GuiChannel, target db.GuiChannel, maxFeeRate int) (sources []probeSource, noBudget int) {
+func probeSources(channels []db.GuiChannel, target db.GuiChannel, targetBudgetPpm, maxFeeRate int) (sources []probeSource, noBudget int) {
 	for _, c := range channels {
 		if c.RemotePubkey == target.RemotePubkey || !rebalancer.SourceFor(c, target.ArAmtTarget) {
 			continue
 		}
-		limit := probeFeeLimitSat(target, int(c.LocalFeeRate), maxFeeRate)
+		limit := probeFeeLimitSat(target, targetBudgetPpm, int(c.LocalFeeRate), maxFeeRate)
 		if limit <= 0 {
 			noBudget++
 			continue
@@ -253,7 +256,11 @@ func probeTargets(ctx context.Context, stub probeLightningClient, routerstub pro
 		if err != nil {
 			return 0, 0, 0, nil, err
 		}
-		sources, noBudget := probeSources(channels, chn, maxFeeRate)
+		budget, berr := af.TargetBudgetPpm(ctx, q, chn, time.Now())
+		if berr != nil {
+			dataLog(fmt.Sprintf("Error reading the NK budget of %s: %s", chn.ChanID, berr))
+		}
+		sources, noBudget := probeSources(channels, chn, budget, maxFeeRate)
 		d := probeTargetDetail{Pubkey: chn.RemotePubkey, Sources: len(sources), NoBudget: noBudget}
 
 		for _, src := range sources {

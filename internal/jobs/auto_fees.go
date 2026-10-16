@@ -47,9 +47,16 @@ func AutoFees(ctx context.Context, q autoFeesQuerier, client policyClient) error
 
 func autoFeesBody(ctx context.Context, q autoFeesQuerier, client policyClient, inboundEnabled bool) error {
 	now := time.Now()
-	channels, err := q.ListAutoFeesChannels(ctx)
+	all, err := q.ListAutoFeesChannels(ctx)
 	if err != nil {
 		return err
+	}
+	// NK channels get their fees from the NK job.
+	channels := make([]db.GuiChannel, 0, len(all))
+	for _, ch := range all {
+		if ch.AfMode != "nk" {
+			channels = append(channels, ch)
+		}
 	}
 	rows, err := af.Main(ctx, q, channels, now)
 	if err != nil {

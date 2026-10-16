@@ -121,7 +121,7 @@ func TestMigrateTakesOverDjangoDatabase(t *testing.T) {
 	var version int
 	var dirty bool
 	require.NoError(t, conn.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty))
-	assert.Equal(t, 7, version)
+	assert.Equal(t, 8, version)
 	assert.False(t, dirty)
 	var value string
 	require.NoError(t, conn.QueryRow(ctx, `SELECT value FROM gui_localsettings WHERE key='AR-Enabled'`).Scan(&value))
@@ -144,4 +144,7 @@ func TestMigrateTakesOverDjangoDatabase(t *testing.T) {
 	var hasMarket bool
 	require.NoError(t, conn.QueryRow(ctx, `SELECT to_regclass('public.market_policy') IS NOT NULL`).Scan(&hasMarket))
 	assert.True(t, hasMarket, "000007 applied")
+	var hasMode bool
+	require.NoError(t, conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='gui_channels' AND column_name='af_mode')`).Scan(&hasMode))
+	assert.True(t, hasMode, "000008 applied")
 }

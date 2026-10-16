@@ -312,6 +312,29 @@ func buildSettingsForm(prefixes []string) []map[string]any {
 			lsf("unit", "%", "form_id", "ep_live_inc_pct", "value", 5, "label", "Live Increase %", "id", "EP-LiveIncreasePct", "title", "Instant increase percent", "min", 0),
 		)
 	}
+	if has("NK-") {
+		form = append(form,
+			lsf("unit", "", "form_id", "nk_shadow", "value", 1, "label", "Shadow", "id", "NK-Shadow", "title", "Shadow decisions for the channels that run LNDg auto-fees (logged, never applied)", "min", 0, "max", 1),
+			lsf("unit", "%", "form_id", "nk_step_up", "value", 3, "label", "Step Up", "id", "NK-StepUp", "title", "Fee increase per change while the channel is below its target", "min", 0.1),
+			lsf("unit", "%", "form_id", "nk_step_down", "value", 1, "label", "Step Down", "id", "NK-StepDown", "title", "Fee decrease per change while the channel is above its target", "min", 0.1),
+			lsf("unit", "min", "form_id", "nk_lock_min", "value", 12, "label", "Lock Min", "id", "NK-LockMin", "title", "Shortest decrease lock after a large outbound flow", "min", 1),
+			lsf("unit", "min", "form_id", "nk_lock_max", "value", 360, "label", "Lock Max", "id", "NK-LockMax", "title", "Longest decrease lock (high fee, empty channel)", "min", 1),
+			lsf("unit", "%", "form_id", "nk_lock_flow", "value", 2, "label", "Lock Flow", "id", "NK-LockFlowPct", "title", "A forward or balance-out of at least this share of capacity sets the lock", "min", 0.1),
+			lsf("unit", "ppm", "form_id", "nk_lock_fee_ref", "value", 2000, "label", "Lock Fee Ref", "id", "NK-LockFeeRef", "title", "Fee at which the lock reaches its full length", "min", 1),
+			lsf("unit", "%", "form_id", "nk_anchor", "value", 110, "label", "Anchor", "id", "NK-AnchorPct", "title", "A decrease above this share of the sold price jumps straight to it", "min", 1),
+			lsf("unit", "x", "form_id", "nk_cap_factor", "value", 2, "label", "Cap Factor", "id", "NK-CapFactor", "title", "Highest fee as a multiple of the sold price", "min", 0.1),
+			lsf("unit", "ppm", "form_id", "nk_cap_min", "value", 1000, "label", "Cap Min", "id", "NK-CapMin", "title", "Lowest cap", "min", 1),
+			lsf("unit", "ppm", "form_id", "nk_max_rate", "value", 7000, "label", "Max Rate", "id", "NK-MaxRate", "title", "Cap without sales, and the cap's ceiling", "min", 1),
+			lsf("unit", "ppm", "form_id", "nk_min_rate", "value", 1, "label", "Min Rate", "id", "NK-MinRate", "title", "Lowest fee", "min", 0),
+			lsf("unit", "%", "form_id", "nk_empty", "value", 2, "label", "Empty", "id", "NK-EmptyPct", "title", "Below this local share the fee goes to the cap and max_htlc to its minimum", "min", 0.1),
+			lsf("unit", "min", "form_id", "nk_min_interval", "value", 10, "label", "Min Interval", "id", "NK-MinInterval", "title", "Least time between two changes", "min", 1),
+			lsf("unit", "min", "form_id", "nk_republish", "value", 30, "label", "Republish", "id", "NK-Republish", "title", "The policy is resent this often even when unchanged", "min", 1),
+			lsf("unit", "msat", "form_id", "nk_base_msat", "value", 1, "label", "Base Fee", "id", "NK-BaseMsat", "title", "Base fee on NK channels, -1 keeps the channel's base fee"),
+			lsf("unit", "ppm", "form_id", "nk_inbound_margin", "value", 11, "label", "Inbound Margin", "id", "NK-InboundMargin", "title", "Inbound discount = sold price less this", "min", 0),
+			lsf("unit", "ppm", "form_id", "nk_budget_min", "value", 10, "label", "Budget Margin Min", "id", "NK-BudgetMarginMin", "title", "Rebalance margin of an empty channel", "min", 0),
+			lsf("unit", "%", "form_id", "nk_budget_max", "value", 20, "label", "Budget Margin Max", "id", "NK-BudgetMarginMax", "title", "Rebalance margin at the target, share of the price", "min", 0),
+		)
+	}
 	if has("NODE_CACHE") {
 		form = append(form,
 			lsf("unit", "min", "form_id", "node_cache_expiry_minutes", "value", 60, "label", "Node Cache Expiry", "id", "NODE_CACHE_EXPIRY_MINUTES", "title", "Minutes node info is cached in memory and DB before refresh", "min", 1, "max", 10080),

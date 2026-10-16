@@ -1,0 +1,82 @@
+{{define "title"}}LNDg - NK Fee Mode{{end}}
+{{define "content"}}
+<div class="w3-container w3-padding-small">
+  <h2>NK Fee Mode</h2>
+  <div class="w3-panel w3-pale-blue w3-leftbar w3-border-blue w3-small">
+    <p>NK channels get their outbound fee, inbound discount and max_htlc from the NK job instead of auto-fees, the FLP floor, dynamic inbound, auto max_htlc and the HTLC boost. Every minute, per peer:</p>
+    <ul>
+      <li><b>Below its target</b> (local %) the fee goes up NK-StepUp %, <b>above</b> it goes down NK-StepDown %.</li>
+      <li><b>Lock:</b> no decrease after a forward or balance-out of at least NK-LockFlowPct % of capacity, for NK-LockMin up to NK-LockMax minutes (longer for a higher fee and an emptier channel).</li>
+      <li><b>Sold price:</b> the ppm the channel's outbound flow paid (forwards and balance-outs, 24 h, else 72 h). Above NK-AnchorPct % of it a decrease jumps there; below it the fee falls at half speed.</li>
+      <li><b>Cap:</b> NK-CapFactor x the sold price, at least NK-CapMin (NK-MaxRate without sales). Under NK-EmptyPct % local the fee goes to the cap and max_htlc to its minimum.</li>
+      <li><b>max_htlc</b> stays between half and all of the available liquidity (halved or doubled).</li>
+      <li><b>Inbound discount</b> (channels with dynamic inbound checked): the price the channel sold at (6 h, else 24 h, else 72 h) less NK-InboundMargin, never more than its own fee.</li>
+      <li>A change goes out at most every NK-MinInterval minutes; the policy is resent every NK-Republish minutes.</li>
+      <li><b>Budget</b> (checked): the rebalancer pays at most min(fee, sold price) less a margin from NK-BudgetMarginMin ppm (empty) to NK-BudgetMarginMax % (at the target), instead of fee x max cost.</li>
+    </ul>
+    <p>With NK-Shadow on, the other channels get shadow decisions: what NK would set, logged and never applied. <a href="/nk/log/" target="_blank">NK decision log</a></p>
+  </div>
+  {{if .channels}}
+  <form method="post" action="/nk/">
+    <div class="w3-bar w3-border" style="margin-bottom:8px;display:flex;align-items:center;justify-content:center;">
+      <button class="w3-bar-item w3-button w3-green" type="submit">Save</button>
+      <a href="#" class="w3-bar-item w3-button w3-blue" onclick="nkAll('.nkbox', false);return false;">All to LNDg auto-fees</a>
+      <span class="w3-bar-item">{{.nk_count}} channel(s) in NK mode</span>
+    </div>
+    <div style="overflow-x:auto;max-height:900px">
+      <table class="w3-table-all w3-centered w3-hoverable w3-small">
+        <tr>
+          <th onclick="sortTable(event.target, 0, 'String', 0, 'a')">Channel</th>
+          <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Peer</th>
+          <th title="checked: NK fee mode, unchecked: LNDg auto-fees">NK</th>
+          <th title="NK rebalance budget instead of fee x max cost">Budget</th>
+          <th title="local liquidity target in %, empty: 100 - AR inbound target">Target %</th>
+          <th onclick="sortTable(event.target, 5, 'int')">Local %</th>
+          <th onclick="sortTable(event.target, 6, 'int')">Fee</th>
+          <th onclick="sortTable(event.target, 7, 'int')" title="inbound fee rate; * dynamic inbound checked">Inbound</th>
+          <th onclick="sortTable(event.target, 8, 'int')">max_htlc</th>
+          <th onclick="sortTable(event.target, 9, 'int')" title="ppm the outbound flow paid in 24 h">Sold 24h</th>
+          <th onclick="sortTable(event.target, 10, 'int')" title="ppm the outbound flow paid in 72 h">Sold 72h</th>
+          <th onclick="sortTable(event.target, 11, 'int')">Cap</th>
+          <th title="no decrease until (UTC)">Lock until</th>
+          <th onclick="sortTable(event.target, 13, 'int')" title="NK rebalance budget before the source fee">Budget ppm</th>
+          <th>Last decision (UTC)</th>
+        </tr>
+        {{range $c := .channels}}
+        <tr{{if $c.nk}} class="w3-pale-green"{{end}}>
+          <td><a href="/channel?={{$c.chan_id}}" target="_blank">{{$c.short_chan_id}}</a></td>
+          <td title="{{$c.remote_pubkey}}">{{if eq (str $c.alias) ""}}{{slice ":12" $c.remote_pubkey}}{{else}}{{$c.alias}}{{end}}</td>
+          <td>
+            <input type="hidden" name="channels" value="{{$c.chan_id}}">
+            <input type="checkbox" class="nkbox" name="nk" value="{{$c.chan_id}}"{{if $c.nk}} checked{{end}}>
+          </td>
+          <td><input type="checkbox" name="budget" value="{{$c.chan_id}}"{{if $c.budget}} checked{{end}}></td>
+          <td><input type="number" min="0" max="100" style="width:60px" name="target_{{$c.chan_id}}" placeholder="{{$c.target}}"{{if $c.target_set}} value="{{$c.target}}"{{end}}></td>
+          <td>{{$c.local_pct}}</td>
+          <td>{{$c.fee | intcomma}}</td>
+          <td>{{$c.inbound | intcomma}}{{if $c.dynamic_inbound}}*{{end}}</td>
+          <td>{{$c.max_htlc | intcomma}}</td>
+          <td>{{$c.sold24}}</td>
+          <td>{{$c.sold72}}</td>
+          <td>{{$c.cap | intcomma}}</td>
+          <td>{{$c.lock_until}}</td>
+          <td>{{$c.budget_ppm}}</td>
+          <td style="text-align:left"><a href="/nk/log/?chan={{$c.chan_id}}" target="_blank">{{$c.last}}</a></td>
+        </tr>
+        {{end}}
+      </table>
+    </div>
+  </form>
+  {{else}}
+  <center><h1>No auto-fee channels to show.</h1></center>
+  {{end}}
+</div>
+{{if .local_settings}}
+{{template "local_settings.html" (dict "settings" .local_settings "title" "NK Fee Mode")}}
+{{end}}
+<script>
+function nkAll(sel, val){
+  document.querySelectorAll(sel).forEach(cb => cb.checked = val);
+}
+</script>
+{{end}}

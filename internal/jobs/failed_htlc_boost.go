@@ -52,6 +52,9 @@ func FailedHtlcBoostJob(ctx context.Context, q boostQuerier, client policyClient
 	}
 	now := time.Now()
 	for _, ch := range channels {
+		if ch.AfMode == "nk" { // NK fees do not react to failed HTLCs
+			continue
+		}
 		var localPercent float64
 		if ch.Capacity != 0 {
 			localPercent = float64(ch.LocalBalance+ch.PendingOutbound) * 100 / float64(ch.Capacity)

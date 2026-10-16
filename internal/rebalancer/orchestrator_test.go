@@ -3,6 +3,7 @@ package rebalancer
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
@@ -193,14 +194,14 @@ func TestGetSourceMaps(t *testing.T) {
 func TestGetTargetInfo(t *testing.T) {
 	q := newFakeOrchQ()
 	q.target = db.GetTargetChannelInfoRow{LocalFeeRate: 350, ArMaxCost: 50}
-	fee, cost, ok, err := getTargetInfo(context.Background(), q, "peer")
+	fee, cost, ok, err := getTargetInfo(context.Background(), q, "peer", time.Unix(1_700_000_000, 0))
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, 350, fee)
 	assert.Equal(t, 50, cost)
 
 	q.targetErr = pgx.ErrNoRows
-	_, _, ok, err = getTargetInfo(context.Background(), q, "peer")
+	_, _, ok, err = getTargetInfo(context.Background(), q, "peer", time.Unix(1_700_000_000, 0))
 	require.NoError(t, err)
 	assert.False(t, ok)
 }
@@ -264,4 +265,11 @@ func TestSettingsFlags(t *testing.T) {
 
 	q.settings["RR-RouteLimit"] = "7"
 	assert.Equal(t, 7, getRouteLimit(context.Background(), q))
+}
+
+func (f *fakeOrchQ) NkForwardFlows(ctx context.Context, arg db.NkForwardFlowsParams) ([]db.NkForwardFlowsRow, error) {
+	return nil, nil
+}
+func (f *fakeOrchQ) NkBalanceOutFlows(ctx context.Context, arg db.NkBalanceOutFlowsParams) ([]db.NkBalanceOutFlowsRow, error) {
+	return nil, nil
 }

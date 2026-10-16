@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	af "github.com/warioishere/lndg-blitz-go/internal/af"
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
@@ -26,6 +27,7 @@ func pyFloatStr(v float64) string {
 // scheduleQuerier bundles the DB access required by autoSchedule.
 type scheduleQuerier interface {
 	settingsQuerier
+	af.NkBudgetQuerier
 	aliasQuerier
 	ListActiveOpenPublicChannels(ctx context.Context) ([]db.GuiChannel, error)
 	ListActiveRebalancePubkeys(ctx context.Context) ([]string, error)
@@ -42,6 +44,16 @@ func secretsChoiceRange(lo, hi int) int {
 		return lo
 	}
 	return lo + int(v.Int64())
+}
+
+// targetBudgetPpm is a refill target's budget before the source fee
+// (af.TargetBudgetPpm); an error reading the NK budget is logged.
+func targetBudgetPpm(ctx context.Context, q af.NkBudgetQuerier, ch db.GuiChannel, now time.Time) int {
+	budget, err := af.TargetBudgetPpm(ctx, q, ch, now)
+	if err != nil {
+		rebalLog(fmt.Sprintf("Error reading the NK budget of %s: %s", ch.ChanID, err))
+	}
+	return budget
 }
 
 // scheduleBlocked returns true when the channel should be skipped due to the wait period.
@@ -185,7 +197,7 @@ func (e *engine) autoSchedule(ctx context.Context, q scheduleQuerier, now func()
 				continue
 			}
 			sourceFeeRate := sourceFeeRateMap[sourceID]
-			targetFeeRate := minInt(maxFeeRate, int(float64(target.ch.LocalFeeRate)*(float64(target.ch.ArMaxCost)/100))-sourceFeeRate)
+			targetFeeRate := minInt(maxFeeRate, targetBudgetPpm(ctx, q, target.ch, now())-sourceFeeRate)
 			if targetFeeRate <= int(target.ch.RemoteFeeRate) {
 				continue
 			}
@@ -219,7 +231,7 @@ func (e *engine) autoSchedule(ctx context.Context, q scheduleQuerier, now func()
 		if _, ok := scheduledTargets[target.ch.RemotePubkey]; ok {
 			continue
 		}
-		targetFeeRate := minInt(maxFeeRate, int(float64(target.ch.LocalFeeRate)*(float64(target.ch.ArMaxCost)/100))-minSourceFeeRate)
+		targetFeeRate := minInt(maxFeeRate, targetBudgetPpm(ctx, q, target.ch, now())-minSourceFeeRate)
 		if !(targetFeeRate > 0 && targetFeeRate > int(target.ch.RemoteFeeRate)) {
 			continue
 		}

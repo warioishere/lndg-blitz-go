@@ -44,6 +44,9 @@ func AutoMaxhtlcJob(ctx context.Context, q maxhtlcQuerier, client policyClient) 
 		return err
 	}
 	for _, ch := range channels {
+		if ch.AfMode == "nk" { // the NK job sets max_htlc
+			continue
+		}
 		outbound := ch.LocalBalance + ch.PendingOutbound
 		var expectedMsat int64
 		haveExpected := false

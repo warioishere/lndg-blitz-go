@@ -25,6 +25,7 @@ type DataQuerier interface {
 	maxhtlcQuerier
 	boostQuerier
 	aggQuerier
+	nkQuerier
 }
 
 // DataLightningClient combines the LightningClient subsets required by all Data jobs.
@@ -41,7 +42,7 @@ type DataLightningClient interface {
 	cleanClient
 }
 
-// RunDataJobs runs all 16 Data jobs in a fixed order. The first error aborts
+// RunDataJobs runs all 17 Data jobs in a fixed order. The first error aborts
 // the run; remaining jobs are skipped.
 func RunDataJobs(ctx context.Context, q DataQuerier, stub DataLightningClient) error {
 	if err := UpdatePeers(ctx, q, stub); err != nil {
@@ -78,6 +79,9 @@ func RunDataJobs(ctx context.Context, q DataQuerier, stub DataLightningClient) e
 		return err
 	}
 	if err := AutoFees(ctx, q, stub); err != nil {
+		return err
+	}
+	if err := NkFees(ctx, q, stub); err != nil {
 		return err
 	}
 	if err := InboundOffsets(ctx, q, stub); err != nil {

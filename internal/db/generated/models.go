@@ -116,6 +116,11 @@ type GuiChannel struct {
 	FlpEnabled           bool               `json:"flp_enabled"`
 	FlpSafety            int32              `json:"flp_safety"`
 	HtlcBoostChecked     pgtype.Timestamptz `json:"htlc_boost_checked"`
+	AfMode               string             `json:"af_mode"`
+	NkTarget             pgtype.Int4        `json:"nk_target"`
+	NkBudget             bool               `json:"nk_budget"`
+	NkLastChange         pgtype.Timestamptz `json:"nk_last_change"`
+	NkLastPublish        pgtype.Timestamptz `json:"nk_last_publish"`
 }
 
 type GuiClosure struct {
@@ -445,6 +450,27 @@ type MarketPolicy struct {
 	TimeLockDelta   int32              `json:"time_lock_delta"`
 	Disabled        bool               `json:"disabled"`
 	LastUpdate      pgtype.Timestamptz `json:"last_update"`
+}
+
+type NkFeeLog struct {
+	ID         int64              `json:"id"`
+	Timestamp  pgtype.Timestamptz `json:"timestamp"`
+	ChanID     string             `json:"chan_id"`
+	PeerAlias  string             `json:"peer_alias"`
+	Applied    bool               `json:"applied"`
+	Reason     string             `json:"reason"`
+	LocalPct   float64            `json:"local_pct"`
+	TargetPct  int32              `json:"target_pct"`
+	Flow24Ppm  pgtype.Int4        `json:"flow24_ppm"`
+	Flow72Ppm  pgtype.Int4        `json:"flow72_ppm"`
+	LockUntil  pgtype.Timestamptz `json:"lock_until"`
+	FeeOld     int32              `json:"fee_old"`
+	FeeNew     int32              `json:"fee_new"`
+	CapPpm     int32              `json:"cap_ppm"`
+	MaxHtlcOld int64              `json:"max_htlc_old"`
+	MaxHtlcNew int64              `json:"max_htlc_new"`
+	InboundOld int32              `json:"inbound_old"`
+	InboundNew int32              `json:"inbound_new"`
 }
 
 type RouteAttemptLog struct {

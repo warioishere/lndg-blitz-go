@@ -7,9 +7,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 
+	af "github.com/warioishere/lndg-blitz-go/internal/af"
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 )
@@ -379,12 +381,16 @@ func getSourceMaps(ctx context.Context, q sourceMapsQuerier, chanIDs []string) (
 
 // targetInfoQuerier is the DB subset required by getTargetInfo.
 type targetInfoQuerier interface {
+	af.NkBudgetQuerier
 	GetTargetChannelInfo(ctx context.Context, remotePubkey string) (db.GetTargetChannelInfoRow, error)
 }
 
-// getTargetInfo returns (local_fee_rate, ar_max_cost, ok) for the target peer.
+// getTargetInfo returns the fee rate and max-cost percent of the target peer's
+// budget (af.TargetBudget: local_fee_rate and ar_max_cost, or the NK budget at
+// 100 %) and ok. An error reading the NK budget is logged and falls back to
+// local_fee_rate and ar_max_cost.
 // ok is false when no matching channel exists.
-func getTargetInfo(ctx context.Context, q targetInfoQuerier, lastHopPubkey string) (int, int, bool, error) {
+func getTargetInfo(ctx context.Context, q targetInfoQuerier, lastHopPubkey string, now time.Time) (int, int, bool, error) {
 	row, err := q.GetTargetChannelInfo(ctx, lastHopPubkey)
 	if err != nil {
 		if isNoRows(err) {
@@ -392,7 +398,16 @@ func getTargetInfo(ctx context.Context, q targetInfoQuerier, lastHopPubkey strin
 		}
 		return 0, 0, false, err
 	}
-	return int(row.LocalFeeRate), int(row.ArMaxCost), true, nil
+	fee, cost, berr := af.TargetBudget(ctx, q, af.TargetChannel{
+		ChanID: row.ChanID, LocalFeeRate: row.LocalFeeRate, ArMaxCost: row.ArMaxCost, ArInTarget: row.ArInTarget,
+		Capacity: row.Capacity, LocalBalance: row.LocalBalance, PendOut: row.PendingOutbound,
+		AfMode: row.AfMode, NkTarget: row.NkTarget, NkBudget: row.NkBudget,
+	}, now)
+	if berr != nil {
+		rebalLog(fmt.Sprintf("Error reading the NK budget of %s: %s", row.ChanID, berr))
+		return int(row.LocalFeeRate), int(row.ArMaxCost), true, nil
+	}
+	return fee, cost, true, nil
 }
 
 // allowedSourcesQuerier is the DB subset required by getAllowedSourcesForTarget.

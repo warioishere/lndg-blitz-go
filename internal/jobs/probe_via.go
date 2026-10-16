@@ -23,12 +23,12 @@ type ViaAttempt struct {
 }
 
 // probeFeeLimitSat is the fee budget for refilling target from a source channel
-// with the given fee: target fee * ar_max_cost % minus the source fee, capped at
-// maxFeeRate, for ar_amt_target sats. It is the budget the rebalancer's
-// opportunity-cost check allows, so a route probed above it is never paid. It
-// is 0 when the source fee leaves no budget.
-func probeFeeLimitSat(target db.GuiChannel, sourceFeeRate, maxFeeRate int) int64 {
-	inner := int(float64(target.LocalFeeRate)*(float64(target.ArMaxCost)/100)) - sourceFeeRate
+// with the given fee: the target's budget (af.TargetBudgetPpm) minus the source
+// fee, capped at maxFeeRate, for ar_amt_target sats. It is the budget the
+// rebalancer's opportunity-cost check allows, so a route probed above it is
+// never paid. It is 0 when the source fee leaves no budget.
+func probeFeeLimitSat(target db.GuiChannel, targetBudgetPpm, sourceFeeRate, maxFeeRate int) int64 {
+	inner := targetBudgetPpm - sourceFeeRate
 	budgetPpm := maxFeeRate
 	if inner < budgetPpm {
 		budgetPpm = inner
@@ -40,12 +40,13 @@ func probeFeeLimitSat(target db.GuiChannel, sourceFeeRate, maxFeeRate int) int64
 }
 
 // ProbeVia probes routes self -> ... -> via -> target -> self, so a refill of
-// target runs over via's channel to target. The leg to via comes from
+// target runs over via's channel to target; targetBudgetPpm is the target's
+// budget (af.TargetBudgetPpm). The leg to via comes from
 // QueryRoutes (target ignored, so it appears only as the second-to-last hop).
 // Sources come from probeSources over channels (the rebalancer's channel set),
 // cheapest fee first, up to maxPerTarget of them that have a route to via;
 // probing stops at the first verified route. Nothing is stored.
-func ProbeVia(ctx context.Context, stub ProbeLightningClient, routerstub ProbeRouterClient, selfPubkey string, target db.GuiChannel, viaPubkey string, channels []db.GuiChannel, maxFeeRate, maxPerTarget int) ([]ViaAttempt, error) {
+func ProbeVia(ctx context.Context, stub ProbeLightningClient, routerstub ProbeRouterClient, selfPubkey string, target db.GuiChannel, targetBudgetPpm int, viaPubkey string, channels []db.GuiChannel, maxFeeRate, maxPerTarget int) ([]ViaAttempt, error) {
 	selfKey, err := hex.DecodeString(selfPubkey)
 	if err != nil {
 		return nil, err
@@ -54,7 +55,7 @@ func ProbeVia(ctx context.Context, stub ProbeLightningClient, routerstub ProbeRo
 	if err != nil {
 		return nil, err
 	}
-	sources, _ := probeSources(channels, target, maxFeeRate)
+	sources, _ := probeSources(channels, target, targetBudgetPpm, maxFeeRate)
 
 	var attempts []ViaAttempt
 	for _, src := range sources {

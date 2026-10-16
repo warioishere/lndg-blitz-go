@@ -1,0 +1,45 @@
+{{define "title"}}LNDg - NK Decision Log{{end}}
+{{define "content"}}
+<div class="w3-container w3-padding-small">
+  <h2>NK Decision Log{{if .chan}} - channel {{.chan}} <a class="w3-small" href="/nk/log/">(all)</a>{{end}}</h2>
+  <p class="w3-small">The latest 500 decisions. <b>NK</b>: a channel in NK mode, the policy went out when the fee, inbound or max_htlc column changed. <b>shadow</b>: what NK would set on a channel that runs LNDg auto-fees, never applied. A row is written when a decision publishes or its reason changes. <a href="/nk/" target="_blank">NK fee mode</a></p>
+  {{if .rows}}
+  <div style="overflow-x:auto">
+    <table class="w3-table-all w3-centered w3-hoverable w3-small">
+      <tr>
+        <th>Time (UTC)</th>
+        <th>Channel</th>
+        <th>Peer</th>
+        <th>Mode</th>
+        <th>Reason</th>
+        <th>Local / Target %</th>
+        <th>Sold 24h / 72h</th>
+        <th>Fee</th>
+        <th>Cap</th>
+        <th>Lock until</th>
+        <th>max_htlc</th>
+        <th>Inbound</th>
+      </tr>
+      {{range $r := .rows}}
+      <tr>
+        <td>{{$r.time}}</td>
+        <td><a href="/nk/log/?chan={{$r.chan_id}}">{{$r.chan_id}}</a></td>
+        <td>{{$r.peer_alias}}</td>
+        <td>{{if $r.applied}}NK{{else}}shadow{{end}}</td>
+        <td>{{$r.reason}}</td>
+        <td>{{$r.local_pct}} / {{$r.target_pct}}</td>
+        <td>{{if notNone $r.flow24_ppm}}{{$r.flow24_ppm}}{{else}}-{{end}} / {{if notNone $r.flow72_ppm}}{{$r.flow72_ppm}}{{else}}-{{end}}</td>
+        <td>{{$r.fee_old | intcomma}} → {{$r.fee_new | intcomma}}</td>
+        <td>{{$r.cap_ppm | intcomma}}</td>
+        <td>{{$r.lock}}</td>
+        <td>{{$r.max_htlc_old | intcomma}} → {{$r.max_htlc_new | intcomma}}</td>
+        <td>{{$r.inbound_old}} → {{$r.inbound_new}}</td>
+      </tr>
+      {{end}}
+    </table>
+  </div>
+  {{else}}
+  <center><h1>No NK decisions yet.</h1></center>
+  {{end}}
+</div>
+{{end}}

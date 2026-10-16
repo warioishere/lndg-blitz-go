@@ -435,3 +435,10 @@ func TestHandleChannelUpdateGatesOnBuyPrice(t *testing.T) {
 	assert.Equal(t, int32(800), q.events[0].FeePpm.Int32)
 	assert.True(t, clock.get(pk(0xbb)+"|"+pk(0xcc)).IsZero()) // a skipped event does not start the cooldown
 }
+
+func (f *fakeQ) NkForwardFlows(ctx context.Context, arg db.NkForwardFlowsParams) ([]db.NkForwardFlowsRow, error) {
+	return nil, nil
+}
+func (f *fakeQ) NkBalanceOutFlows(ctx context.Context, arg db.NkBalanceOutFlowsParams) ([]db.NkBalanceOutFlowsRow, error) {
+	return nil, nil
+}

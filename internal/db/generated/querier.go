@@ -34,6 +34,7 @@ type Querier interface {
 	// _trim_events: nur die neuesten 500 Events behalten.
 	DeleteOldGraphEvents(ctx context.Context) error
 	DeleteOldMarketPolicies(ctx context.Context, timestamp pgtype.Timestamptz) (int64, error)
+	DeleteOldNkFeeLogs(ctx context.Context, timestamp pgtype.Timestamptz) error
 	// ProbeLog.objects.order_by('-timestamp')[100:].delete() -- behalte die neuesten 100.
 	DeleteOldProbeLogs(ctx context.Context) error
 	DeleteOnchainZeroBlock(ctx context.Context) error
@@ -116,6 +117,7 @@ type Querier interface {
 	InsertInboundFeeLog(ctx context.Context, arg InsertInboundFeeLogParams) error
 	InsertInvoice(ctx context.Context, arg InsertInvoiceParams) error
 	InsertMarketPolicies(ctx context.Context, arg []InsertMarketPoliciesParams) (int64, error)
+	InsertNkFeeLog(ctx context.Context, arg InsertNkFeeLogParams) error
 	InsertOnchain(ctx context.Context, arg InsertOnchainParams) error
 	InsertPayment(ctx context.Context, arg InsertPaymentParams) error
 	InsertPaymentHop(ctx context.Context, arg InsertPaymentHopParams) error
@@ -163,10 +165,14 @@ type Querier interface {
 	ListEpEnabledChannels(ctx context.Context) ([]GuiChannel, error)
 	ListEpEnabledChannelsByIDs(ctx context.Context, dollar_1 []string) ([]GuiChannel, error)
 	ListInactivePeerPubkeys(ctx context.Context) ([]string, error)
-	// inbound_offsets: is_open=true, inbound_offset != 0 (jobs.py:780).
+	// inbound_offsets: is_open=true, inbound_offset != 0 (jobs.py:780); NK channels
+	// get their inbound discount from the NK job.
 	ListInboundOffsetChannels(ctx context.Context) ([]GuiChannel, error)
 	ListInflightPayments(ctx context.Context) ([]ListInflightPaymentsRow, error)
 	ListLocalSettings(ctx context.Context) ([]GuiLocalsetting, error)
+	// Channels the NK job evaluates: the auto-fee channels of every mode (NK ones
+	// are applied, the others get shadow decisions).
+	ListNkJobChannels(ctx context.Context) ([]GuiChannel, error)
 	ListNodeReputations(ctx context.Context, dollar_1 []string) ([]ListNodeReputationsRow, error)
 	// _trigger_probe targets: offene AR-Channels zu remote_pubkey. ORDER BY chan_id wie
 	// Djangos targets.first() (Primaerschluessel); targets[0] bestimmt Fee und Budget.
@@ -197,6 +203,15 @@ type Querier interface {
 	MaxPaymentIndex(ctx context.Context) (int32, error)
 	// last_block = 0 if no rows else max(block_height)+1 (jobs.py:591).
 	NextOnchainBlockHeight(ctx context.Context) (int32, error)
+	// Balance-outs of the given channels since @since: rebalances that took
+	// liquidity from the channel, valued at the channel's fee rate then (the
+	// liquidity is sold at that price like a forward), per window; last_big as in
+	// NkForwardFlows.
+	NkBalanceOutFlows(ctx context.Context, arg NkBalanceOutFlowsParams) ([]NkBalanceOutFlowsRow, error)
+	// Forwards out of the given channels since @since (72 hours) with their gross
+	// fee (the inbound discount the incoming channel gave included), per window;
+	// last_big is the latest forward of at least @big_pct percent of capacity.
+	NkForwardFlows(ctx context.Context, arg NkForwardFlowsParams) ([]NkForwardFlowsRow, error)
 	// af.rebalance_cost_ppm: last `lookback` successful rebalances into the channel. The
 	// source fee falls back to the source channel's current fee for payments imported
 	// before source_fee_rate existed; MPP ('MPP' matches no channel) or unknown -> 0.
@@ -228,6 +243,7 @@ type Querier interface {
 	UpdateChannelInboundOffset(ctx context.Context, arg UpdateChannelInboundOffsetParams) error
 	// auto_maxhtlc_job: targeted update (jobs.py:877-880).
 	UpdateChannelMaxHtlc(ctx context.Context, arg UpdateChannelMaxHtlcParams) error
+	UpdateChannelNkPolicy(ctx context.Context, arg UpdateChannelNkPolicyParams) error
 	// LND state only. Our own policy goes through SyncChannelLocalPolicy and UI-owned
 	// settings are never written here, so a concurrent UI write is not reverted.
 	UpdateChannelSync(ctx context.Context, arg UpdateChannelSyncParams) error

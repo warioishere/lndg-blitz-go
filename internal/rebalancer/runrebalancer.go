@@ -138,7 +138,7 @@ func (e *engine) runRebalancer(
 		if err != nil {
 			return err
 		}
-		targetFeeRate, arMaxCost, oppCostEnabled, err := getTargetInfo(ctx, q, rebalance.LastHopPubkey)
+		targetFeeRate, arMaxCost, oppCostEnabled, err := getTargetInfo(ctx, q, rebalance.LastHopPubkey, now())
 		if err != nil {
 			return err
 		}

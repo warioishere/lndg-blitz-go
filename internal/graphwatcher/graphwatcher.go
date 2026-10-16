@@ -170,7 +170,11 @@ func (d Deps) probeGate(ctx context.Context, targetPubkey string, otherFeePpm in
 		return nil, "all channels full", nil
 	}
 	ch := targets[0]
-	plan := &probePlan{targets: targets, budgetPpm: int(float64(int(ch.LocalFeeRate)*int(ch.ArMaxCost)) / 100)}
+	budget, berr := af.TargetBudgetPpm(ctx, d.Q, ch, d.Now())
+	if berr != nil {
+		gwLog(fmt.Sprintf("Error reading the NK budget of %s: %s", ch.ChanID, berr))
+	}
+	plan := &probePlan{targets: targets, budgetPpm: budget}
 	pays, err := d.Q.RebalPaymentsForChannel(ctx, db.RebalPaymentsForChannelParams{
 		RebalChan: pgtype.Text{String: ch.ChanID, Valid: true},
 		Limit:     int32(atoiOr(getSetting(ctx, d.Q, "FLP-Lookback", "10"), 10)),
@@ -205,7 +209,7 @@ func (d Deps) triggerProbe(ctx context.Context, selfPubkey string, plan *probePl
 	gwLog(fmt.Sprintf("Probing %s via %s (fee=%d ppm, buy price %d ppm, budget %d ppm) triggered by new channel %s",
 		ch.Alias, otherAlias, otherFeePpm, plan.buyPpm, plan.budgetPpm, chanID))
 
-	attempts, err := jobs.ProbeVia(ctx, d.LN, d.Router, selfPubkey, ch, otherPubkey, channels, maxFeeRate, maxPerTarget)
+	attempts, err := jobs.ProbeVia(ctx, d.LN, d.Router, selfPubkey, ch, plan.budgetPpm, otherPubkey, channels, maxFeeRate, maxPerTarget)
 	if err != nil {
 		return 0, err
 	}

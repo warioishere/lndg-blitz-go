@@ -391,3 +391,10 @@ func TestRunRebalancerTriesCombinedRoutes(t *testing.T) {
 	assert.Equal(t, int32(1), a.Position)
 	assert.Equal(t, "failed", a.Outcome)
 }
+
+func (f *fakeRebalQ) NkForwardFlows(ctx context.Context, arg db.NkForwardFlowsParams) ([]db.NkForwardFlowsRow, error) {
+	return nil, nil
+}
+func (f *fakeRebalQ) NkBalanceOutFlows(ctx context.Context, arg db.NkBalanceOutFlowsParams) ([]db.NkBalanceOutFlowsRow, error) {
+	return nil, nil
+}
