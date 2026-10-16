@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 
@@ -40,6 +41,7 @@ type sourceRouterClient interface {
 type sourceQuerier interface {
 	routeQuerier
 	reputationQuerier
+	attemptLogQuerier
 }
 
 // engine holds rebalancer-wide caches and is the receiver for probing and send methods.
@@ -222,13 +224,22 @@ func (e *engine) trySingleSource(
 		return nil, nil
 	}
 
-	for _, queryRoute := range qr.GetRoutes() {
+	for i, queryRoute := range qr.GetRoutes() {
 		if len(queryRoute.GetHops()) == 0 {
 			continue
+		}
+		// Every route LND returned is logged with its outcome, like a saved route.
+		attempt := rankedRoute{list: listQuery, position: i + 1, row: db.GuiRebalanceroute{
+			TargetPubkey: rebalance.LastHopPubkey, OutgoingChanID: sourceChanID, Route: routePath(queryRoute),
+			LastFeePpm: pgtype.Float8{Float64: float64(queryRoute.GetTotalFeesMsat()) / float64(rebalance.Value) * 1000, Valid: rebalance.Value > 0},
+		}}
+		logAttempt := func(outcome string, code, hop int) {
+			logRouteAttempt(ctx, q, rebalance.ID, attempt, int64(rebalance.Value), savedRouteResult{outcome: outcome, code: code, hop: hop}, time.Now())
 		}
 		// Skip routes that reuse a cached failed (prev -> next) edge at a similar amount.
 		if !e.mc.validateRoute(queryRoute) {
 			rebalLog(fmt.Sprintf("Route via %s skipped — reuses a cached failed edge", srcLabel))
+			logAttempt("skip_failed_edge", -1, -1)
 			continue
 		}
 		// Decode hop pubkeys for BuildRoute.
@@ -253,6 +264,7 @@ func (e *engine) trySingleSource(
 		})
 		if berr != nil {
 			rebalLog(fmt.Sprintf("BuildRoute via %s failed: %s", srcLabel, berr))
+			logAttempt("build_failed", -1, -1)
 			continue
 		}
 
@@ -264,6 +276,7 @@ func (e *engine) trySingleSource(
 		if !allowed {
 			rebalLog(fmt.Sprintf("Route via %s rejected: route %d ppm > max %d ppm (target %d*%d%% - src %d)",
 				srcLabel, routeFeePpm, maxRoutePpm, targetFeeRate, arMaxCost, srcFee))
+			logAttempt("skip_cost", -1, -1)
 			continue
 		}
 
@@ -272,6 +285,7 @@ func (e *engine) trySingleSource(
 			actualPpm := int((float64(build.GetRoute().GetTotalFeesMsat()) / (float64(rebalance.Value) * 1000)) * 1000000)
 			limitPpm := int(float64(feeLimitMsat) / float64(rebalance.Value) * 1000)
 			rebalLog(fmt.Sprintf("Route via %s exceeds rebalance fee_limit (%d ppm > %d ppm)", srcLabel, actualPpm, limitPpm))
+			logAttempt("skip_cost", -1, -1)
 			continue
 		}
 
@@ -293,10 +307,12 @@ func (e *engine) trySingleSource(
 		cancel()
 		if serr != nil {
 			rebalLog(fmt.Sprintf("SendToRouteV2 via %s error: %s", srcLabel, serr))
+			logAttempt("error", -1, -1)
 			return nil, nil
 		}
 
 		if sendResp.GetStatus() == lnrpc.HTLCAttempt_SUCCEEDED { // status == 1
+			logAttempt("success", -1, -1)
 			feesMsat := sendResp.GetRoute().GetTotalFeesMsat()
 			updateRoute(ctx, q, rebalance.LastHopPubkey, sourceChanID, rebuiltHex, true, false, -1, now)
 			updateNodeReputations(ctx, q, rebuiltHex, true, 0, false, now)
@@ -332,6 +348,14 @@ func (e *engine) trySingleSource(
 			failHop = fsi
 			onward = onwardFailure(codeNum, fsi, len(routeMsg.GetHops()))
 		}
+		// The route's row: failed, or success_smaller when the probe below pays.
+		failed := func() {
+			if failureSet {
+				logAttempt("failed", codeNum, fsi)
+			} else {
+				logAttempt("failed", -1, -1)
+			}
+		}
 		updateRoute(ctx, q, rebalance.LastHopPubkey, sourceChanID, rebuiltHex, false, false, failHop, now)
 		updateNodeReputations(ctx, q, rebuiltHex, false, fsi, failureSet, now)
 
@@ -343,6 +367,7 @@ func (e *engine) trySingleSource(
 				rebalLog(fmt.Sprintf("Probe found max %d sats via %s", probed, srcLabel))
 				probeInvoice, aerr := stub.AddInvoice(ctx, &lnrpc.Invoice{Value: probed, Expiry: int64(timeout / time.Second), CltvExpiry: FinalCltvDelta})
 				if aerr != nil {
+					failed()
 					return nil, aerr
 				}
 				probeBuild, pberr := routerstub.BuildRoute(ctx, &routerrpc.BuildRouteRequest{
@@ -353,6 +378,7 @@ func (e *engine) trySingleSource(
 					PaymentAddr:    probeInvoice.GetPaymentAddr(),
 				})
 				if pberr != nil {
+					failed()
 					continue
 				}
 				pAllowed, pPpm, pMax := checkOpportunityCost(
@@ -361,6 +387,7 @@ func (e *engine) trySingleSource(
 				)
 				if !pAllowed {
 					rebalLog(fmt.Sprintf("Probed route via %s rejected: %d ppm > %d ppm", srcLabel, pPpm, pMax))
+					failed()
 					continue
 				}
 				pcctx, pcancel := context.WithTimeout(ctx, timeout)
@@ -370,9 +397,11 @@ func (e *engine) trySingleSource(
 				})
 				pcancel()
 				if prerr != nil {
+					failed()
 					continue
 				}
 				if probeResp.GetStatus() == lnrpc.HTLCAttempt_SUCCEEDED {
+					logAttempt("success_smaller", -1, -1)
 					feesMsat := probeResp.GetRoute().GetTotalFeesMsat()
 					pBytes, pmerr := proto.Marshal(probeBuild.GetRoute())
 					if pmerr != nil {
@@ -401,6 +430,7 @@ func (e *engine) trySingleSource(
 				}
 			}
 		}
+		failed()
 		// Route failed; caller should try the next source.
 		return nil, nil
 	}

@@ -487,6 +487,7 @@ type RouteAttemptLog struct {
 	Outcome        string             `json:"outcome"`
 	FailureCode    pgtype.Int4        `json:"failure_code"`
 	FailureHop     pgtype.Int4        `json:"failure_hop"`
+	Route          pgtype.Text        `json:"route"`
 }
 
 type ShadowFeeLog struct {

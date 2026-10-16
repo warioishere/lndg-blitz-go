@@ -176,6 +176,39 @@ func TestTrySingleSourceSuccess(t *testing.T) {
 	assert.Equal(t, []string{"aa", "bb"}, q.repSuccess)
 	assert.Equal(t, []int32{FinalCltvDelta}, builtCltv) // not derived from the QueryRoutes expiries
 	assert.False(t, e.brake.blocked("555", sampleRebalance().LastHopPubkey))
+	// the attempt is logged with its path
+	require.Len(t, q.attempts, 1)
+	a := q.attempts[0]
+	assert.Equal(t, "query", a.List)
+	assert.Equal(t, "success", a.Outcome)
+	assert.Equal(t, "aa-bb", a.Route.String)
+	assert.Equal(t, int32(1), a.Position)
+	assert.Equal(t, "555", a.OutgoingChanID)
+	assert.False(t, a.FailureCode.Valid)
+}
+
+func TestTrySingleSourceLogsFailure(t *testing.T) {
+	r := &fakeRouter{
+		buildFn: func(req *routerrpc.BuildRouteRequest) (*routerrpc.BuildRouteResponse, error) {
+			return &routerrpc.BuildRouteResponse{Route: &lnrpc.Route{TotalAmtMsat: 100_050_000, TotalFeesMsat: 50_000,
+				Hops: []*lnrpc.Hop{{PubKey: "aa"}, {PubKey: "xx"}, {PubKey: "bb"}, {PubKey: "self"}}}}, nil
+		},
+		sendFn: func(req *routerrpc.SendToRouteRequest) (*lnrpc.HTLCAttempt, error) {
+			return &lnrpc.HTLCAttempt{Status: lnrpc.HTLCAttempt_FAILED,
+				Failure: &lnrpc.Failure{Code: lnrpc.Failure_TEMPORARY_CHANNEL_FAILURE, FailureSourceIndex: 1}}, nil
+		},
+	}
+	q := newFakeRouteQ()
+	res, err := newEngine().trySingleSource(context.Background(), &fakeLN{info: &lnrpc.GetInfoResponse{IdentityPubkey: "self"}, qr: sampleQR()}, r, q,
+		sampleRebalance(), "555", map[string]int{}, 1000, 100, 2000, &lnrpc.AddInvoiceResponse{RHash: []byte{0x01}}, 1_000_000_000, 30*time.Second, time.Unix(1, 0))
+	require.NoError(t, err)
+	require.Nil(t, res)
+	require.Len(t, q.attempts, 1)
+	a := q.attempts[0]
+	assert.Equal(t, "failed", a.Outcome)
+	assert.Equal(t, int32(15), a.FailureCode.Int32)
+	assert.Equal(t, int32(1), a.FailureHop.Int32)
+	assert.Equal(t, int64(100000), a.ValueSat)
 }
 
 func TestTrySingleSourceBrakes(t *testing.T) {
@@ -233,6 +266,8 @@ func TestTrySingleSourceOppCostRejected(t *testing.T) {
 		map[string]int{}, 1000, 100, 2000, inv, 1_000_000_000, 30*time.Second, time.Unix(1, 0))
 	require.NoError(t, err)
 	assert.Nil(t, res)
+	require.Len(t, q.attempts, 1)
+	assert.Equal(t, "skip_cost", q.attempts[0].Outcome)
 }
 
 func TestTrySingleSourceSelfPubkeyErrorPropagates(t *testing.T) {

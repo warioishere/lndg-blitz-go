@@ -324,8 +324,8 @@ func (q *Queries) InsertRebalancerRecord(ctx context.Context, arg InsertRebalanc
 const insertRouteAttempt = `-- name: InsertRouteAttempt :exec
 INSERT INTO route_attempt_log
     (timestamp, rebalance_id, route_id, target_pubkey, outgoing_chan_id, list, position,
-     evidence_age_s, fee_ppm, value_sat, outcome, failure_code, failure_hop)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     evidence_age_s, fee_ppm, value_sat, outcome, failure_code, failure_hop, route)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 `
 
 type InsertRouteAttemptParams struct {
@@ -342,6 +342,7 @@ type InsertRouteAttemptParams struct {
 	Outcome        string             `json:"outcome"`
 	FailureCode    pgtype.Int4        `json:"failure_code"`
 	FailureHop     pgtype.Int4        `json:"failure_hop"`
+	Route          pgtype.Text        `json:"route"`
 }
 
 func (q *Queries) InsertRouteAttempt(ctx context.Context, arg InsertRouteAttemptParams) error {
@@ -359,6 +360,7 @@ func (q *Queries) InsertRouteAttempt(ctx context.Context, arg InsertRouteAttempt
 		arg.Outcome,
 		arg.FailureCode,
 		arg.FailureHop,
+		arg.Route,
 	)
 	return err
 }

@@ -161,7 +161,7 @@ func TestGetSavedRoutesFailedOrder(t *testing.T) {
 
 func TestLogRouteAttempt(t *testing.T) {
 	q := &fakeSavedQ{}
-	rr := rankedRoute{row: db.GuiRebalanceroute{ID: 7, TargetPubkey: "tgt", OutgoingChanID: "111", LastFeePpm: ppm(250)},
+	rr := rankedRoute{row: db.GuiRebalanceroute{ID: 7, TargetPubkey: "tgt", OutgoingChanID: "111", LastFeePpm: ppm(250), Route: "aa-bb-self"},
 		list: listExplore, position: 2, evidence: savedNow.Add(-90 * time.Second)}
 	logRouteAttempt(context.Background(), q, 42, rr, 50_000, savedRouteResult{outcome: "failed", code: 15, hop: 2}, savedNow)
 	logRouteAttempt(context.Background(), q, 42, rankedRoute{row: db.GuiRebalanceroute{ID: 8}, list: listProven, position: 1},
@@ -178,18 +178,21 @@ func TestLogRouteAttempt(t *testing.T) {
 	assert.Equal(t, "failed", a.Outcome)
 	assert.Equal(t, int32(15), a.FailureCode.Int32)
 	assert.Equal(t, int32(2), a.FailureHop.Int32)
+	assert.Equal(t, pgtype.Text{String: "aa-bb-self", Valid: true}, a.Route)
 	b := q.attempts[1]
 	assert.Equal(t, pgtype.Int8{Int64: 8, Valid: true}, b.RouteID)
 	assert.False(t, b.EvidenceAgeS.Valid)
 	assert.False(t, b.FailureCode.Valid)
 	assert.Equal(t, "success", b.Outcome)
+	assert.False(t, b.Route.Valid, "no path known")
 }
 
 func TestLogRouteAttemptCombinedHasNoRouteID(t *testing.T) {
 	q := &fakeSavedQ{}
-	logRouteAttempt(context.Background(), q, 1, rankedRoute{row: db.GuiRebalanceroute{TargetPubkey: "tgt"}, list: listCombined, position: 3},
+	logRouteAttempt(context.Background(), q, 1, rankedRoute{row: db.GuiRebalanceroute{TargetPubkey: "tgt", Route: "aa-xx-bb-self"}, list: listCombined, position: 3},
 		50_000, savedRouteResult{outcome: "skip_cost", code: -1, hop: -1}, savedNow)
 	require.Len(t, q.attempts, 1)
 	assert.False(t, q.attempts[0].RouteID.Valid)
 	assert.Equal(t, "combined", q.attempts[0].List)
+	assert.Equal(t, "aa-xx-bb-self", q.attempts[0].Route.String, "the combined path is kept")
 }

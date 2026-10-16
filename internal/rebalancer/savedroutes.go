@@ -24,12 +24,14 @@ import (
 // proven and explore alternate (explore at positions 2, 5, 8, ...), so a
 // rebalance also tries routes that were never paid; failed routes come last.
 // Routes combined from parts of saved routes (list combined, see combine.go)
-// go between explore and failed.
+// go between explore and failed. Routes LND finds per source come after the
+// saved ones; their attempts are logged as list query.
 const (
 	listProven   = "proven"
 	listExplore  = "explore"
 	listFailed   = "failed"
 	listCombined = "combined"
+	listQuery    = "query"
 
 	provenWindow = 48 * time.Hour
 	freshProbe   = 2 * time.Hour // one route prober interval
@@ -233,14 +235,16 @@ type attemptLogQuerier interface {
 	InsertRouteAttempt(ctx context.Context, arg db.InsertRouteAttemptParams) error
 }
 
-// logRouteAttempt writes one saved-route attempt to route_attempt_log; a
-// failed write is logged and never stops the rebalance.
+// logRouteAttempt writes one route attempt to route_attempt_log with the
+// route's path (rr.row.Route); a failed write is logged and never stops the
+// rebalance.
 func logRouteAttempt(ctx context.Context, q attemptLogQuerier, rebalanceID int64, rr rankedRoute, value int64, res savedRouteResult, now time.Time) {
 	p := db.InsertRouteAttemptParams{
 		Timestamp: pgtype.Timestamptz{Time: now, Valid: true}, RebalanceID: rebalanceID,
 		RouteID:      pgtype.Int8{Int64: rr.row.ID, Valid: rr.row.ID != 0},
 		TargetPubkey: rr.row.TargetPubkey, OutgoingChanID: rr.row.OutgoingChanID, List: rr.list,
 		Position: int32(rr.position), FeePpm: rr.row.LastFeePpm, ValueSat: value, Outcome: res.outcome,
+		Route: pgtype.Text{String: rr.row.Route, Valid: rr.row.Route != ""},
 	}
 	if !rr.evidence.IsZero() {
 		p.EvidenceAgeS = pgtype.Float8{Float64: now.Sub(rr.evidence).Seconds(), Valid: true}

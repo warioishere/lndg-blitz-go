@@ -181,8 +181,8 @@ ORDER BY id;
 -- name: InsertRouteAttempt :exec
 INSERT INTO route_attempt_log
     (timestamp, rebalance_id, route_id, target_pubkey, outgoing_chan_id, list, position,
-     evidence_age_s, fee_ppm, value_sat, outcome, failure_code, failure_hop)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
+     evidence_age_s, fee_ppm, value_sat, outcome, failure_code, failure_hop, route)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
 
 -- name: ListCombinableRoutes :many
 -- Saved routes with a stored route, the material the rebalancer combines new

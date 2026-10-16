@@ -38,6 +38,7 @@ type fakeRouteQ struct {
 	openIDs      []string
 	deletedNotIn [][]string
 	delTested    int
+	attempts     []db.InsertRouteAttemptParams
 	unconfirmed  []pgtype.Timestamptz
 	delNonTarget int
 	delReps      int
@@ -45,6 +46,11 @@ type fakeRouteQ struct {
 
 func newFakeRouteQ() *fakeRouteQ {
 	return &fakeRouteQ{settings: map[string]string{}, routes: map[string]db.GuiRebalanceroute{}}
+}
+
+func (f *fakeRouteQ) InsertRouteAttempt(ctx context.Context, arg db.InsertRouteAttemptParams) error {
+	f.attempts = append(f.attempts, arg)
+	return nil
 }
 
 func (f *fakeRouteQ) GetOrCreateLocalSetting(ctx context.Context, arg db.GetOrCreateLocalSettingParams) (db.GuiLocalsetting, error) {
