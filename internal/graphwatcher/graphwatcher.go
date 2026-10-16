@@ -2,7 +2,8 @@
 // channels to auto-rebalance targets and, when the new peer's fee toward the
 // target is below the target's buy price, probes refill routes through that
 // new channel (jobs.ProbeVia) and buys over a verified route that costs less
-// than the buy price.
+// than the buy price. It also logs the routing policies around our peers
+// (market.go).
 package graphwatcher
 
 import (
@@ -35,6 +36,10 @@ type Querier interface {
 	InsertGraphEvent(ctx context.Context, arg db.InsertGraphEventParams) error
 	UpdateGraphEventRoutesFound(ctx context.Context, arg db.UpdateGraphEventRoutesFoundParams) error
 	DeleteOldGraphEvents(ctx context.Context) error
+	ListOpenPeerPubkeys(ctx context.Context) ([]string, error)
+	InsertMarketPolicies(ctx context.Context, arg []db.InsertMarketPoliciesParams) (int64, error)
+	LastMarketSnapshot(ctx context.Context) (pgtype.Timestamptz, error)
+	DeleteOldMarketPolicies(ctx context.Context, timestamp pgtype.Timestamptz) (int64, error)
 	InsertRebalancerRecord(ctx context.Context, arg db.InsertRebalancerRecordParams) (int64, error)
 	UpdateRebalancerRecord(ctx context.Context, arg db.UpdateRebalancerRecordParams) error
 }

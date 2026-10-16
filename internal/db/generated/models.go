@@ -428,6 +428,25 @@ type GuiTradesale struct {
 	SaleCount    int32              `json:"sale_count"`
 }
 
+type MarketPolicy struct {
+	ID              int64              `json:"id"`
+	Timestamp       pgtype.Timestamptz `json:"timestamp"`
+	Source          string             `json:"source"`
+	ChanID          string             `json:"chan_id"`
+	Capacity        int64              `json:"capacity"`
+	PeerPubkey      string             `json:"peer_pubkey"`
+	PolicyNode      string             `json:"policy_node"`
+	FeePpm          int64              `json:"fee_ppm"`
+	BaseFeeMsat     int64              `json:"base_fee_msat"`
+	InboundFeePpm   int32              `json:"inbound_fee_ppm"`
+	InboundBaseMsat int32              `json:"inbound_base_msat"`
+	MinHtlcMsat     int64              `json:"min_htlc_msat"`
+	MaxHtlcMsat     int64              `json:"max_htlc_msat"`
+	TimeLockDelta   int32              `json:"time_lock_delta"`
+	Disabled        bool               `json:"disabled"`
+	LastUpdate      pgtype.Timestamptz `json:"last_update"`
+}
+
 type RouteAttemptLog struct {
 	ID             int64              `json:"id"`
 	Timestamp      pgtype.Timestamptz `json:"timestamp"`

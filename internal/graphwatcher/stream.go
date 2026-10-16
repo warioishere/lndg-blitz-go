@@ -73,6 +73,9 @@ func (d Deps) runSession(ctx context.Context) {
 	chanState := map[string]struct{}{} // "cid|adv"
 	eventCount := 0
 
+	market := newMarketLog(d.Now())
+	d.refreshMarket(ctx, market)
+
 	for {
 		update, rerr := stream.Recv()
 		if rerr != nil {
@@ -92,7 +95,12 @@ func (d Deps) runSession(ctx context.Context) {
 				arTargets = at
 			}
 			cooldown = atoiOr(getSetting(ctx, d.Q, "GW-Cooldown", "300"), 300)
+			d.refreshMarket(ctx, market)
 			lastRefresh = now
+		}
+
+		if merr := d.recordUpdates(ctx, market, update); merr != nil {
+			gwLog(fmt.Sprintf("Market: %s", merr))
 		}
 
 		for _, cu := range update.GetChannelUpdates() {

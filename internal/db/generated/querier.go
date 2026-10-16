@@ -33,6 +33,7 @@ type Querier interface {
 	DeleteClosureByFunding(ctx context.Context, arg DeleteClosureByFundingParams) error
 	// _trim_events: nur die neuesten 500 Events behalten.
 	DeleteOldGraphEvents(ctx context.Context) error
+	DeleteOldMarketPolicies(ctx context.Context, timestamp pgtype.Timestamptz) (int64, error)
 	// ProbeLog.objects.order_by('-timestamp')[100:].delete() -- behalte die neuesten 100.
 	DeleteOldProbeLogs(ctx context.Context) error
 	DeleteOnchainZeroBlock(ctx context.Context) error
@@ -114,6 +115,7 @@ type Querier interface {
 	InsertHistFailedHTLC(ctx context.Context, arg InsertHistFailedHTLCParams) error
 	InsertInboundFeeLog(ctx context.Context, arg InsertInboundFeeLogParams) error
 	InsertInvoice(ctx context.Context, arg InsertInvoiceParams) error
+	InsertMarketPolicies(ctx context.Context, arg []InsertMarketPoliciesParams) (int64, error)
 	InsertOnchain(ctx context.Context, arg InsertOnchainParams) error
 	InsertPayment(ctx context.Context, arg InsertPaymentParams) error
 	InsertPaymentHop(ctx context.Context, arg InsertPaymentHopParams) error
@@ -130,6 +132,8 @@ type Querier interface {
 	InsertResolution(ctx context.Context, arg InsertResolutionParams) error
 	InsertRouteAttempt(ctx context.Context, arg InsertRouteAttemptParams) error
 	InsertShadowFeeLog(ctx context.Context, arg InsertShadowFeeLogParams) error
+	// Time of the latest graph snapshot (zero time when there is none).
+	LastMarketSnapshot(ctx context.Context) (pgtype.Timestamptz, error)
 	// Forwards-Queries fuer update_forwards / emergency_forward_check.
 	LatestForward(ctx context.Context) (LatestForwardRow, error)
 	// run_rebalancer Orchestrator-Queries.
@@ -174,6 +178,7 @@ type Querier interface {
 	ListOpenChannels(ctx context.Context) ([]GuiChannel, error)
 	// Invoice-Queries fuer update_invoices / update_invoice.
 	ListOpenInvoices(ctx context.Context) ([]ListOpenInvoicesRow, error)
+	ListOpenPeerPubkeys(ctx context.Context) ([]string, error)
 	// clean_payments: exclude status=1, cleaned=false, creation_date<=cutoff, order by index, top 10.
 	ListPaymentsToClean(ctx context.Context, creationDate pgtype.Timestamptz) ([]ListPaymentsToCleanRow, error)
 	ListPeersNoAlias(ctx context.Context) ([]GuiPeer, error)

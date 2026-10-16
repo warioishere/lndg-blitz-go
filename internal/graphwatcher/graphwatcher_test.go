@@ -35,6 +35,11 @@ type fakeQ struct {
 	events      []db.InsertGraphEventParams
 	insertedReb []db.InsertRebalancerRecordParams
 	updatedReb  []db.UpdateRebalancerRecordParams
+
+	openPeers     []string
+	market        []db.InsertMarketPoliciesParams
+	lastSnapshot  pgtype.Timestamptz
+	deletedBefore []time.Time
 }
 
 func newFakeQ() *fakeQ {
@@ -105,6 +110,24 @@ func (f *fakeQ) UpdateGraphEventRoutesFound(ctx context.Context, arg db.UpdateGr
 	return nil
 }
 func (f *fakeQ) DeleteOldGraphEvents(ctx context.Context) error { return nil }
+func (f *fakeQ) ListOpenPeerPubkeys(ctx context.Context) ([]string, error) {
+	return f.openPeers, nil
+}
+func (f *fakeQ) InsertMarketPolicies(ctx context.Context, arg []db.InsertMarketPoliciesParams) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.market = append(f.market, arg...)
+	return int64(len(arg)), nil
+}
+func (f *fakeQ) LastMarketSnapshot(ctx context.Context) (pgtype.Timestamptz, error) {
+	return f.lastSnapshot, nil
+}
+func (f *fakeQ) DeleteOldMarketPolicies(ctx context.Context, before pgtype.Timestamptz) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deletedBefore = append(f.deletedBefore, before.Time)
+	return 0, nil
+}
 func (f *fakeQ) InsertRebalancerRecord(ctx context.Context, arg db.InsertRebalancerRecordParams) (int64, error) {
 	f.insertedReb = append(f.insertedReb, arg)
 	return int64(len(f.insertedReb)), nil

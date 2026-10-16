@@ -10,6 +10,7 @@ sql:
       - "internal/db/migrations/000004_graphprobelog_via.up.sql"
       - "internal/db/migrations/000005_route_evidence.up.sql"
       - "internal/db/migrations/000006_route_combination.up.sql"
+      - "internal/db/migrations/000007_market_policy.up.sql"
     queries: "internal/db/queries"
     gen:
       go:
