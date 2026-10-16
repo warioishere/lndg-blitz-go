@@ -37,6 +37,7 @@ type Querier interface {
 	DeleteOldNkFeeLogs(ctx context.Context, timestamp pgtype.Timestamptz) error
 	// ProbeLog.objects.order_by('-timestamp')[100:].delete() -- behalte die neuesten 100.
 	DeleteOldProbeLogs(ctx context.Context) error
+	DeleteOldRouteAttempts(ctx context.Context, timestamp pgtype.Timestamptz) error
 	DeleteOnchainZeroBlock(ctx context.Context) error
 	DeletePaymentHops(ctx context.Context, paymentHashID string) error
 	DeletePendingChannel(ctx context.Context, arg DeletePendingChannelParams) error

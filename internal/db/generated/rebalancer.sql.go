@@ -75,6 +75,15 @@ func (q *Queries) AggForwardsOutSince(ctx context.Context, forwardDate pgtype.Ti
 	return items, nil
 }
 
+const deleteOldRouteAttempts = `-- name: DeleteOldRouteAttempts :exec
+DELETE FROM route_attempt_log WHERE "timestamp" < $1
+`
+
+func (q *Queries) DeleteOldRouteAttempts(ctx context.Context, timestamp pgtype.Timestamptz) error {
+	_, err := q.db.Exec(ctx, deleteOldRouteAttempts, timestamp)
+	return err
+}
+
 const deleteRoutesNotOpenOutgoing = `-- name: DeleteRoutesNotOpenOutgoing :execrows
 DELETE FROM gui_rebalanceroute WHERE outgoing_chan_id <> ALL($1::varchar[])
 `

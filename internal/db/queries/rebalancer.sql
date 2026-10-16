@@ -188,3 +188,6 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
 -- Saved routes with a stored route, the material the rebalancer combines new
 -- routes from.
 SELECT * FROM gui_rebalanceroute WHERE route_hex IS NOT NULL AND route_hex <> '' ORDER BY id;
+
+-- name: DeleteOldRouteAttempts :exec
+DELETE FROM route_attempt_log WHERE "timestamp" < $1;

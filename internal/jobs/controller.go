@@ -26,6 +26,7 @@ type DataQuerier interface {
 	boostQuerier
 	aggQuerier
 	nkQuerier
+	routeAttemptQuerier
 }
 
 // DataLightningClient combines the LightningClient subsets required by all Data jobs.
@@ -42,8 +43,9 @@ type DataLightningClient interface {
 	cleanClient
 }
 
-// RunDataJobs runs all 17 Data jobs in a fixed order. The first error aborts
-// the run; remaining jobs are skipped.
+// RunDataJobs runs all 18 Data jobs in a fixed order. The first error aborts
+// the run; remaining jobs are skipped. The route attempt purge only logs its
+// errors.
 func RunDataJobs(ctx context.Context, q DataQuerier, stub DataLightningClient) error {
 	if err := UpdatePeers(ctx, q, stub); err != nil {
 		return err
@@ -93,6 +95,7 @@ func RunDataJobs(ctx context.Context, q DataQuerier, stub DataLightningClient) e
 	if err := FailedHtlcBoostJob(ctx, q, stub); err != nil {
 		return err
 	}
+	PurgeRouteAttempts(ctx, q)
 	return AggFailedHtlcs(ctx, q)
 }
 
