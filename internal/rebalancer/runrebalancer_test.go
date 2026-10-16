@@ -3,6 +3,7 @@ package rebalancer
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -334,6 +335,25 @@ func TestRunRebalancerSendPaymentFailureDecrease(t *testing.T) {
 	assert.Equal(t, int32(50000), next.Value) // 100000/2
 	assert.InDelta(t, 500.0, next.FeeLimit, 1e-9)
 	assert.Equal(t, int32(1), next.Status)
+}
+
+// A RapidFire follow-up starts in flight (status 1); when no source finds a
+// route it ends with no route (4) and the next one goes out with half the amount.
+func TestRunRebalancerFollowUpWithoutRouteEndsNoRoute(t *testing.T) {
+	q := newFakeRebalQ()
+	q.settings["RR-UseSavedRoutes"] = "0"
+	q.settings["AR-PerSourceEnabled"] = "1"
+	q.activeChans = []db.GuiChannel{chanOut(), chanIn()}
+	q.target = db.GetTargetChannelInfoRow{LocalFeeRate: 1000, ArMaxCost: 90}
+	q.feeDiff = []db.ListChannelFeeAndDiffByIDsRow{{ChanID: "777", LocalFeeRate: 10}}
+	ln := &fakeLN{info: &lnrpc.GetInfoResponse{IdentityPubkey: "self"}, qrErr: errors.New("unable to find a path"),
+		invoice: &lnrpc.AddInvoiceResponse{RHash: []byte{0xaa}, PaymentRequest: "lnbc1"}}
+	rb := &db.GuiRebalancer{ID: 1, Value: 100000, LastHopPubkey: "02aabbccddeeff", Duration: 1, FeeLimit: 1000, Status: 1}
+	next := newEngine().runRebalancer(context.Background(), ln, &fakeRebalRouter{}, q, rb, "Worker0", fixedNow())
+
+	assert.Equal(t, int32(4), rb.Status)
+	require.NotNil(t, next)
+	assert.Equal(t, int32(50000), next.Value)
 }
 
 // RapidFire after a success must judge the target with the balances after the

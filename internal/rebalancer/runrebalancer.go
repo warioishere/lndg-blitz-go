@@ -320,9 +320,6 @@ func (e *engine) runRebalancer(
 				}
 			}
 			if rebalance.Status != 2 {
-				if rebalance.Status == 0 {
-					rebalance.Status = 4 // FAILURE_REASON_NO_ROUTE
-				}
 				rebalLog(fmt.Sprintf("Per-source iteration: no route succeeded for %s", rebalance.TargetAlias))
 			}
 		} else if !savedSucceeded {
@@ -344,6 +341,11 @@ func (e *engine) runRebalancer(
 			rebalance.Status = 400
 			rebalLog(fmt.Sprintf("Error while sending payment: %s", innerErr))
 		}
+	}
+	// A rebalance that ends without a result found no route (FAILURE_REASON_NO_ROUTE):
+	// pending (0) or, for a RapidFire follow-up, in flight (1) since it was queued.
+	if rebalance.Status < 2 {
+		rebalance.Status = 4
 	}
 
 	// Finalise the record regardless of outcome.
