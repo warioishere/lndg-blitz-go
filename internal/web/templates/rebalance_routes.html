@@ -155,7 +155,7 @@
         <div class="w3-card w3-padding w3-margin-bottom">
           <h4>Route Settings</h4>
           <form class="w3-margin-bottom" action="/update_setting/" method="post">
-            <label for="route_limit"><b>Routes to try</b> (1-50):</label>
+            <label for="route_limit"><b>Routes to try</b> (1-50, plus 20 for combined routes; picked by success chance):</label>
             <input class="w3-input w3-border" id="route_limit" name="value" type="number" min="1" max="50" value="{{.route_limit}}">
             <input type="hidden" name="key" value="RR-RouteLimit">
             <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>

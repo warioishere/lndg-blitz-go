@@ -33,7 +33,9 @@ const (
 // SendToRouteV2 within AR-Time minutes. It pays only while route fees plus the
 // source fee stay below buyPpm; ok is false when the rebuilt route costs more
 // and nothing was sent. The purchase is a gui_rebalancer record like any
-// rebalance; the payments job attributes its cost to the target channel.
+// rebalance; the payments job attributes its cost to the target channel. The
+// attempt goes to route_attempt_log (list graph), a paid route is saved as a
+// paid route of the target, so every rebalance worker tries it.
 func (d Deps) buyVia(ctx context.Context, target db.GuiChannel, a jobs.ViaAttempt, buyPpm int) (rec db.GuiRebalancer, ok bool, err error) {
 	srcID, err := strconv.ParseUint(a.SourceChanID, 10, 64)
 	if err != nil {
@@ -83,20 +85,33 @@ func (d Deps) buyVia(ctx context.Context, target db.GuiChannel, a jobs.ViaAttemp
 	rec.PaymentHash = pgtype.Text{String: hex.EncodeToString(inv.GetRHash()), Valid: true}
 
 	sctx, cancel := context.WithTimeout(ctx, timeout)
+	start := d.Now()
 	resp, serr := d.Router.SendToRouteV2(sctx, &routerrpc.SendToRouteRequest{PaymentHash: inv.GetRHash(), Route: route})
 	cancel()
+	attempt := rebalancer.RouteAttempt{RebalanceID: rec.ID, Target: target.RemotePubkey, OutChan: a.SourceChanID, List: "graph",
+		Position: 1, ValueSat: a.AmountSat, Code: -1, Hop: -1, Path: rebalancer.RoutePath(route),
+		DurationMs: int(d.Now().Sub(start) / time.Millisecond)}
 	switch {
 	case serr != nil && status.Code(serr) == codes.DeadlineExceeded:
 		rec.Status = rebalReqTimeout
+		attempt.Outcome = "timeout"
 	case serr != nil:
 		rec.Status = rebalReqFailed
 		gwLog(fmt.Sprintf("  payment error: %s", serr))
+		attempt.Outcome, attempt.DurationMs = "error", -1
 	case resp.GetStatus() == lnrpc.HTLCAttempt_SUCCEEDED:
 		rec.Status = rebalSucceeded
 		rec.FeesPaid = pgtype.Float8{Float64: float64(resp.GetRoute().GetTotalFeesMsat()) / 1000, Valid: true}
+		attempt.Outcome = "success"
+		rebalancer.RecordPaidRoute(ctx, d.Q, target.RemotePubkey, a.SourceChanID, route, d.Now())
 	default:
 		rec.Status = rebalNoRoute
+		attempt.Outcome = "failed"
+		if f := resp.GetFailure(); f != nil {
+			attempt.Code, attempt.Hop = int(f.GetCode()), int(f.GetFailureSourceIndex())
+		}
 	}
+	rebalancer.RecordAttempt(ctx, d.Q, attempt, d.Now())
 	rec.Stop = pgtype.Timestamptz{Time: d.Now(), Valid: true}
 	if err := d.Q.UpdateRebalancerRecord(ctx, db.UpdateRebalancerRecordParams{
 		ID: rec.ID, Value: rec.Value, FeeLimit: rec.FeeLimit, OutgoingChanIds: rec.OutgoingChanIds,

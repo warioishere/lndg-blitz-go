@@ -35,6 +35,8 @@ type fakeQ struct {
 	events      []db.InsertGraphEventParams
 	insertedReb []db.InsertRebalancerRecordParams
 	updatedReb  []db.UpdateRebalancerRecordParams
+	attempts    []db.InsertRouteAttemptParams
+	paidRoutes  []db.UpdateRebalanceRouteParams
 
 	openPeers     []string
 	market        []db.InsertMarketPoliciesParams
@@ -68,6 +70,24 @@ func (f *fakeQ) GetRebalanceRoute(ctx context.Context, arg db.GetRebalanceRouteP
 	return db.GuiRebalanceroute{}, pgx.ErrNoRows
 }
 func (f *fakeQ) InsertRebalanceRoute(ctx context.Context, arg db.InsertRebalanceRouteParams) error {
+	return nil
+}
+func (f *fakeQ) InsertRouteAttempt(ctx context.Context, arg db.InsertRouteAttemptParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attempts = append(f.attempts, arg)
+	return nil
+}
+func (f *fakeQ) UpdateRebalanceRoute(ctx context.Context, arg db.UpdateRebalanceRouteParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paidRoutes = append(f.paidRoutes, arg)
+	return nil
+}
+func (f *fakeQ) UpdateRebalanceRouteFee(ctx context.Context, arg db.UpdateRebalanceRouteFeeParams) error {
+	return nil
+}
+func (f *fakeQ) MarkRebalanceRouteFailure(ctx context.Context, arg db.MarkRebalanceRouteFailureParams) error {
 	return nil
 }
 func (f *fakeQ) UpdateRebalanceRouteProbe(ctx context.Context, arg db.UpdateRebalanceRouteProbeParams) error {
@@ -342,6 +362,21 @@ func TestTriggerProbeBuysBelowBuyPrice(t *testing.T) {
 	assert.Equal(t, int32(rebalSucceeded), l.BuyStatus.Int32)
 	assert.Contains(t, l.Details, "verified 100000 sat @ 250 ppm")
 	assert.Contains(t, l.Details, "bought 100000 sat for 21.000 sat fees")
+
+	// the purchase is in the attempt log (after the probe HTLCs) and saved as a paid route
+	require.NotEmpty(t, q.attempts)
+	buy := q.attempts[len(q.attempts)-1]
+	assert.Equal(t, "graph", buy.List)
+	assert.Equal(t, "success", buy.Outcome)
+	assert.Equal(t, "100", buy.OutgoingChanID)
+	assert.Equal(t, pk(0xbb), buy.TargetPubkey)
+	assert.True(t, buy.DurationMs.Valid)
+	for _, a := range q.attempts[:len(q.attempts)-1] {
+		assert.Equal(t, "probe", a.List)
+	}
+	require.Len(t, q.paidRoutes, 1)
+	assert.Equal(t, int32(1), q.paidRoutes[0].SuccessCount)
+	assert.Equal(t, "100", q.paidRoutes[0].OutgoingChanID)
 }
 
 func TestTriggerProbeNoPurchaseAtOrAboveBuyPrice(t *testing.T) {

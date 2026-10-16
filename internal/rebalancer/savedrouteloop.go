@@ -17,13 +17,22 @@ import (
 	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
-// savedRouteResult is how a saved-route attempt ended. outcome is one of
-// success, success_smaller (paid with the amount a probe found), failed,
-// skip_max_htlc, skip_failed_edge, skip_cost, build_failed, error; code and hop
-// are the failure code and failure source index of a failed payment (-1: none).
+// savedRouteResult is how a route attempt ended. outcome is one of success,
+// success_smaller (paid with the amount a probe found), failed, timeout (no
+// result within AR-AttemptTimeout), skip_max_htlc, skip_failed_edge,
+// skip_slow (a banned slow node pair), skip_htlc (the HTLC brake), skip_cost,
+// build_failed, error; code and hop are the failure code and failure source
+// index of a failed payment (-1: none); durationMs is the time until the result
+// of a sent attempt (-1: not sent).
 type savedRouteResult struct {
-	outcome   string
-	code, hop int
+	outcome    string
+	code, hop  int
+	durationMs int
+}
+
+// notSent is the result of an attempt that ended before anything was sent.
+func notSent(outcome string) savedRouteResult {
+	return savedRouteResult{outcome: outcome, code: -1, hop: -1, durationMs: -1}
 }
 
 func (r savedRouteResult) succeeded() bool {
@@ -40,12 +49,13 @@ func (e *engine) trySavedRoute(
 	q rebalancerQuerier,
 	rebalance *db.GuiRebalancer,
 	sr db.GuiRebalanceroute,
-	invoiceResp *lnrpc.AddInvoiceResponse,
+	inv *rebalInvoice,
 	sourceFeeMap map[string]int,
 	targetFeeRate, arMaxCost, maxFeeRate int,
 	oppCostEnabled bool,
 	feeLimitMsat int64,
 	timeout time.Duration,
+	send sendSettings,
 	successfulOut, successfulIn **uint64,
 	triedSavedSources map[string]struct{},
 	savedSucceeded *bool,
@@ -73,14 +83,14 @@ func (e *engine) trySavedRoute(
 		p, err := parseRouteHex(sr.RouteHex.String)
 		if err != nil {
 			handleErr(err)
-			return savedRouteResult{outcome: "error", code: -1, hop: -1}
+			return notSent("error")
 		}
 		parsedSr = p
 		for _, h := range p.GetHops() {
 			b, derr := hex.DecodeString(h.GetPubKey())
 			if derr != nil {
 				handleErr(derr)
-				return savedRouteResult{outcome: "error", code: -1, hop: -1}
+				return notSent("error")
 			}
 			hopKeys = append(hopKeys, b)
 		}
@@ -89,7 +99,7 @@ func (e *engine) trySavedRoute(
 			b, derr := hex.DecodeString(k)
 			if derr != nil {
 				handleErr(derr)
-				return savedRouteResult{outcome: "error", code: -1, hop: -1}
+				return notSent("error")
 			}
 			hopKeys = append(hopKeys, b)
 		}
@@ -102,11 +112,15 @@ func (e *engine) trySavedRoute(
 		if capMsat != 0 && int64(rebalance.Value)*1000 > capMsat {
 			rebalLog(fmt.Sprintf("Saved route via %s max_htlc cap is %d sats, less than rebalance value %d - skipping",
 				srLabel, capMsat/1000, rebalance.Value))
-			return savedRouteResult{outcome: "skip_max_htlc", code: -1, hop: -1}, false
+			return notSent("skip_max_htlc"), false
 		}
 		if !e.mc.validateRoute(r) {
 			rebalLog(fmt.Sprintf("Saved route via %s skipped — reuses a cached failed edge", srLabel))
-			return savedRouteResult{outcome: "skip_failed_edge", code: -1, hop: -1}, false
+			return notSent("skip_failed_edge"), false
+		}
+		if pair, slow := e.stats.bannedPair(routePath(r), now()); slow {
+			rebalLog(fmt.Sprintf("Saved route via %s skipped — slow node pair %s", srLabel, pair))
+			return notSent("skip_slow"), false
 		}
 		return savedRouteResult{}, true
 	}
@@ -119,18 +133,18 @@ func (e *engine) trySavedRoute(
 	outChanID, perr := strconv.ParseUint(sr.OutgoingChanID, 10, 64)
 	if perr != nil {
 		handleErr(perr)
-		return savedRouteResult{outcome: "error", code: -1, hop: -1}
+		return notSent("error")
 	}
 	build, berr := routerstub.BuildRoute(ctx, &routerrpc.BuildRouteRequest{
 		OutgoingChanId: outChanID,
 		AmtMsat:        int64(rebalance.Value) * 1000,
 		HopPubkeys:     hopKeys,
 		FinalCltvDelta: cltvDelta,
-		PaymentAddr:    invoiceResp.GetPaymentAddr(),
+		PaymentAddr:    inv.resp.GetPaymentAddr(),
 	})
 	if berr != nil {
 		handleErr(berr)
-		return savedRouteResult{outcome: "build_failed", code: -1, hop: -1}
+		return notSent("build_failed")
 	}
 	rebalLog(fmt.Sprintf("BuildRoute succeeded via %s", srLabel))
 	if !hasHex {
@@ -147,7 +161,7 @@ func (e *engine) trySavedRoute(
 			srcFee := lookupSourceFee(sourceFeeMap, sr.OutgoingChanID)
 			rebalLog(fmt.Sprintf("BuildRoute via %s rejected: route %d ppm + source %d ppm outbound, max route budget %d ppm (target %d * %d%% - %d source) - skipping",
 				srLabel, totalPpm, srcFee, budgetPpm, targetFeeRate, arMaxCost, srcFee))
-			return savedRouteResult{outcome: "skip_cost", code: -1, hop: -1}
+			return notSent("skip_cost")
 		}
 	}
 
@@ -156,31 +170,35 @@ func (e *engine) trySavedRoute(
 		rebalLog(fmt.Sprintf("BuildRoute via %s exceeds fee limit (%d > %d msat, %d ppm) - skipping without penalty",
 			srLabel, build.GetRoute().GetTotalFeesMsat(), feeLimitMsat, int(actualPpm)))
 		updateRouteFee(ctx, q, sr.ID, actualPpm)
-		return savedRouteResult{outcome: "skip_cost", code: -1, hop: -1}
+		return notSent("skip_cost")
 	}
 
 	routeMsg := build.GetRoute()
 	rb, merr := proto.Marshal(routeMsg)
 	if merr != nil {
 		handleErr(merr)
-		return savedRouteResult{outcome: "error", code: -1, hop: -1}
+		return notSent("error")
 	}
 	h := hex.EncodeToString(rb)
 	rebuiltHex = &h
 	triedSavedSources[sr.OutgoingChanID] = struct{}{}
 
-	cctx, cancel := context.WithTimeout(ctx, timeout)
-	paymentResp, serr := routerstub.SendToRouteV2(cctx, &routerrpc.SendToRouteRequest{
-		PaymentHash: invoiceResp.GetRHash(), Route: routeMsg,
-	})
-	cancel()
-	if serr != nil {
-		handleErr(serr)
-		return savedRouteResult{outcome: "error", code: -1, hop: -1}
+	sent := e.sendRoute(ctx, stub, stub, routerstub, inv, routeMsg, send)
+	switch {
+	case sent.skipped:
+		return notSent("skip_htlc")
+	case sent.err != nil:
+		handleErr(sent.err)
+		return savedRouteResult{outcome: "error", code: -1, hop: -1, durationMs: sent.durationMs}
+	case sent.timedOut:
+		rebalLog(fmt.Sprintf("Saved route via %s: no result within %s, going on with a new invoice", srLabel, send.attemptTimeout))
+		return savedRouteResult{outcome: "timeout", code: -1, hop: -1, durationMs: sent.durationMs}
 	}
+	paymentResp := sent.resp
 
 	if paymentResp.GetStatus() == lnrpc.HTLCAttempt_SUCCEEDED { // status == 1
 		rebalance.Status = 2
+		rebalance.PaymentHash = textOf(hex.EncodeToString(inv.resp.GetRHash()))
 		feesMsat := paymentResp.GetRoute().GetTotalFeesMsat()
 		if feesMsat != 0 {
 			rebalance.FeesPaid = pgtype.Float8{Float64: float64(feesMsat) / 1000, Valid: true}
@@ -201,7 +219,7 @@ func (e *engine) trySavedRoute(
 		updateNodeReputations(ctx, q, *rebuiltHex, true, 0, false, now())
 		e.routePaid(routeMsg, sr.OutgoingChanID, rebalance.LastHopPubkey)
 		*savedSucceeded = true
-		return savedRouteResult{outcome: "success", code: -1, hop: -1}
+		return savedRouteResult{outcome: "success", code: -1, hop: -1, durationMs: sent.durationMs}
 	}
 
 	// Handle failure.
@@ -223,7 +241,7 @@ func (e *engine) trySavedRoute(
 	}
 	updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, *rebuiltHex, false, false, failHop, now())
 	updateNodeReputations(ctx, q, *rebuiltHex, false, fsi, failureSet, now())
-	failed := savedRouteResult{outcome: "failed", code: -1, hop: -1}
+	failed := savedRouteResult{outcome: "failed", code: -1, hop: -1, durationMs: sent.durationMs}
 	if failureSet {
 		failed.code, failed.hop = codeNum, fsi
 	}
@@ -234,7 +252,7 @@ func (e *engine) trySavedRoute(
 		probed := probeRouteAmount(ctx, routerstub, hopKeys, sr.OutgoingChanID, cltvDelta, int64(rebalance.Value))
 		if probed > 0 {
 			rebalLog(fmt.Sprintf("Probe found max %d sats (was %d)", probed, rebalance.Value))
-			probeInvoice, aerr := stub.AddInvoice(ctx, &lnrpc.Invoice{Value: probed, Expiry: int64(timeout / time.Second), CltvExpiry: FinalCltvDelta})
+			probeInvoice, aerr := newRebalInvoice(ctx, stub, probed, timeout)
 			if aerr != nil {
 				handleErr(aerr)
 				return failed
@@ -244,7 +262,7 @@ func (e *engine) trySavedRoute(
 				AmtMsat:        probed * 1000,
 				HopPubkeys:     hopKeys,
 				FinalCltvDelta: cltvDelta,
-				PaymentAddr:    probeInvoice.GetPaymentAddr(),
+				PaymentAddr:    probeInvoice.resp.GetPaymentAddr(),
 			})
 			if pberr != nil {
 				handleErr(pberr)
@@ -263,20 +281,16 @@ func (e *engine) trySavedRoute(
 				}
 			}
 			if oppOk && probeBuild.GetRoute().GetTotalFeesMsat() <= scaledFeeLimit {
-				pcctx, pcancel := context.WithTimeout(ctx, timeout)
-				probeResp, prerr := routerstub.SendToRouteV2(pcctx, &routerrpc.SendToRouteRequest{
-					PaymentHash: probeInvoice.GetRHash(), Route: probeBuild.GetRoute(),
-				})
-				pcancel()
-				if prerr != nil {
-					handleErr(prerr)
+				psent := e.sendRoute(ctx, stub, stub, routerstub, probeInvoice, probeBuild.GetRoute(), send)
+				if psent.err != nil {
+					handleErr(psent.err)
 					return failed
 				}
-				if probeResp.GetStatus() == lnrpc.HTLCAttempt_SUCCEEDED {
+				if probeResp := psent.resp; !psent.skipped && !psent.timedOut && probeResp.GetStatus() == lnrpc.HTLCAttempt_SUCCEEDED {
 					rebalance.FeeLimit = pyround.Round(rebalance.FeeLimit*(float64(probed)/float64(rebalance.Value)), 3)
 					rebalance.Value = int32(probed)
 					rebalance.Status = 2
-					rebalance.PaymentHash = textOf(hex.EncodeToString(probeInvoice.GetRHash()))
+					rebalance.PaymentHash = textOf(hex.EncodeToString(probeInvoice.resp.GetRHash()))
 					feesMsat := probeResp.GetRoute().GetTotalFeesMsat()
 					rebalance.FeesPaid = pgtype.Float8{Float64: float64(feesMsat) / 1000, Valid: true}
 					respHops := probeResp.GetRoute().GetHops()
@@ -290,7 +304,7 @@ func (e *engine) trySavedRoute(
 					e.routePaid(probeBuild.GetRoute(), sr.OutgoingChanID, rebalance.LastHopPubkey)
 					rebalLog(fmt.Sprintf("Probe payment succeeded: %d sats via %s", probed, srLabel))
 					*savedSucceeded = true
-					return savedRouteResult{outcome: "success_smaller", code: -1, hop: -1}
+					return savedRouteResult{outcome: "success_smaller", code: -1, hop: -1, durationMs: psent.durationMs}
 				}
 			}
 		}

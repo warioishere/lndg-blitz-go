@@ -32,6 +32,7 @@ type fakeProbeQ struct {
 	insertedRR    []db.InsertRebalanceRouteParams
 	updatedRR     []db.UpdateRebalanceRouteProbeParams
 	probeLogs     []db.InsertProbeLogParams
+	attempts      []db.InsertRouteAttemptParams
 	prunedOldLogs int
 }
 
@@ -73,6 +74,10 @@ func (f *fakeProbeQ) GetRebalanceRoute(ctx context.Context, arg db.GetRebalanceR
 		return r, nil
 	}
 	return db.GuiRebalanceroute{}, pgx.ErrNoRows
+}
+func (f *fakeProbeQ) InsertRouteAttempt(ctx context.Context, arg db.InsertRouteAttemptParams) error {
+	f.attempts = append(f.attempts, arg)
+	return nil
 }
 func (f *fakeProbeQ) InsertRebalanceRoute(ctx context.Context, arg db.InsertRebalanceRouteParams) error {
 	f.insertedRR = append(f.insertedRR, arg)
@@ -204,7 +209,7 @@ func TestProbeRouteSync_Classification(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &fixedSendRouter{attempt: tc.attempt, err: tc.err}
 			got := probeRouteSync(context.Background(), r, route, 1)
-			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want, got.status)
 		})
 	}
 }
@@ -214,17 +219,33 @@ func TestProbeRouteSync_Classification(t *testing.T) {
 func TestProbeWithBinarySearch_Converges(t *testing.T) {
 	r := &fakeProbeRouter{liquiditySat: 60000, feeMsat: 1000}
 	hopPubkeys := [][]byte{{0x01}, {0x02}}
-	bestHex, good, feePpm := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000)
+	bestHex, good, feePpm := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000, nil)
 	require.NotNil(t, bestHex)
 	assert.Equal(t, int64(59375), good)
 	require.NotNil(t, feePpm)
 	assert.NotEmpty(t, *bestHex)
 }
 
+// Every probe HTLC goes to the recorder with its result.
+func TestProbeWithBinarySearch_Records(t *testing.T) {
+	r := &fakeProbeRouter{liquiditySat: 60000, feeMsat: 1000}
+	var got []probeOutcome
+	var amounts []int64
+	rec := func(route *lnrpc.Route, amountSat int64, o probeOutcome) {
+		got = append(got, o)
+		amounts = append(amounts, amountSat)
+	}
+	probeWithBinarySearch(context.Background(), r, "12345", [][]byte{{0x01}, {0x02}}, 40, 100000, 1000, rec)
+	require.Equal(t, r.sendCalls, len(got))
+	assert.Equal(t, int64(100000), amounts[0])
+	assert.Equal(t, "liquidity", got[0].status)
+	assert.Equal(t, 15, got[0].code)
+}
+
 func TestProbeWithBinarySearch_NoLiquidity(t *testing.T) {
 	r := &fakeProbeRouter{liquiditySat: 0, feeMsat: 1000} // nothing verifies
 	hopPubkeys := [][]byte{{0x01}, {0x02}}
-	bestHex, good, _ := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000)
+	bestHex, good, _ := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000, nil)
 	assert.Nil(t, bestHex)
 	assert.Equal(t, int64(0), good)
 }
@@ -233,7 +254,7 @@ func TestProbeWithBinarySearch_FeeBudgetAbort(t *testing.T) {
 	// total_fees 100000 msat = 100 sat; fee_limit 1 sat -> amount_fee_limit 1 -> abort immediately.
 	r := &fakeProbeRouter{liquiditySat: 100000, feeMsat: 100000}
 	hopPubkeys := [][]byte{{0x01}, {0x02}}
-	bestHex, good, _ := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1)
+	bestHex, good, _ := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1, nil)
 	assert.Nil(t, bestHex)
 	assert.Equal(t, int64(0), good)
 	assert.Equal(t, 1, r.buildCalls) // built once, aborted on fee check
@@ -245,13 +266,13 @@ func TestProbeWithBinarySearch_FeeFailureRetriedOnce(t *testing.T) {
 
 	// one fee failure, then the same amount verifies
 	r := &fakeProbeRouter{liquiditySat: 100000, feeMsat: 1000, feeFailures: 1}
-	bestHex, good, _ := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000)
+	bestHex, good, _ := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000, nil)
 	require.NotNil(t, bestHex)
 	assert.Equal(t, int64(100000), good)
 
 	// a persisting fee failure aborts after one retry
 	r = &fakeProbeRouter{liquiditySat: 100000, feeMsat: 1000, feeFailures: 100}
-	bestHex, _, _ = probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000)
+	bestHex, _, _ = probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000, nil)
 	assert.Nil(t, bestHex)
 	assert.Equal(t, 2, r.sendCalls)
 }

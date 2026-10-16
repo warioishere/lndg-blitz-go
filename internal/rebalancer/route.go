@@ -33,6 +33,10 @@ func parseRouteHex(routeHex string) (*lnrpc.Route, error) {
 	return &r, nil
 }
 
+// RoutePath returns the hop pubkeys of a route joined by "-", the path format
+// of gui_rebalanceroute and route_attempt_log.
+func RoutePath(r *lnrpc.Route) string { return routePath(r) }
+
 // routePath returns the hop pubkeys joined by "-".
 func routePath(r *lnrpc.Route) string {
 	parts := make([]string, 0, len(r.GetHops()))
@@ -130,6 +134,21 @@ func updateRoute(ctx context.Context, q routeQuerier, pubkey, chanID, routeHex s
 	}); e != nil {
 		rebalLog(fmt.Sprintf("Error updating route record: %s", e))
 	}
+}
+
+// RouteQuerier is the DB access RecordPaidRoute needs.
+type RouteQuerier = routeQuerier
+
+// RecordPaidRoute saves a route paid outside the rebalancer (a graph watcher
+// purchase) as a paid route of the target, so the rebalancer tries it and
+// combines it like its own.
+func RecordPaidRoute(ctx context.Context, q RouteQuerier, target, outChan string, route *lnrpc.Route, now time.Time) {
+	b, err := proto.Marshal(route)
+	if err != nil {
+		rebalLog(fmt.Sprintf("Error updating route record: %s", err))
+		return
+	}
+	updateRoute(ctx, q, target, outChan, hex.EncodeToString(b), true, false, -1, now)
 }
 
 // updateRouteFee persists the last observed fee ppm for a route record.

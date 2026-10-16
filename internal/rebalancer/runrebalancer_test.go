@@ -2,6 +2,7 @@ package rebalancer
 
 import (
 	"context"
+	"encoding/hex"
 	"io"
 	"sync"
 	"testing"
@@ -119,6 +120,9 @@ func (f *fakeRebalQ) IncrNodeReputationFailure(ctx context.Context, arg db.IncrN
 func (f *fakeRebalQ) ListRoutesForTarget(ctx context.Context, arg db.ListRoutesForTargetParams) ([]db.GuiRebalanceroute, error) {
 	return f.savedRoutes, nil
 }
+func (f *fakeRebalQ) ListSentRouteAttempts(ctx context.Context, timestamp pgtype.Timestamptz) ([]db.ListSentRouteAttemptsRow, error) {
+	return nil, nil
+}
 func (f *fakeRebalQ) ListCombinableRoutes(ctx context.Context) ([]db.GuiRebalanceroute, error) {
 	return f.combinable, nil
 }
@@ -233,7 +237,15 @@ type fakeRebalRouter struct {
 }
 
 func (f *fakeRebalRouter) BuildRoute(ctx context.Context, in *routerrpc.BuildRouteRequest, opts ...grpc.CallOption) (*routerrpc.BuildRouteResponse, error) {
-	return &routerrpc.BuildRouteResponse{Route: &lnrpc.Route{}}, nil
+	r := &lnrpc.Route{}
+	for i, k := range in.GetHopPubkeys() {
+		h := &lnrpc.Hop{PubKey: hex.EncodeToString(k)}
+		if i == 0 {
+			h.ChanId = in.GetOutgoingChanId()
+		}
+		r.Hops = append(r.Hops, h)
+	}
+	return &routerrpc.BuildRouteResponse{Route: r}, nil
 }
 func (f *fakeRebalRouter) SendToRouteV2(ctx context.Context, in *routerrpc.SendToRouteRequest, opts ...grpc.CallOption) (*lnrpc.HTLCAttempt, error) {
 	return &lnrpc.HTLCAttempt{Status: lnrpc.HTLCAttempt_FAILED}, nil
@@ -296,11 +308,11 @@ func TestRunRebalancerSendPaymentSuccessRapidFire(t *testing.T) {
 
 	assert.Equal(t, int32(2), rb.Status)
 	require.NotNil(t, next)
-	assert.Equal(t, int32(121000), next.Value) // min(int(100000*1.21), drain 900000)
+	assert.Equal(t, int32(100000), next.Value) // the same amount again, below drain 900000
 	assert.Equal(t, int32(1), next.Status)
 	assert.Equal(t, "[777]", next.OutgoingChanIds)
 	assert.Equal(t, "02aabbccddeeff", next.LastHopPubkey)
-	assert.InDelta(t, 1210.0, next.FeeLimit, 1e-9)
+	assert.InDelta(t, 1000.0, next.FeeLimit, 1e-9)
 	require.Len(t, q.inserted, 1)
 }
 
@@ -380,6 +392,7 @@ func TestRunRebalancerTriesCombinedRoutes(t *testing.T) {
 	}
 	ln := &fakeLN{invoice: &lnrpc.AddInvoiceResponse{RHash: []byte{0xaa}, PaymentRequest: "lnbc1"}}
 	e := newEngine()
+	e.draw = func() float64 { return 0 } // the combined route's chance is below sureRouteProb
 	rb := &db.GuiRebalancer{ID: 1, Value: 100000, LastHopPubkey: "02aabbccddeeff", Duration: 1, FeeLimit: 1000}
 	e.runRebalancer(context.Background(), ln, &fakeRebalRouter{}, q, rb, "Worker0", fixedNow())
 

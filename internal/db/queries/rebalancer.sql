@@ -34,9 +34,11 @@ WHERE NOT EXISTS (
 );
 
 -- name: DeleteStaleTestedRoutes :exec
--- getestete Routen ohne kuerzlichen Erfolg loeschen; ungetestete (probed) behalten.
+-- Tested routes whose latest evidence (payment, failure or prober verification)
+-- is older than the cutoff. A route that failed part way stays until then: the
+-- part before the failing node is material for combined routes.
 DELETE FROM gui_rebalanceroute
-WHERE (last_success < $1 OR last_success IS NULL)
+WHERE GREATEST(last_success, last_failure, last_probed) < sqlc.arg(cutoff)::timestamptz
   AND NOT (success_count = 0 AND failure_count = 0);
 
 -- name: DeleteStaleNodeReputations :exec
@@ -181,8 +183,17 @@ ORDER BY id;
 -- name: InsertRouteAttempt :exec
 INSERT INTO route_attempt_log
     (timestamp, rebalance_id, route_id, target_pubkey, outgoing_chan_id, list, position,
-     evidence_age_s, fee_ppm, value_sat, outcome, failure_code, failure_hop, route)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
+     evidence_age_s, fee_ppm, value_sat, outcome, failure_code, failure_hop, route, duration_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15);
+
+-- name: ListSentRouteAttempts :many
+-- Attempts that went out since $1 with their path: the evidence for the
+-- success chance and the speed of each node pair.
+SELECT "timestamp", route, outcome, failure_hop, duration_ms
+FROM route_attempt_log
+WHERE "timestamp" >= $1 AND route IS NOT NULL
+  AND outcome IN ('success', 'success_smaller', 'failed', 'timeout')
+ORDER BY "timestamp";
 
 -- name: ListCombinableRoutes :many
 -- Saved routes with a stored route, the material the rebalancer combines new

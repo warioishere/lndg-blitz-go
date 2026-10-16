@@ -20,11 +20,19 @@ import (
 	"github.com/warioishere/lndg-blitz-go/internal/pyround"
 )
 
-// RapidFire constants.
-const (
-	rapidFireInc = 1.21
-	rapidFireDec = 2.0
-)
+// RapidFire: after a paid rebalance the next one to the same target goes out
+// with the same amount (at most what the target still needs); after a failed
+// one with half the amount, down to AR-MinAmount sats.
+const rapidFireDec = 2.0
+
+// minAmount reads AR-MinAmount (default 2500 sats), the smallest RapidFire step.
+func minAmount(ctx context.Context, q settingsQuerier) int64 {
+	v, err := getLocalSettingInt(ctx, q, "AR-MinAmount", 2500)
+	if err != nil || v < 1 {
+		return 2500
+	}
+	return int64(v)
+}
 
 // rebalancerQuerier bundles all DB access required by runRebalancer.
 type rebalancerQuerier interface {
@@ -39,6 +47,7 @@ type rebalancerQuerier interface {
 	remainingDrainQuerier
 	updateChannelsQuerier
 	aliasQuerier
+	statsQuerier
 	ListActiveOpenPublicChannels(ctx context.Context) ([]db.GuiChannel, error)
 	InsertRebalancerRecord(ctx context.Context, arg db.InsertRebalancerRecordParams) (int64, error)
 	UpdateRebalancerRecord(ctx context.Context, arg db.UpdateRebalancerRecordParams) error
@@ -125,11 +134,32 @@ func (e *engine) runRebalancer(
 	rebalance.Start = tsNow(now)
 
 	var successfulOut, successfulIn *uint64
-	var lastPayment *lnrpc.Payment // last SendPaymentV2 result, used by estimateLiquidity
 
 	innerErr := func() error {
 		chanIDs := parseChanIDs(rebalance.OutgoingChanIds)
 		chanIDs = e.sortChannelsByHtlc(ctx, stub, chanIDs)
+		timeout := time.Duration(rebalance.Duration) * 60 * time.Second
+		send := readSendSettings(ctx, q, timeout)
+		if send.htlcSoftLimit > 0 {
+			free := chanIDs[:0:0]
+			for _, cid := range chanIDs {
+				id, _ := strconv.ParseUint(cid, 10, 64)
+				if n := e.htlcs.count(ctx, stub, id, now()); n >= send.htlcSoftLimit {
+					rebalLog(fmt.Sprintf("HTLC brake: source %s has %d pending HTLCs", e.alias.label(cid), n))
+					continue
+				}
+				free = append(free, cid)
+			}
+			chanIDs = free
+		}
+		if len(chanIDs) == 0 && !rebalance.Manual {
+			rebalLog("No outbound channel without the HTLC brake")
+			rebalance.Status = 406
+			rebalance.Start = tsNow(now)
+			rebalance.Stop = tsNow(now)
+			saveRecord(ctx, q, rebalance)
+			return nil
+		}
 
 		if err := e.alias.ensure(ctx, q); err != nil {
 			return err
@@ -181,34 +211,24 @@ func (e *engine) runRebalancer(
 			}
 		}
 
-		timeout := time.Duration(rebalance.Duration) * 60 * time.Second
-		invoiceResp, err := stub.AddInvoice(ctx, &lnrpc.Invoice{Value: int64(rebalance.Value), Expiry: int64(timeout / time.Second), CltvExpiry: FinalCltvDelta})
+		inv, err := newRebalInvoice(ctx, stub, int64(rebalance.Value), timeout)
 		if err != nil {
 			return err
 		}
-		rebalance.PaymentHash = textOf(hex.EncodeToString(invoiceResp.GetRHash()))
+		rebalance.PaymentHash = textOf(hex.EncodeToString(inv.resp.GetRHash()))
 		rebalLog(fmt.Sprintf("%s starting rebalance for %s %s for %d sats and duration %d, using %d outbound channels",
 			worker, rebalance.TargetAlias, rebalance.LastHopPubkey, rebalance.Value, rebalance.Duration, len(chanIDs)))
 
-		var savedRoutes []rankedRoute
-		useSaved := savedRoutesEnabled(ctx, q)
-		if useSaved {
-			purgeStaleRoutes(ctx, q, now())
-			routeLimit := getRouteLimit(ctx, q)
-			savedRoutes = getSavedRoutes(ctx, q, rebalance.LastHopPubkey, chanIDs, routeLimit, int64(rebalance.Value), now())
-			rebalLog(fmt.Sprintf("Loaded %d saved routes to try (%s)", len(savedRoutes), countLists(savedRoutes)))
-		} else {
-			rebalLog("Saved routes disabled")
-		}
-
+		e.stats.refresh(ctx, q, now())
 		feeLimitMsat := int64(rebalance.FeeLimit * 1000)
 		savedSucceeded := false
 		triedSavedSources := make(map[string]struct{})
 
-		// Try order: proven and explore routes, then routes combined from saved
-		// ones, then routes whose latest attempt failed.
-		var combined []rankedRoute
-		if useSaved {
+		// One pool of saved and combined routes, tried by success chance.
+		var tryOrder []rankedRoute
+		if savedRoutesEnabled(ctx, q) {
+			purgeStaleRoutes(ctx, q, now())
+			pool := getSavedRoutes(ctx, q, rebalance.LastHopPubkey, chanIDs, int64(rebalance.Value), now())
 			feeLimitPpm := int(float64(feeLimitMsat) / float64(rebalance.Value) * 1000)
 			budget := func(chanID string) int {
 				if !oppCostEnabled || rebalance.Manual {
@@ -216,36 +236,22 @@ func (e *engine) runRebalancer(
 				}
 				return min(int(float64(targetFeeRate)*(float64(arMaxCost)/100))-lookupSourceFee(sourceFeeMap, chanID), maxFeeRate, feeLimitPpm)
 			}
-			e.combos.refresh(ctx, q, now())
-			combined = e.combos.candidates(rebalance.LastHopPubkey, chanIDs, budget, combinedLimit)
-			if len(combined) > 0 {
-				rebalLog(fmt.Sprintf("Combined %d routes to try", len(combined)))
-			}
-		}
-		tryOrder := make([]rankedRoute, 0, len(savedRoutes)+len(combined))
-		failedFrom := len(savedRoutes)
-		for i, rr := range savedRoutes {
-			if rr.list == listFailed {
-				failedFrom = i
-				break
-			}
-		}
-		tryOrder = append(tryOrder, savedRoutes[:failedFrom]...)
-		for _, rr := range combined {
-			rr.position = len(tryOrder) + 1
-			tryOrder = append(tryOrder, rr)
-		}
-		for _, rr := range savedRoutes[failedFrom:] {
-			rr.position = len(tryOrder) + 1
-			tryOrder = append(tryOrder, rr)
+			e.combos.refresh(ctx, q, e.stats.routeProb, now())
+			pool = append(pool, e.combos.candidates(rebalance.LastHopPubkey, chanIDs, budget)...)
+			var sel selection
+			tryOrder, sel = selectRoutes(pool, e.stats, e.draw, getRouteLimit(ctx, q)+combinedLimit, now())
+			rebalLog(fmt.Sprintf("Route pool %d: %d to try (%s); left out %d unlikely, %d slow, %d too small, %d not drawn",
+				len(pool), len(tryOrder), countLists(tryOrder), sel.weak, sel.slow, sel.small, sel.notDrawn))
+		} else {
+			rebalLog("Saved routes disabled")
 		}
 
 		for _, rr := range tryOrder {
 			value := int64(rebalance.Value)
-			res := e.trySavedRoute(ctx, stub, routerstub, q, rebalance, rr.row, invoiceResp, sourceFeeMap,
-				targetFeeRate, arMaxCost, maxFeeRate, oppCostEnabled, feeLimitMsat, timeout,
+			res := e.trySavedRoute(ctx, stub, routerstub, q, rebalance, rr.row, inv, sourceFeeMap,
+				targetFeeRate, arMaxCost, maxFeeRate, oppCostEnabled, feeLimitMsat, timeout, send,
 				&successfulOut, &successfulIn, triedSavedSources, &savedSucceeded, now)
-			logRouteAttempt(ctx, q, rebalance.ID, rr, value, res, now())
+			e.logRouteAttempt(ctx, q, rebalance.ID, rr, value, res, now())
 			if res.succeeded() {
 				break
 			}
@@ -292,7 +298,7 @@ func (e *engine) runRebalancer(
 			}
 			for _, sourceChan := range pruned {
 				res, err := e.trySingleSource(ctx, stub, routerstub, q, *rebalance, sourceChan, sourceFeeMap,
-					targetFeeRate, arMaxCost, maxFeeRate, invoiceResp, feeLimitMsat, timeout, now())
+					targetFeeRate, arMaxCost, maxFeeRate, inv, feeLimitMsat, timeout, send, now())
 				if err != nil {
 					return err
 				}
@@ -320,15 +326,13 @@ func (e *engine) runRebalancer(
 				rebalLog(fmt.Sprintf("Per-source iteration: no route succeeded for %s", rebalance.TargetAlias))
 			}
 		} else if !savedSucceeded {
-			if len(savedRoutes) > 0 {
+			if len(tryOrder) > 0 {
 				rebalLog("Falling back to automatic routing")
 			}
 			rebalLog(fmt.Sprintf("SendPaymentV2: Sending to LND with outgoing_chan_ids=%s", formatChanIDList(chanIDs)))
-			p, err := e.sendPaymentV2(ctx, routerstub, q, rebalance, chanIDs, invoiceResp, timeout, maxParts, &successfulOut, &successfulIn, now)
-			if err != nil {
+			if err := e.sendPaymentV2(ctx, routerstub, q, rebalance, chanIDs, inv, timeout, maxParts, &successfulOut, &successfulIn, now); err != nil {
 				return err
 			}
-			lastPayment = p
 		}
 		return nil
 	}()
@@ -359,7 +363,7 @@ func (e *engine) runRebalancer(
 			rebalLog(fmt.Sprintf("Error running rebalance attempt: %s", ferr))
 			return nil
 		}
-		annotated := annotateChannels(fresh, float64(rebalance.Value)*rapidFireInc, false)
+		annotated := annotateChannels(fresh, float64(rebalance.Value), false)
 		inboundLen := countInboundCans(annotated, rebalance.LastHopPubkey)
 		rfOut := e.getOutCans(annotated, rebalance.LastHopPubkey)
 		drain, derr := remainingDrain(ctx, q, rebalance.LastHopPubkey)
@@ -367,7 +371,7 @@ func (e *engine) runRebalancer(
 			rebalLog(fmt.Sprintf("Error running rebalance attempt: %s", derr))
 			return nil
 		}
-		proposed := int64(float64(rebalance.Value) * rapidFireInc)
+		proposed := int64(rebalance.Value)
 		var nextValue int64
 		if drain > 0 {
 			nextValue = proposed
@@ -383,24 +387,15 @@ func (e *engine) runRebalancer(
 			if nextValue < proposed {
 				capNote = fmt.Sprintf(" (capped to remaining drain %d)", drain)
 			}
-			rebalLog(fmt.Sprintf("RapidFire increase for %s from %d to %d%s", next.TargetAlias, rebalance.Value, next.Value, capNote))
+			rebalLog(fmt.Sprintf("RapidFire for %s again with %d (was %d)%s", next.TargetAlias, next.Value, rebalance.Value, capNote))
 			return next
 		}
 		if drain < 1000 {
 			rebalLog(fmt.Sprintf("RapidFire skipped for %s — channel already at/near ar_in_target (remaining drain %d sats)", originalAlias, drain))
 		}
 		return nil
-	} else if rebalance.Status > 2 && rebalance.Status != 406 && rebalance.Value > 69420 {
+	} else if nextValue := float64(rebalance.Value) / rapidFireDec; rebalance.Status > 2 && rebalance.Status != 406 && int64(nextValue) >= minAmount(ctx, q) {
 		// 406 (no usable source) does not depend on the amount, a smaller retry cannot help.
-		var nextValue float64
-		if rebalance.Duration > 1 {
-			nextValue = float64(estimateLiquidity(lastPayment))
-			if nextValue < 1000 {
-				return nil
-			}
-		} else {
-			nextValue = float64(rebalance.Value) / rapidFireDec
-		}
 		inboundLen := countInboundCans(initialAnnotated, rebalance.LastHopPubkey)
 		if inboundLen > 0 && len(outboundCans) > 0 {
 			next := e.insertNextRebalance(ctx, q, int32(nextValue),
@@ -467,28 +462,28 @@ func (e *engine) sendPaymentV2(
 	q rebalancerQuerier,
 	rebalance *db.GuiRebalancer,
 	chanIDs []string,
-	invoiceResp *lnrpc.AddInvoiceResponse,
+	inv *rebalInvoice,
 	timeout time.Duration,
 	maxParts uint32,
 	successfulOut, successfulIn **uint64,
 	now func() time.Time,
-) (*lnrpc.Payment, error) {
+) error {
 	lastHopBytes, err := hex.DecodeString(rebalance.LastHopPubkey)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	outChanIDs := make([]uint64, 0, len(chanIDs))
 	for _, c := range chanIDs {
 		v, perr := strconv.ParseUint(c, 10, 64)
 		if perr != nil {
-			return nil, perr
+			return perr
 		}
 		outChanIDs = append(outChanIDs, v)
 	}
 	sctx, scancel := context.WithTimeout(ctx, timeout+60*time.Second)
 	defer scancel()
 	stream, err := routerstub.SendPaymentV2(sctx, &routerrpc.SendPaymentRequest{
-		PaymentRequest:   invoiceResp.GetPaymentRequest(),
+		PaymentRequest:   inv.resp.GetPaymentRequest(),
 		FeeLimitMsat:     int64(rebalance.FeeLimit * 1000),
 		OutgoingChanIds:  outChanIDs,
 		LastHopPubkey:    lastHopBytes,
@@ -497,18 +492,19 @@ func (e *engine) sendPaymentV2(
 		MaxParts:         maxParts,
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var last *lnrpc.Payment
 	for {
 		pay, rerr := stream.Recv()
 		if rerr == io.EOF {
 			break
 		}
 		if rerr != nil {
-			return last, rerr
+			return rerr
 		}
-		last = pay
+		if s := pay.GetStatus(); s == lnrpc.Payment_SUCCEEDED || s == lnrpc.Payment_FAILED {
+			e.logPaymentAttempts(ctx, q, rebalance, pay, now())
+		}
 		switch pay.GetStatus() {
 		case lnrpc.Payment_IN_FLIGHT: // status == 1
 			if rebalance.Status == 0 {
@@ -571,5 +567,35 @@ func (e *engine) sendPaymentV2(
 			rebalance.Status = 400
 		}
 	}
-	return last, nil
+	return nil
+}
+
+// logPaymentAttempts records every HTLC attempt LND made for a finished
+// SendPaymentV2 payment (list auto) with its duration.
+func (e *engine) logPaymentAttempts(ctx context.Context, q attemptLogQuerier, rebalance *db.GuiRebalancer, pay *lnrpc.Payment, now time.Time) {
+	for i, h := range pay.GetHtlcs() {
+		hops := h.GetRoute().GetHops()
+		if len(hops) == 0 {
+			continue
+		}
+		res := savedRouteResult{code: -1, hop: -1, durationMs: -1}
+		switch h.GetStatus() {
+		case lnrpc.HTLCAttempt_SUCCEEDED:
+			res.outcome = "success"
+		case lnrpc.HTLCAttempt_FAILED:
+			res.outcome = "failed"
+			if f := h.GetFailure(); f != nil {
+				res.code, res.hop = int(f.GetCode()), int(f.GetFailureSourceIndex())
+			}
+		default:
+			continue
+		}
+		if h.GetResolveTimeNs() > h.GetAttemptTimeNs() && h.GetAttemptTimeNs() > 0 {
+			res.durationMs = int((h.GetResolveTimeNs() - h.GetAttemptTimeNs()) / 1e6)
+		}
+		rr := rankedRoute{list: listAuto, position: i + 1, row: db.GuiRebalanceroute{
+			TargetPubkey: rebalance.LastHopPubkey, OutgoingChanID: strconv.FormatUint(hops[0].GetChanId(), 10), Route: routePath(h.GetRoute()),
+		}}
+		e.logRouteAttempt(ctx, q, rebalance.ID, rr, int64(rebalance.Value), res, now)
+	}
 }

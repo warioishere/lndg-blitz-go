@@ -2,6 +2,7 @@ package rebalancer
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -44,6 +45,14 @@ func rankedIDs(rs []rankedRoute) []int64 {
 	return out
 }
 
+func candidateIDs(cs []routeCandidate) []int64 {
+	out := make([]int64, len(cs))
+	for i, c := range cs {
+		out[i] = c.ranked.row.ID
+	}
+	return out
+}
+
 var savedNow = time.Unix(1_700_000_000, 0)
 
 // paid is a route paid successfully h hours ago at fee ppm.
@@ -59,7 +68,7 @@ func probed(id int64, h float64, fee float64) db.GuiRebalanceroute {
 }
 
 func TestGetSavedRoutesEmpty(t *testing.T) {
-	got := getSavedRoutes(context.Background(), &fakeSavedQ{}, "tgt", []string{"1"}, 10, 50_000, savedNow)
+	got := getSavedRoutes(context.Background(), &fakeSavedQ{}, "tgt", []string{"1"}, 50_000, savedNow)
 	assert.Empty(t, got)
 }
 
@@ -86,86 +95,96 @@ func TestClassifyRoute(t *testing.T) {
 	}
 }
 
-func TestGetSavedRoutesInterleavesExplore(t *testing.T) {
-	failedRoute := db.GuiRebalanceroute{ID: 9, Route: "a-b", SuccessCount: 1, FailureCount: 1,
-		LastSuccess: ts(savedNow.Add(-5 * time.Hour)), LastFailure: ts(savedNow.Add(-time.Hour))}
-	q := &fakeSavedQ{routes: []db.GuiRebalanceroute{
-		failedRoute,
-		paid(1, 1, 100), paid(2, 1, 200), paid(3, 1, 300),
-		probed(4, 1, 100), probed(5, 1, 200), probed(6, 1, 300),
-	}}
-	got := getSavedRoutes(context.Background(), q, "tgt", []string{"1"}, 10, 50_000, savedNow)
-	// explore at positions 2 and 5; when proven runs out explore fills; failed last
-	assert.Equal(t, []int64{1, 4, 2, 3, 5, 6, 9}, rankedIDs(got))
-	for i, r := range got {
-		assert.Equal(t, i+1, r.position)
-	}
-	assert.Equal(t, listExplore, got[1].list)
-	assert.Equal(t, listFailed, got[6].list)
-	assert.Equal(t, savedNow.Add(-time.Hour), got[0].evidence)
-
-	// the limit cuts the order
-	got = getSavedRoutes(context.Background(), q, "tgt", []string{"1"}, 3, 50_000, savedNow)
-	assert.Equal(t, []int64{1, 4, 2}, rankedIDs(got))
-}
-
-func TestGetSavedRoutesOnlyExplore(t *testing.T) {
-	q := &fakeSavedQ{routes: []db.GuiRebalanceroute{probed(1, 1, 300), probed(2, 1, 100)}}
-	got := getSavedRoutes(context.Background(), q, "tgt", []string{"1"}, 10, 50_000, savedNow)
-	assert.Equal(t, []int64{2, 1}, rankedIDs(got))
-}
-
-func TestGetSavedRoutesProvenOrder(t *testing.T) {
+func TestGetSavedRoutesCandidates(t *testing.T) {
 	small := paid(1, 1, 50)
 	small.ProbedAmountSat = sats(20_000)
 	small.LastProbed = ts(savedNow.Add(-30 * time.Minute)) // probed after the payment: 20k counts
 	paidSinceProbe := paid(2, 1, 400)
 	paidSinceProbe.ProbedAmountSat = sats(20_000)
 	paidSinceProbe.LastProbed = ts(savedNow.Add(-2 * time.Hour)) // paid after the probe: carries
-	unknownFee := paid(3, 1, 0)
+	half := probed(3, 1, 100)
+	half.ProbedAmountSat = sats(25_000) // half the value still carries
+	unknownFee := paid(4, 1, 0)
 	unknownFee.LastFeePpm = pgtype.Float8{}
-	badHop := paid(4, 1, 100)
+	badHop := paid(5, 1, 100)
 	badHop.Route = "a-x"
-	goodHop := paid(5, 1, 100)
 	q := &fakeSavedQ{
-		routes: []db.GuiRebalanceroute{small, paidSinceProbe, unknownFee, badHop, goodHop},
+		routes: []db.GuiRebalanceroute{small, paidSinceProbe, half, unknownFee, badHop},
 		reps:   []db.ListNodeReputationsRow{{Pubkey: "x", SuccessCount: 0, FailureCount: 20}},
 	}
-	got := getSavedRoutes(context.Background(), q, "tgt", []string{"1"}, 10, 50_000, savedNow)
-	// carrying routes by fee (same fee: better node reputation first), unknown fee
-	// last among them, then the route whose probed amount is below 50k
-	assert.Equal(t, []int64{5, 4, 2, 3, 1}, rankedIDs(got))
+	got := getSavedRoutes(context.Background(), q, "tgt", []string{"1"}, 50_000, savedNow)
+	require.Equal(t, []int64{1, 2, 3, 4, 5}, candidateIDs(got))
+	assert.False(t, got[0].carries, "probed 20k for a 50k rebalance")
+	assert.True(t, got[1].carries)
+	assert.True(t, got[2].carries)
+	assert.Equal(t, listExplore, got[2].ranked.list)
+	assert.True(t, math.IsInf(got[3].fee, 1))
+	assert.Less(t, got[4].rep, got[3].rep, "a node with failures lowers the route")
+	assert.Equal(t, savedNow.Add(-time.Hour), got[1].ranked.evidence)
 }
 
-func TestGetSavedRoutesExploreOrder(t *testing.T) {
-	stale := probed(1, 5, 10) // cheapest, but verified 5h ago
-	small := probed(2, 1, 50)
-	small.ProbedAmountSat = sats(20_000)
-	fresh := probed(3, 1, 200)
-	zeroFee := probed(4, 1, 0)
-	q := &fakeSavedQ{routes: []db.GuiRebalanceroute{stale, small, fresh, zeroFee}}
-	got := getSavedRoutes(context.Background(), q, "tgt", []string{"1"}, 10, 50_000, savedNow)
-	// fresh first, then carrying, then by fee
-	assert.Equal(t, []int64{4, 3, 2, 1}, rankedIDs(got))
+// candidate is a pool entry over path with fee ppm.
+func candidate(id int64, path string, fee float64) routeCandidate {
+	return routeCandidate{ranked: rankedRoute{row: db.GuiRebalanceroute{ID: id, Route: path}, list: listProven},
+		carries: true, fee: fee, rep: 1}
 }
 
-func TestGetSavedRoutesFailedOrder(t *testing.T) {
-	fail := func(id int64, s, f int32) db.GuiRebalanceroute {
-		return db.GuiRebalanceroute{ID: id, Route: "a-b", SuccessCount: s, FailureCount: f,
-			LastFailure: ts(savedNow.Add(-time.Hour)), LastFeePpm: ppm(100)}
+func TestSelectRoutes(t *testing.T) {
+	st := newRouteStats()
+	for i := 0; i < 9; i++ { // a-b works, b-c fails, c-me fine
+		st.observe("a-b-me", "success", -1, -1, savedNow)
+		st.observe("x-b-c-me", "failed", 2, -1, savedNow)
 	}
-	q := &fakeSavedQ{routes: []db.GuiRebalanceroute{fail(1, 1, 9), fail(2, 3, 1), fail(3, 0, 1)}}
-	got := getSavedRoutes(context.Background(), q, "tgt", []string{"1"}, 10, 50_000, savedNow)
-	assert.Equal(t, []int64{2, 1, 3}, rankedIDs(got))
+	always := func() float64 { return 0 }
+	never := func() float64 { return 0.999 }
+	pool := []routeCandidate{
+		candidate(1, "a-b-me", 300),
+		candidate(2, "a-b-me", 100),    // same chance, cheaper first
+		candidate(3, "b-c-me", 50),     // weak: b-c failed 9 times
+		candidate(4, "q-r-s-t-me", 10), // unknown pairs: the average
+	}
+	small := candidate(5, "a-b-me", 1)
+	small.carries = false
+	pool = append(pool, small)
+
+	got, sel := selectRoutes(pool, st, always, 10, savedNow)
+	assert.Equal(t, []int64{2, 1, 4, 3}, rankedIDs(got), "by chance, then fee")
+	for i, r := range got {
+		assert.Equal(t, i+1, r.position)
+	}
+	assert.Equal(t, 1, sel.small)
+
+	// a draw above prob/sureRouteProb leaves weaker routes out, sure ones stay
+	got, sel = selectRoutes(pool, st, never, 10, savedNow)
+	assert.Equal(t, []int64{2, 1}, rankedIDs(got))
+	assert.Equal(t, 2, sel.notDrawn)
+
+	// the limit cuts the order
+	got, _ = selectRoutes(pool, st, always, 1, savedNow)
+	assert.Equal(t, []int64{2}, rankedIDs(got))
+}
+
+func TestSelectRoutesDropsUnlikelyAndSlow(t *testing.T) {
+	st := newRouteStats()
+	for i := 0; i < 2000; i++ {
+		st.observe("a-b-me", "failed", 1, -1, savedNow)
+	}
+	st.banned[pathEdge{"s", "t"}] = savedNow.Add(time.Hour)
+	got, sel := selectRoutes([]routeCandidate{candidate(1, "a-b-me", 1), candidate(2, "s-t-me", 1)}, st,
+		func() float64 { return 0 }, 10, savedNow)
+	assert.Empty(t, got)
+	assert.Equal(t, 1, sel.weak)
+	assert.Equal(t, 1, sel.slow)
 }
 
 func TestLogRouteAttempt(t *testing.T) {
 	q := &fakeSavedQ{}
+	e := newEngine()
 	rr := rankedRoute{row: db.GuiRebalanceroute{ID: 7, TargetPubkey: "tgt", OutgoingChanID: "111", LastFeePpm: ppm(250), Route: "aa-bb-self"},
 		list: listExplore, position: 2, evidence: savedNow.Add(-90 * time.Second)}
-	logRouteAttempt(context.Background(), q, 42, rr, 50_000, savedRouteResult{outcome: "failed", code: 15, hop: 2}, savedNow)
-	logRouteAttempt(context.Background(), q, 42, rankedRoute{row: db.GuiRebalanceroute{ID: 8}, list: listProven, position: 1},
-		50_000, savedRouteResult{outcome: "success", code: -1, hop: -1}, savedNow)
+	e.logRouteAttempt(context.Background(), q, 42, rr, 50_000, savedRouteResult{outcome: "failed", code: 15, hop: 2, durationMs: 1200}, savedNow)
+	e.logRouteAttempt(context.Background(), q, 42, rankedRoute{row: db.GuiRebalanceroute{ID: 8}, list: listProven, position: 1},
+		50_000, notSent("skip_cost"), savedNow)
 	require.Len(t, q.attempts, 2)
 	a := q.attempts[0]
 	assert.Equal(t, int64(42), a.RebalanceID)
@@ -179,18 +198,26 @@ func TestLogRouteAttempt(t *testing.T) {
 	assert.Equal(t, int32(15), a.FailureCode.Int32)
 	assert.Equal(t, int32(2), a.FailureHop.Int32)
 	assert.Equal(t, pgtype.Text{String: "aa-bb-self", Valid: true}, a.Route)
+	assert.Equal(t, pgtype.Int4{Int32: 1200, Valid: true}, a.DurationMs)
 	b := q.attempts[1]
 	assert.Equal(t, pgtype.Int8{Int64: 8, Valid: true}, b.RouteID)
 	assert.False(t, b.EvidenceAgeS.Valid)
 	assert.False(t, b.FailureCode.Valid)
-	assert.Equal(t, "success", b.Outcome)
+	assert.False(t, b.DurationMs.Valid, "not sent")
+	assert.Equal(t, "skip_cost", b.Outcome)
 	assert.False(t, b.Route.Valid, "no path known")
+
+	// the sent attempt counts in the statistics at once: aa-bb crossed, bb-self failed
+	st := e.stats
+	assert.Equal(t, 1.0, st.pairs[pathEdge{"aa", "bb"}].ok)
+	assert.Equal(t, 1.0, st.pairs[pathEdge{"bb", "self"}].n)
+	assert.Zero(t, st.pairs[pathEdge{"bb", "self"}].ok)
 }
 
 func TestLogRouteAttemptCombinedHasNoRouteID(t *testing.T) {
 	q := &fakeSavedQ{}
-	logRouteAttempt(context.Background(), q, 1, rankedRoute{row: db.GuiRebalanceroute{TargetPubkey: "tgt", Route: "aa-xx-bb-self"}, list: listCombined, position: 3},
-		50_000, savedRouteResult{outcome: "skip_cost", code: -1, hop: -1}, savedNow)
+	newEngine().logRouteAttempt(context.Background(), q, 1, rankedRoute{row: db.GuiRebalanceroute{TargetPubkey: "tgt", Route: "aa-xx-bb-self"}, list: listCombined, position: 3},
+		50_000, notSent("skip_cost"), savedNow)
 	require.Len(t, q.attempts, 1)
 	assert.False(t, q.attempts[0].RouteID.Valid)
 	assert.Equal(t, "combined", q.attempts[0].List)

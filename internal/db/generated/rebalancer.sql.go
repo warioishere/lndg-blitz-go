@@ -126,13 +126,15 @@ func (q *Queries) DeleteStaleNodeReputations(ctx context.Context, lastSuccess pg
 
 const deleteStaleTestedRoutes = `-- name: DeleteStaleTestedRoutes :exec
 DELETE FROM gui_rebalanceroute
-WHERE (last_success < $1 OR last_success IS NULL)
+WHERE GREATEST(last_success, last_failure, last_probed) < $1::timestamptz
   AND NOT (success_count = 0 AND failure_count = 0)
 `
 
-// getestete Routen ohne kuerzlichen Erfolg loeschen; ungetestete (probed) behalten.
-func (q *Queries) DeleteStaleTestedRoutes(ctx context.Context, lastSuccess pgtype.Timestamptz) error {
-	_, err := q.db.Exec(ctx, deleteStaleTestedRoutes, lastSuccess)
+// Tested routes whose latest evidence (payment, failure or prober verification)
+// is older than the cutoff. A route that failed part way stays until then: the
+// part before the failing node is material for combined routes.
+func (q *Queries) DeleteStaleTestedRoutes(ctx context.Context, cutoff pgtype.Timestamptz) error {
+	_, err := q.db.Exec(ctx, deleteStaleTestedRoutes, cutoff)
 	return err
 }
 
@@ -333,8 +335,8 @@ func (q *Queries) InsertRebalancerRecord(ctx context.Context, arg InsertRebalanc
 const insertRouteAttempt = `-- name: InsertRouteAttempt :exec
 INSERT INTO route_attempt_log
     (timestamp, rebalance_id, route_id, target_pubkey, outgoing_chan_id, list, position,
-     evidence_age_s, fee_ppm, value_sat, outcome, failure_code, failure_hop, route)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     evidence_age_s, fee_ppm, value_sat, outcome, failure_code, failure_hop, route, duration_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 `
 
 type InsertRouteAttemptParams struct {
@@ -352,6 +354,7 @@ type InsertRouteAttemptParams struct {
 	FailureCode    pgtype.Int4        `json:"failure_code"`
 	FailureHop     pgtype.Int4        `json:"failure_hop"`
 	Route          pgtype.Text        `json:"route"`
+	DurationMs     pgtype.Int4        `json:"duration_ms"`
 }
 
 func (q *Queries) InsertRouteAttempt(ctx context.Context, arg InsertRouteAttemptParams) error {
@@ -370,6 +373,7 @@ func (q *Queries) InsertRouteAttempt(ctx context.Context, arg InsertRouteAttempt
 		arg.FailureCode,
 		arg.FailureHop,
 		arg.Route,
+		arg.DurationMs,
 	)
 	return err
 }
@@ -834,6 +838,50 @@ func (q *Queries) ListRoutesForTarget(ctx context.Context, arg ListRoutesForTarg
 			&i.LastProbed,
 			&i.ProbedAmountSat,
 			&i.LastFailureHop,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSentRouteAttempts = `-- name: ListSentRouteAttempts :many
+SELECT "timestamp", route, outcome, failure_hop, duration_ms
+FROM route_attempt_log
+WHERE "timestamp" >= $1 AND route IS NOT NULL
+  AND outcome IN ('success', 'success_smaller', 'failed', 'timeout')
+ORDER BY "timestamp"
+`
+
+type ListSentRouteAttemptsRow struct {
+	Timestamp  pgtype.Timestamptz `json:"timestamp"`
+	Route      pgtype.Text        `json:"route"`
+	Outcome    string             `json:"outcome"`
+	FailureHop pgtype.Int4        `json:"failure_hop"`
+	DurationMs pgtype.Int4        `json:"duration_ms"`
+}
+
+// Attempts that went out since $1 with their path: the evidence for the
+// success chance and the speed of each node pair.
+func (q *Queries) ListSentRouteAttempts(ctx context.Context, timestamp pgtype.Timestamptz) ([]ListSentRouteAttemptsRow, error) {
+	rows, err := q.db.Query(ctx, listSentRouteAttempts, timestamp)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSentRouteAttemptsRow{}
+	for rows.Next() {
+		var i ListSentRouteAttemptsRow
+		if err := rows.Scan(
+			&i.Timestamp,
+			&i.Route,
+			&i.Outcome,
+			&i.FailureHop,
+			&i.DurationMs,
 		); err != nil {
 			return nil, err
 		}

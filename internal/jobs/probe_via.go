@@ -45,8 +45,9 @@ func probeFeeLimitSat(target db.GuiChannel, targetBudgetPpm, sourceFeeRate, maxF
 // QueryRoutes (target ignored, so it appears only as the second-to-last hop).
 // Sources come from probeSources over channels (the rebalancer's channel set),
 // cheapest fee first, up to maxPerTarget of them that have a route to via;
-// probing stops at the first verified route. Nothing is stored.
-func ProbeVia(ctx context.Context, stub ProbeLightningClient, routerstub ProbeRouterClient, selfPubkey string, target db.GuiChannel, targetBudgetPpm int, viaPubkey string, channels []db.GuiChannel, maxFeeRate, maxPerTarget int) ([]ViaAttempt, error) {
+// probing stops at the first verified route. No route is stored; each probe
+// HTLC goes to route_attempt_log through log (nil: not recorded).
+func ProbeVia(ctx context.Context, stub ProbeLightningClient, routerstub ProbeRouterClient, selfPubkey string, target db.GuiChannel, targetBudgetPpm int, viaPubkey string, channels []db.GuiChannel, maxFeeRate, maxPerTarget int, log rebalancer.AttemptLogQuerier) ([]ViaAttempt, error) {
 	selfKey, err := hex.DecodeString(selfPubkey)
 	if err != nil {
 		return nil, err
@@ -88,7 +89,8 @@ func ProbeVia(ctx context.Context, stub ProbeLightningClient, routerstub ProbeRo
 		hopKeys = append(hopKeys, targetKey, selfKey)
 
 		a := ViaAttempt{SourceChanID: src.chanID, SourceFeeRate: src.feeRate, HopKeys: hopKeys}
-		routeHex, amount, feePpm := probeWithBinarySearch(ctx, routerstub, src.chanID, hopKeys, rebalancer.FinalCltvDelta, target.ArAmtTarget, src.feeLimitSat)
+		routeHex, amount, feePpm := probeWithBinarySearch(ctx, routerstub, src.chanID, hopKeys, rebalancer.FinalCltvDelta, target.ArAmtTarget, src.feeLimitSat,
+			attemptRecorder(ctx, log, target.RemotePubkey, src.chanID))
 		if routeHex != nil && amount > 0 {
 			a.Verified, a.AmountSat, a.FeePpm = true, amount, feePpm
 		}

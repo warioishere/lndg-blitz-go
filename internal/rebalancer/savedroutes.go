@@ -13,28 +13,32 @@ import (
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 )
 
-// Saved routes are tried in an order built from each route's latest evidence:
-// a payment over it, a failure, or a verification by the route prober. Three
-// lists:
+// Saved routes and the routes combined from them (combine.go) form one pool
+// per rebalance. Each route gets its success chance from the route statistics
+// (stats.go). A route below minRouteProb, over a slow node pair, or whose
+// prober-verified amount is below half the rebalance value (and that was not
+// paid since) is left out. A route at sureRouteProb or more is always tried, a
+// weaker one with the chance prob / sureRouteProb, so it is tried less often
+// but not never. The chosen routes go by falling chance, then fee, then node
+// reputation. Routes LND finds per source come after them.
 //
-//	proven  - paid successfully within provenWindow, no failure since
-//	explore - verified by the prober (or paid longer ago), no failure since
-//	failed  - the latest evidence is a failure older than failCooldown
+// list records where a route came from:
 //
-// proven and explore alternate (explore at positions 2, 5, 8, ...), so a
-// rebalance also tries routes that were never paid; failed routes come last.
-// Routes combined from parts of saved routes (list combined, see combine.go)
-// go between explore and failed. Routes LND finds per source come after the
-// saved ones; their attempts are logged as list query.
+//	proven   - paid successfully within provenWindow, no failure since
+//	explore  - verified by the prober (or paid longer ago), no failure since
+//	failed   - the latest evidence is a failure older than failCooldown
+//	combined - built from parts of saved routes
+//	query    - found by QueryRoutes
+//	auto     - an HTLC attempt LND made for SendPaymentV2 (only logged)
 const (
 	listProven   = "proven"
 	listExplore  = "explore"
 	listFailed   = "failed"
 	listCombined = "combined"
 	listQuery    = "query"
+	listAuto     = "auto"
 
 	provenWindow = 48 * time.Hour
-	freshProbe   = 2 * time.Hour // one route prober interval
 	failCooldown = 30 * time.Minute
 )
 
@@ -84,21 +88,18 @@ func classifyRoute(r db.GuiRebalanceroute, now time.Time) (string, time.Time) {
 	}
 }
 
-// routeCandidate holds the sort keys of a route within its list.
+// routeCandidate is a route of the pool with its sort keys.
 type routeCandidate struct {
 	ranked  rankedRoute
-	fresh   bool    // latest evidence within freshProbe
-	carries bool    // no prober amount below the rebalance value, or paid since the probe
-	fee     float64 // last_fee_ppm; +Inf when unknown
+	carries bool    // no prober amount below half the rebalance value, or paid since the probe
+	fee     float64 // last_fee_ppm (estimate for a combined route); +Inf when unknown
 	rep     float64 // lowest node reputation on the route
-	ratio   float64 // success / attempts
 }
 
-// getSavedRoutes returns up to limit saved routes of a target in the order to
-// try them (see the list rules above). value is the rebalance amount in sats:
-// a route whose prober-verified amount is below it, and that was not paid since,
-// goes behind the others of its list. On error it logs and returns nil.
-func getSavedRoutes(ctx context.Context, q savedRoutesQuerier, pubkey string, chanIDs []string, limit int, value int64, now time.Time) []rankedRoute {
+// getSavedRoutes returns the saved routes of a target over the given sources
+// as candidates for selectRoutes. value is the rebalance amount in sats. On
+// error it logs and returns nil.
+func getSavedRoutes(ctx context.Context, q savedRoutesQuerier, pubkey string, chanIDs []string, value int64, now time.Time) []routeCandidate {
 	rows, err := q.ListRoutesForTarget(ctx, db.ListRoutesForTargetParams{
 		TargetPubkey: pubkey, ChanIds: chanIDs, Cutoff: pgtype.Timestamptz{Time: now.Add(-failCooldown), Valid: true},
 	})
@@ -107,7 +108,7 @@ func getSavedRoutes(ctx context.Context, q savedRoutesQuerier, pubkey string, ch
 		return nil
 	}
 	if len(rows) == 0 {
-		return []rankedRoute{}
+		return nil
 	}
 
 	pubkeySet := map[string]struct{}{}
@@ -130,13 +131,12 @@ func getSavedRoutes(ctx context.Context, q savedRoutesQuerier, pubkey string, ch
 		repMap[nr.Pubkey] = calcWeightedRatio(int(nr.SuccessCount), int(nr.FailureCount), 10)
 	}
 
-	var proven, explore, failed []routeCandidate
+	out := make([]routeCandidate, 0, len(rows))
 	for _, r := range rows {
 		list, evidence := classifyRoute(r, now)
 		c := routeCandidate{
 			ranked:  rankedRoute{row: r, list: list, evidence: evidence},
-			fresh:   !evidence.IsZero() && now.Sub(evidence) <= freshProbe,
-			carries: !r.ProbedAmountSat.Valid || r.ProbedAmountSat.Int64 >= value || tsTime(r.LastSuccess).After(tsTime(r.LastProbed)),
+			carries: !r.ProbedAmountSat.Valid || 2*r.ProbedAmountSat.Int64 >= value || tsTime(r.LastSuccess).After(tsTime(r.LastProbed)),
 			fee:     math.Inf(1),
 			rep:     1,
 		}
@@ -150,76 +150,68 @@ func getSavedRoutes(ctx context.Context, q savedRoutesQuerier, pubkey string, ch
 			}
 			c.rep = math.Min(c.rep, s)
 		}
-		if n := r.SuccessCount + r.FailureCount; n > 0 {
-			c.ratio = float64(r.SuccessCount) / float64(n)
-		}
-		switch list {
-		case listProven:
-			proven = append(proven, c)
-		case listExplore:
-			explore = append(explore, c)
-		default:
-			failed = append(failed, c)
-		}
+		out = append(out, c)
 	}
+	return out
+}
 
-	byFee := func(a, b routeCandidate) bool {
-		if a.fee != b.fee {
-			return a.fee < b.fee
-		}
-		if a.rep != b.rep {
-			return a.rep > b.rep
-		}
-		return a.ranked.row.ID < b.ranked.row.ID
-	}
-	sort.SliceStable(proven, func(i, j int) bool {
-		a, b := proven[i], proven[j]
-		if a.carries != b.carries {
-			return a.carries
-		}
-		return byFee(a, b)
-	})
-	sort.SliceStable(explore, func(i, j int) bool {
-		a, b := explore[i], explore[j]
-		if a.fresh != b.fresh {
-			return a.fresh
-		}
-		if a.carries != b.carries {
-			return a.carries
-		}
-		return byFee(a, b)
-	})
-	sort.SliceStable(failed, func(i, j int) bool {
-		a, b := failed[i], failed[j]
-		if a.ratio != b.ratio {
-			return a.ratio > b.ratio
-		}
-		return byFee(a, b)
-	})
+// selection counts what selectRoutes left out.
+type selection struct {
+	weak, slow, small, notDrawn int
+}
 
-	out := make([]rankedRoute, 0, min(limit, len(rows)))
-	add := func(c routeCandidate) {
-		c.ranked.position = len(out) + 1
-		out = append(out, c.ranked)
+// selectRoutes picks up to limit routes of the pool to try, in the order to
+// try them (see the rules above). draw returns a random number in [0, 1).
+func selectRoutes(pool []routeCandidate, st *routeStats, draw func() float64, limit int, now time.Time) ([]rankedRoute, selection) {
+	type scored struct {
+		c    routeCandidate
+		prob float64
 	}
-	pi, ei := 0, 0
-	for len(out) < limit && (pi < len(proven) || ei < len(explore)) {
-		takeExplore := (len(out)+1)%3 == 2
-		if (takeExplore && ei < len(explore)) || pi >= len(proven) {
-			add(explore[ei])
-			ei++
-		} else {
-			add(proven[pi])
-			pi++
+	var sel selection
+	var picked []scored
+	for _, c := range pool {
+		if !c.carries {
+			sel.small++
+			continue
 		}
+		if _, slow := st.bannedPair(c.ranked.row.Route, now); slow {
+			sel.slow++
+			continue
+		}
+		prob := st.routeProb(c.ranked.row.Route)
+		if prob < minRouteProb {
+			sel.weak++
+			continue
+		}
+		if prob < sureRouteProb && draw() >= prob/sureRouteProb {
+			sel.notDrawn++
+			continue
+		}
+		picked = append(picked, scored{c, prob})
 	}
-	for _, c := range failed {
+	sort.SliceStable(picked, func(i, j int) bool {
+		a, b := picked[i], picked[j]
+		if a.prob != b.prob {
+			return a.prob > b.prob
+		}
+		if a.c.fee != b.c.fee {
+			return a.c.fee < b.c.fee
+		}
+		if a.c.rep != b.c.rep {
+			return a.c.rep > b.c.rep
+		}
+		return a.c.ranked.row.ID < b.c.ranked.row.ID
+	})
+	out := make([]rankedRoute, 0, min(limit, len(picked)))
+	for _, s := range picked {
 		if len(out) >= limit {
 			break
 		}
-		add(c)
+		r := s.c.ranked
+		r.position = len(out) + 1
+		out = append(out, r)
 	}
-	return out
+	return out, sel
 }
 
 // countLists summarizes how many routes of each list a try order holds.
@@ -228,32 +220,76 @@ func countLists(rs []rankedRoute) string {
 	for _, r := range rs {
 		n[r.list]++
 	}
-	return fmt.Sprintf("%d proven, %d explore, %d failed", n[listProven], n[listExplore], n[listFailed])
+	return fmt.Sprintf("%d proven, %d explore, %d failed, %d combined", n[listProven], n[listExplore], n[listFailed], n[listCombined])
 }
 
 type attemptLogQuerier interface {
 	InsertRouteAttempt(ctx context.Context, arg db.InsertRouteAttemptParams) error
 }
 
-// logRouteAttempt writes one route attempt to route_attempt_log with the
-// route's path (rr.row.Route); a failed write is logged and never stops the
-// rebalance.
-func logRouteAttempt(ctx context.Context, q attemptLogQuerier, rebalanceID int64, rr rankedRoute, value int64, res savedRouteResult, now time.Time) {
+// AttemptLogQuerier is the DB access RecordAttempt needs.
+type AttemptLogQuerier = attemptLogQuerier
+
+// RouteAttempt is one route attempt for route_attempt_log. RebalanceID is 0
+// for an attempt outside a rebalance (route prober); Code and Hop are the
+// failure code and failure source index (-1: none), DurationMs the time until
+// the result (-1: not sent).
+type RouteAttempt struct {
+	RebalanceID, RouteID int64
+	Target, OutChan      string
+	List                 string
+	Position             int
+	EvidenceAge          time.Duration // 0: none
+	FeePpm               pgtype.Float8
+	ValueSat             int64
+	Outcome              string
+	Code, Hop            int
+	Path                 string
+	DurationMs           int
+}
+
+// RecordAttempt writes one attempt to route_attempt_log, the evidence of the
+// route statistics; a failed write is logged and never stops the caller.
+func RecordAttempt(ctx context.Context, q AttemptLogQuerier, a RouteAttempt, now time.Time) {
 	p := db.InsertRouteAttemptParams{
-		Timestamp: pgtype.Timestamptz{Time: now, Valid: true}, RebalanceID: rebalanceID,
-		RouteID:      pgtype.Int8{Int64: rr.row.ID, Valid: rr.row.ID != 0},
-		TargetPubkey: rr.row.TargetPubkey, OutgoingChanID: rr.row.OutgoingChanID, List: rr.list,
-		Position: int32(rr.position), FeePpm: rr.row.LastFeePpm, ValueSat: value, Outcome: res.outcome,
-		Route: pgtype.Text{String: rr.row.Route, Valid: rr.row.Route != ""},
+		Timestamp: pgtype.Timestamptz{Time: now, Valid: true}, RebalanceID: a.RebalanceID,
+		RouteID:      pgtype.Int8{Int64: a.RouteID, Valid: a.RouteID != 0},
+		TargetPubkey: a.Target, OutgoingChanID: a.OutChan, List: a.List,
+		Position: int32(a.Position), FeePpm: a.FeePpm, ValueSat: a.ValueSat, Outcome: a.Outcome,
+		Route: pgtype.Text{String: a.Path, Valid: a.Path != ""},
 	}
-	if !rr.evidence.IsZero() {
-		p.EvidenceAgeS = pgtype.Float8{Float64: now.Sub(rr.evidence).Seconds(), Valid: true}
+	if a.EvidenceAge > 0 {
+		p.EvidenceAgeS = pgtype.Float8{Float64: a.EvidenceAge.Seconds(), Valid: true}
 	}
-	if res.code >= 0 {
-		p.FailureCode = pgtype.Int4{Int32: int32(res.code), Valid: true}
-		p.FailureHop = pgtype.Int4{Int32: int32(res.hop), Valid: true}
+	if a.Code >= 0 {
+		p.FailureCode = pgtype.Int4{Int32: int32(a.Code), Valid: true}
+		p.FailureHop = pgtype.Int4{Int32: int32(a.Hop), Valid: true}
+	}
+	if a.DurationMs >= 0 {
+		p.DurationMs = pgtype.Int4{Int32: int32(a.DurationMs), Valid: true}
 	}
 	if err := q.InsertRouteAttempt(ctx, p); err != nil {
 		rebalLog(fmt.Sprintf("Error writing route attempt log: %s", err))
+	}
+}
+
+// logRouteAttempt records an attempt of a saved, combined or QueryRoutes route
+// and adds a sent one to the route statistics at once.
+func (e *engine) logRouteAttempt(ctx context.Context, q attemptLogQuerier, rebalanceID int64, rr rankedRoute, value int64, res savedRouteResult, now time.Time) {
+	a := RouteAttempt{
+		RebalanceID: rebalanceID, RouteID: rr.row.ID, Target: rr.row.TargetPubkey, OutChan: rr.row.OutgoingChanID,
+		List: rr.list, Position: rr.position, FeePpm: rr.row.LastFeePpm, ValueSat: value, Outcome: res.outcome,
+		Code: res.code, Hop: res.hop, Path: rr.row.Route, DurationMs: res.durationMs,
+	}
+	if !rr.evidence.IsZero() {
+		a.EvidenceAge = now.Sub(rr.evidence)
+	}
+	RecordAttempt(ctx, q, a, now)
+	if res.durationMs >= 0 && rr.row.Route != "" {
+		hop := -1
+		if res.code >= 0 {
+			hop = res.hop
+		}
+		e.stats.observe(rr.row.Route, res.outcome, hop, res.durationMs, now)
 	}
 }

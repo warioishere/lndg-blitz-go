@@ -261,29 +261,7 @@ func parseChanIDs(s string) []string {
 	return out
 }
 
-// --- estimate_liquidity / _remaining_drain / update_channels -------------
-
-// estimateLiquidity returns the largest total_amt of a failed attempt whose
-// failure originated from the last hop, as a liquidity estimate in satoshis.
-func estimateLiquidity(payment *lnrpc.Payment) int64 {
-	if payment == nil {
-		return 0
-	}
-	var est int64
-	if payment.GetStatus() == lnrpc.Payment_FAILED { // status == 3
-		for _, attempt := range payment.GetHtlcs() {
-			totalHops := len(attempt.GetRoute().GetHops())
-			if int(attempt.GetFailure().GetFailureSourceIndex()) == totalHops {
-				if ta := attempt.GetRoute().GetTotalAmt(); ta > est {
-					est = ta
-				}
-			}
-		}
-	}
-	rebalLog(fmt.Sprintf("Estimated Liquidity %d for payment %s with status %d and reason %d",
-		est, payment.GetPaymentHash(), int(payment.GetStatus()), int(payment.GetFailureReason())))
-	return est
-}
+// --- _remaining_drain / update_channels -----------------------------------
 
 // remainingDrainQuerier is the DB subset required by remainingDrain.
 type remainingDrainQuerier interface {

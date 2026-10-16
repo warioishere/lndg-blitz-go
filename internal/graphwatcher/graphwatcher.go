@@ -42,6 +42,9 @@ type Querier interface {
 	DeleteOldMarketPolicies(ctx context.Context, timestamp pgtype.Timestamptz) (int64, error)
 	InsertRebalancerRecord(ctx context.Context, arg db.InsertRebalancerRecordParams) (int64, error)
 	UpdateRebalancerRecord(ctx context.Context, arg db.UpdateRebalancerRecordParams) error
+	UpdateRebalanceRoute(ctx context.Context, arg db.UpdateRebalanceRouteParams) error
+	UpdateRebalanceRouteFee(ctx context.Context, arg db.UpdateRebalanceRouteFeeParams) error
+	MarkRebalanceRouteFailure(ctx context.Context, arg db.MarkRebalanceRouteFailureParams) error
 }
 
 // Client bundles the LND RPCs needed by graphwatcher (subset of LightningClient).
@@ -194,8 +197,9 @@ func (d Deps) probeGate(ctx context.Context, targetPubkey string, otherFeePpm in
 
 // triggerProbe probes refill routes of the target that run through the other
 // node's new channel (jobs.ProbeVia), buys over a verified route that costs
-// less than the buy price (buyVia), and logs both to GraphProbeLog. No route is
-// stored. Returns the number of verified routes.
+// less than the buy price (buyVia), and logs both to GraphProbeLog. A paid
+// purchase is stored as a paid route of the target. Returns the number of
+// verified routes.
 func (d Deps) triggerProbe(ctx context.Context, selfPubkey string, plan *probePlan, otherPubkey string, otherFeePpm int64, chanID string, now time.Time) (int, error) {
 	channels, err := d.Q.ListActiveOpenPublicChannels(ctx)
 	if err != nil {
@@ -209,7 +213,7 @@ func (d Deps) triggerProbe(ctx context.Context, selfPubkey string, plan *probePl
 	gwLog(fmt.Sprintf("Probing %s via %s (fee=%d ppm, buy price %d ppm, budget %d ppm) triggered by new channel %s",
 		ch.Alias, otherAlias, otherFeePpm, plan.buyPpm, plan.budgetPpm, chanID))
 
-	attempts, err := jobs.ProbeVia(ctx, d.LN, d.Router, selfPubkey, ch, plan.budgetPpm, otherPubkey, channels, maxFeeRate, maxPerTarget)
+	attempts, err := jobs.ProbeVia(ctx, d.LN, d.Router, selfPubkey, ch, plan.budgetPpm, otherPubkey, channels, maxFeeRate, maxPerTarget, d.Q)
 	if err != nil {
 		return 0, err
 	}

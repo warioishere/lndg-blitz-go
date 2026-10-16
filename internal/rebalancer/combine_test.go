@@ -55,13 +55,16 @@ func comboRows() []db.GuiRebalanceroute {
 		paidAgo(savedRoute(2, "T2", "2", []string{"S2", "X", "T2", "me"}, []int64{20, 500, 40}), 1),
 		// failed at node 3: S3, Y and X were reached, X -> Z did not work
 		failedAgo(savedRoute(3, "T3", "3", []string{"S3", "Y", "X", "Z", "me"}, []int64{10, 10, 999, 30}), 3, 3),
-		// paid three days ago: too old to combine
-		paidAgo(savedRoute(5, "T1", "5", []string{"S5", "X", "T1", "me"}, []int64{1, 1, 1}), 72),
+		// paid eight days ago: too old to combine
+		paidAgo(savedRoute(5, "T1", "5", []string{"S5", "X", "T1", "me"}, []int64{1, 1, 1}), 8*24),
 	}
 }
 
+// likely gives every path the same chance.
+func likely(string) float64 { return 0.5 }
+
 func TestCombineRoutes(t *testing.T) {
-	got := combineRoutes(comboRows(), savedNow)
+	got := combineRoutes(comboRows(), likely, savedNow)
 
 	// T1: heads up to X from route 2 and from the working part of route 3, tail from route 1
 	assert.Equal(t, []string{"2:S2-X-T1-me", "3:S3-Y-X-T1-me"}, comboPaths(got["T1"]))
@@ -76,13 +79,20 @@ func TestCombineRoutes(t *testing.T) {
 	assert.Empty(t, got["T3"])
 }
 
-func TestCombineRoutesSkipsFailedEdgesAndSavedRoutes(t *testing.T) {
+func TestCombineRoutesSkipsUnlikelyAndSavedRoutes(t *testing.T) {
 	rows := comboRows()
-	// route 4 failed at node 2 after route 1 was paid: X -> T1 does not work now
+	// route 4 reached X and failed at X -> T1; its part up to X is a head
 	rows = append(rows, failedAgo(savedRoute(4, "T1", "4", []string{"S4", "X", "T1", "me"}, []int64{5, 300, 50}), 0.2, 2))
 	// a saved route that equals a combination is not combined again
 	rows = append(rows, savedRoute(6, "T2", "1", []string{"S1", "X", "T2", "me"}, []int64{100, 500, 40}))
-	got := combineRoutes(rows, savedNow)
+	// X -> T1 has almost no chance
+	prob := func(path string) float64 {
+		if strings.Contains(path, "X-T1") {
+			return minRouteProb / 2
+		}
+		return 0.5
+	}
+	got := combineRoutes(rows, prob, savedNow)
 
 	assert.Empty(t, got["T1"])
 	assert.Equal(t, []string{"4:S4-X-T2-me", "3:S3-Y-X-T2-me"}, comboPaths(got["T2"]))
@@ -90,22 +100,24 @@ func TestCombineRoutesSkipsFailedEdgesAndSavedRoutes(t *testing.T) {
 
 func TestComboCandidates(t *testing.T) {
 	c := newComboIndex()
-	c.byTarget = combineRoutes(comboRows(), savedNow)
+	c.byTarget = combineRoutes(comboRows(), likely, savedNow)
 	budget := func(chanID string) int {
 		if chanID == "3" {
 			return 300 // 370 > 300 * comboSlack
 		}
 		return 400
 	}
-	got := c.candidates("T1", []string{"2", "3"}, budget, 10)
+	got := c.candidates("T1", []string{"2", "3"}, budget)
 	require.Len(t, got, 1)
-	r := got[0]
+	r := got[0].ranked
 	assert.Equal(t, "2", r.row.OutgoingChanID)
 	assert.Equal(t, "S2-X-T1-me", r.row.Route)
 	assert.Equal(t, "T1", r.row.TargetPubkey)
 	assert.Equal(t, listCombined, r.list)
 	assert.Zero(t, r.row.ID)
 	assert.InDelta(t, 370, r.row.LastFeePpm.Float64, 1e-9)
+	assert.InDelta(t, 370, got[0].fee, 1e-9)
+	assert.True(t, got[0].carries)
 
-	assert.Empty(t, c.candidates("T1", []string{"9"}, budget, 10), "only the given sources")
+	assert.Empty(t, c.candidates("T1", []string{"9"}, budget), "only the given sources")
 }

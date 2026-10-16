@@ -47,8 +47,10 @@ type Querier interface {
 	// Routes to peers without an open auto-rebalance channel.
 	DeleteRoutesOfNonTargets(ctx context.Context) (int64, error)
 	DeleteStaleNodeReputations(ctx context.Context, lastSuccess pgtype.Timestamptz) error
-	// getestete Routen ohne kuerzlichen Erfolg loeschen; ungetestete (probed) behalten.
-	DeleteStaleTestedRoutes(ctx context.Context, lastSuccess pgtype.Timestamptz) error
+	// Tested routes whose latest evidence (payment, failure or prober verification)
+	// is older than the cutoff. A route that failed part way stays until then: the
+	// part before the failing node is material for combined routes.
+	DeleteStaleTestedRoutes(ctx context.Context, cutoff pgtype.Timestamptz) error
 	// Never-paid routes the route prober has not verified since cutoff.
 	DeleteUnconfirmedRoutes(ctx context.Context, lastProbed pgtype.Timestamptz) error
 	// Peers.filter(connected=True).exclude(pubkey__in=peer_list).update(connected=False)
@@ -202,6 +204,9 @@ type Querier interface {
 	// Saved routes of a target from the given sources; a route that failed after
 	// cutoff is left out.
 	ListRoutesForTarget(ctx context.Context, arg ListRoutesForTargetParams) ([]GuiRebalanceroute, error)
+	// Attempts that went out since $1 with their path: the evidence for the
+	// success chance and the speed of each node pair.
+	ListSentRouteAttempts(ctx context.Context, timestamp pgtype.Timestamptz) ([]ListSentRouteAttemptsRow, error)
 	// main(): beim Start alle status=1 (in-flight) auf 400 setzen + stop=now.
 	MarkInFlightRebalancesError(ctx context.Context, stop pgtype.Timestamptz) error
 	// mark_route_failure: failure_count += 1; last_failure = now (DB-seitiges Inkrement).

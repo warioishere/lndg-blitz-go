@@ -120,6 +120,8 @@ func TestProbeRouteAmountBuildErrorBreaks(t *testing.T) {
 
 // --- trySingleSource -----------------------------------------------------
 
+var testSend = sendSettings{attemptTimeout: 30 * time.Second, htlcSoftLimit: 5}
+
 func sampleRebalance() db.GuiRebalancer {
 	return db.GuiRebalancer{Value: 100000, LastHopPubkey: "aabb", FeeLimit: 1000}
 }
@@ -160,7 +162,7 @@ func TestTrySingleSourceSuccess(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 
 	res, err := e.trySingleSource(context.Background(), ln, r, q, sampleRebalance(), "555",
-		map[string]int{}, 1000, 100, 2000, inv, 1_000_000_000, 30*time.Second, now)
+		map[string]int{}, 1000, 100, 2000, &rebalInvoice{resp: inv}, 1_000_000_000, 30*time.Second, testSend, now)
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.Equal(t, int32(2), res.status)
@@ -200,7 +202,7 @@ func TestTrySingleSourceLogsFailure(t *testing.T) {
 	}
 	q := newFakeRouteQ()
 	res, err := newEngine().trySingleSource(context.Background(), &fakeLN{info: &lnrpc.GetInfoResponse{IdentityPubkey: "self"}, qr: sampleQR()}, r, q,
-		sampleRebalance(), "555", map[string]int{}, 1000, 100, 2000, &lnrpc.AddInvoiceResponse{RHash: []byte{0x01}}, 1_000_000_000, 30*time.Second, time.Unix(1, 0))
+		sampleRebalance(), "555", map[string]int{}, 1000, 100, 2000, &rebalInvoice{resp: &lnrpc.AddInvoiceResponse{RHash: []byte{0x01}}}, 1_000_000_000, 30*time.Second, testSend, time.Unix(1, 0))
 	require.NoError(t, err)
 	require.Nil(t, res)
 	require.Len(t, q.attempts, 1)
@@ -216,7 +218,7 @@ func TestTrySingleSourceBrakes(t *testing.T) {
 	inv := &lnrpc.AddInvoiceResponse{RHash: []byte{0x01}}
 	try := func(e *engine, ln *fakeLN, r *fakeRouter) {
 		res, err := e.trySingleSource(context.Background(), ln, r, newFakeRouteQ(), sampleRebalance(), "555",
-			map[string]int{}, 1000, 100, 2000, inv, 1_000_000_000, 30*time.Second, time.Unix(1, 0))
+			map[string]int{}, 1000, 100, 2000, &rebalInvoice{resp: inv}, 1_000_000_000, 30*time.Second, testSend, time.Unix(1, 0))
 		require.NoError(t, err)
 		require.Nil(t, res)
 	}
@@ -263,7 +265,7 @@ func TestTrySingleSourceOppCostRejected(t *testing.T) {
 	e := newEngine()
 	inv := &lnrpc.AddInvoiceResponse{RHash: []byte{0x01}}
 	res, err := e.trySingleSource(context.Background(), ln, r, q, sampleRebalance(), "555",
-		map[string]int{}, 1000, 100, 2000, inv, 1_000_000_000, 30*time.Second, time.Unix(1, 0))
+		map[string]int{}, 1000, 100, 2000, &rebalInvoice{resp: inv}, 1_000_000_000, 30*time.Second, testSend, time.Unix(1, 0))
 	require.NoError(t, err)
 	assert.Nil(t, res)
 	require.Len(t, q.attempts, 1)
@@ -275,7 +277,7 @@ func TestTrySingleSourceSelfPubkeyErrorPropagates(t *testing.T) {
 	r := &fakeRouter{}
 	e := newEngine()
 	res, err := e.trySingleSource(context.Background(), ln, r, newFakeRouteQ(), sampleRebalance(), "555",
-		map[string]int{}, 1000, 100, 2000, &lnrpc.AddInvoiceResponse{}, 1_000_000_000, 30*time.Second, time.Unix(1, 0))
+		map[string]int{}, 1000, 100, 2000, &rebalInvoice{resp: &lnrpc.AddInvoiceResponse{}}, 1_000_000_000, 30*time.Second, testSend, time.Unix(1, 0))
 	require.Error(t, err)
 	assert.Nil(t, res)
 }
@@ -285,7 +287,7 @@ func TestTrySingleSourceBudgetTooLow(t *testing.T) {
 	ln := &fakeLN{info: &lnrpc.GetInfoResponse{IdentityPubkey: "self"}}
 	e := newEngine()
 	res, err := e.trySingleSource(context.Background(), ln, &fakeRouter{}, newFakeRouteQ(), sampleRebalance(),
-		"555", map[string]int{"555": 2000}, 1000, 100, 2000, &lnrpc.AddInvoiceResponse{}, 1_000_000_000, 30*time.Second, time.Unix(1, 0))
+		"555", map[string]int{"555": 2000}, 1000, 100, 2000, &rebalInvoice{resp: &lnrpc.AddInvoiceResponse{}}, 1_000_000_000, 30*time.Second, testSend, time.Unix(1, 0))
 	require.NoError(t, err)
 	assert.Nil(t, res)
 }

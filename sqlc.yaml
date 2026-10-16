@@ -14,6 +14,7 @@ sql:
       - "internal/db/migrations/000008_nk_fee_mode.up.sql"
       - "internal/db/migrations/000009_nk_budget_always.up.sql"
       - "internal/db/migrations/000010_route_attempt_hops.up.sql"
+      - "internal/db/migrations/000011_route_attempt_duration.up.sql"
     queries: "internal/db/queries"
     gen:
       go:

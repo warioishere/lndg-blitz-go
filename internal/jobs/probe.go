@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -46,6 +45,7 @@ type probeQuerier interface {
 	InsertProbeLog(ctx context.Context, arg db.InsertProbeLogParams) error
 	DeleteOldProbeLogs(ctx context.Context) error
 	GetPeerAlias(ctx context.Context, pubkey string) (pgtype.Text, error)
+	InsertRouteAttempt(ctx context.Context, arg db.InsertRouteAttemptParams) error
 	NkForwardFlows(ctx context.Context, arg db.NkForwardFlowsParams) ([]db.NkForwardFlowsRow, error)
 	NkBalanceOutFlows(ctx context.Context, arg db.NkBalanceOutFlowsParams) ([]db.NkBalanceOutFlowsRow, error)
 	ListNkPeerChannels(ctx context.Context, remotePubkey string) ([]db.GuiChannel, error)
@@ -76,6 +76,37 @@ func maxInt64(a, b int64) int64 {
 	return b
 }
 
+// probeOutcome is the result of one probe HTLC: status, and for a failed HTLC
+// its failure code and failure source index and the time until the result.
+type probeOutcome struct {
+	status     string
+	code, hop  int
+	durationMs int
+}
+
+// probeRecorder records one probe HTLC over route for amountSat sats; nil
+// records nothing.
+type probeRecorder func(route *lnrpc.Route, amountSat int64, o probeOutcome)
+
+// attemptRecorder records the probe HTLCs to target from outChan in
+// route_attempt_log (list probe), the evidence of the rebalancer's route
+// statistics: a verified route as a failure at our node (every node pair
+// carried it), any other failure at its failing node.
+func attemptRecorder(ctx context.Context, q rebalancer.AttemptLogQuerier, target, outChan string) probeRecorder {
+	if q == nil {
+		return nil
+	}
+	return func(route *lnrpc.Route, amountSat int64, o probeOutcome) {
+		if o.status == "error" {
+			return
+		}
+		rebalancer.RecordAttempt(ctx, q, rebalancer.RouteAttempt{
+			Target: target, OutChan: outChan, List: "probe", ValueSat: amountSat, Outcome: "failed",
+			Code: o.code, Hop: o.hop, Path: rebalancer.RoutePath(route), DurationMs: o.durationMs,
+		}, time.Now())
+	}
+}
+
 // probeRouteSync sends a probe HTLC with a random payment hash and classifies the result:
 //
 //	'verified'  — code==1 (INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS) and fsi==len(hops)
@@ -83,41 +114,44 @@ func maxInt64(a, b int64) int64 {
 //	'fee'       — code==12 (FEE_INSUFFICIENT)
 //	'invalid'   — any other failure code
 //	'error'     — gRPC error or unexpected status
-func probeRouteSync(ctx context.Context, routerstub probeRouterClient, route *lnrpc.Route, timeout time.Duration) string {
+func probeRouteSync(ctx context.Context, routerstub probeRouterClient, route *lnrpc.Route, timeout time.Duration) probeOutcome {
 	fakeHash := make([]byte, 32)
 	if _, err := rand.Read(fakeHash); err != nil {
-		return "error"
+		return probeOutcome{status: "error"}
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	start := time.Now()
 	result, err := routerstub.SendToRouteV2(cctx, &routerrpc.SendToRouteRequest{PaymentHash: fakeHash, Route: route})
 	if err != nil {
-		return "error"
+		return probeOutcome{status: "error"}
 	}
 	if result.GetStatus() == lnrpc.HTLCAttempt_SUCCEEDED { // cannot succeed with a fake hash
-		return "error"
+		return probeOutcome{status: "error"}
 	}
 	failure := result.GetFailure()
-	code := int(failure.GetCode())
-	fsi := int(failure.GetFailureSourceIndex())
+	o := probeOutcome{code: int(failure.GetCode()), hop: int(failure.GetFailureSourceIndex()),
+		durationMs: int(time.Since(start) / time.Millisecond)}
 	nHops := len(route.GetHops())
-	if code == 1 && fsi == nHops {
-		return "verified"
+	switch {
+	case o.code == 1 && o.hop == nHops:
+		o.status = "verified"
+	case o.code == 15:
+		o.status = "liquidity"
+	case o.code == 12:
+		o.status = "fee"
+	default:
+		o.status = "invalid"
 	}
-	if code == 15 {
-		return "liquidity"
-	}
-	if code == 12 {
-		return "fee"
-	}
-	return "invalid"
+	return o
 }
 
 // probeWithBinarySearch finds the maximum amount that can flow over the route
 // (source_chan_id, hop_pubkeys) using binary search. Returns (route_hex|nil,
 // max_amount_sat, fee_ppm|nil). Search parameters: max_steps=8, gap threshold
-// max(good/20, 1000), fee budget scaled proportionally to amount.
-func probeWithBinarySearch(ctx context.Context, routerstub probeRouterClient, sourceChanID string, hopPubkeys [][]byte, cltvDelta int32, targetAmountSat, feeLimitSat int64) (*string, int64, *float64) {
+// max(good/20, 1000), fee budget scaled proportionally to amount. rec records
+// every probe HTLC (nil: none).
+func probeWithBinarySearch(ctx context.Context, routerstub probeRouterClient, sourceChanID string, hopPubkeys [][]byte, cltvDelta int32, targetAmountSat, feeLimitSat int64, rec probeRecorder) (*string, int64, *float64) {
 	const maxSteps = 8
 	var good int64 = 0
 	bad := targetAmountSat + 1
@@ -167,8 +201,11 @@ search:
 			v := (float64(totalFees) / float64(totalAmt-totalFees)) * 1000000
 			routeFeePpm = &v
 		}
-		status := probeRouteSync(ctx, routerstub, routeMsg, 30*time.Second)
-		switch status {
+		o := probeRouteSync(ctx, routerstub, routeMsg, 30*time.Second)
+		if rec != nil {
+			rec(routeMsg, amount, o)
+		}
+		switch o.status {
 		case "verified":
 			b, _ := proto.Marshal(routeMsg)
 			h := hex.EncodeToString(b)
@@ -299,16 +336,13 @@ func probeTargets(ctx context.Context, stub probeLightningClient, routerstub pro
 				}
 				hopPubkeys = append(hopPubkeys, b)
 			}
-			verifiedHex, maxAmountSat, verifiedFeePpm := probeWithBinarySearch(ctx, routerstub, src.chanID, hopPubkeys, rebalancer.FinalCltvDelta, chn.ArAmtTarget, src.feeLimitSat)
+			verifiedHex, maxAmountSat, verifiedFeePpm := probeWithBinarySearch(ctx, routerstub, src.chanID, hopPubkeys, rebalancer.FinalCltvDelta, chn.ArAmtTarget, src.feeLimitSat,
+				attemptRecorder(ctx, q, chn.RemotePubkey, src.chanID))
 			if verifiedHex == nil || maxAmountSat <= 0 {
 				d.ProbeFailed++
 				continue
 			}
-			pathParts := make([]string, 0, len(hops))
-			for _, h := range hops {
-				pathParts = append(pathParts, h.GetPubKey())
-			}
-			path := strings.Join(pathParts, "-")
+			path := rebalancer.RoutePath(response.GetRoutes()[0])
 			routeOutChan := formatChanID(hops[0].GetChanId())
 
 			// A verified route without a fee ppm from the probe charged no fees.

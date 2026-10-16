@@ -111,26 +111,6 @@ func TestFormatAndParseChanIDs(t *testing.T) {
 	assert.Equal(t, []string{"7"}, parseChanIDs("[7]"))
 }
 
-// --- estimateLiquidity ---------------------------------------------------
-
-func TestEstimateLiquidity(t *testing.T) {
-	assert.Equal(t, int64(0), estimateLiquidity(nil))
-	// FAILED, one attempt with failure at the last hop (fsi==total_hops) -> total_amt.
-	p := &lnrpc.Payment{
-		Status: lnrpc.Payment_FAILED,
-		Htlcs: []*lnrpc.HTLCAttempt{
-			{Route: &lnrpc.Route{TotalAmt: 50000, Hops: []*lnrpc.Hop{{}, {}}}, Failure: &lnrpc.Failure{FailureSourceIndex: 2}},
-			{Route: &lnrpc.Route{TotalAmt: 30000, Hops: []*lnrpc.Hop{{}, {}}}, Failure: &lnrpc.Failure{FailureSourceIndex: 1}}, // not the last hop
-		},
-	}
-	assert.Equal(t, int64(50000), estimateLiquidity(p))
-}
-
-func TestEstimateLiquidityNotFailed(t *testing.T) {
-	p := &lnrpc.Payment{Status: lnrpc.Payment_SUCCEEDED}
-	assert.Equal(t, int64(0), estimateLiquidity(p))
-}
-
 // --- fakeOrchQ -----------------------------------------------------------
 
 type fakeOrchQ struct {

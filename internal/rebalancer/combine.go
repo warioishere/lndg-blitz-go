@@ -17,11 +17,14 @@ import (
 // new route made of the first one up to X and the second one from X on. The
 // part up to X comes from any saved route (to any target) that worked up to X:
 // paid, verified by the prober, or failed only after X. The part from X on
-// comes from a paid or verified route to the target. Every edge must have
-// worked in its latest attempt. The fee of a combination is estimated from the
-// fees stored with its parts; BuildRoute prices it live before it is sent.
+// comes from a paid or verified route to the target. Parts come from routes
+// with evidence within partWindow; a combination needs a success chance of at
+// least minRouteProb (stats.go). The index is rebuilt every comboRefresh. The
+// fee of a combination is estimated from the fees stored with its parts;
+// BuildRoute prices it live before it is sent.
 const (
-	comboRefresh   = 10 * time.Minute
+	comboRefresh   = 30 * time.Minute
+	partWindow     = 7 * 24 * time.Hour
 	comboMaxHops   = 10
 	comboPerTarget = 200
 	combinedLimit  = 20
@@ -70,7 +73,7 @@ func newComboIndex() *comboIndex { return &comboIndex{byTarget: map[string][]com
 
 // refresh rebuilds the index from the saved routes when it is older than
 // comboRefresh. On error it logs and keeps the previous index.
-func (c *comboIndex) refresh(ctx context.Context, q comboQuerier, now time.Time) {
+func (c *comboIndex) refresh(ctx context.Context, q comboQuerier, prob func(path string) float64, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.built.IsZero() && now.Sub(c.built) < comboRefresh {
@@ -81,7 +84,7 @@ func (c *comboIndex) refresh(ctx context.Context, q comboQuerier, now time.Time)
 		rebalLog(fmt.Sprintf("Error combining routes: %s", err))
 		return
 	}
-	c.byTarget = combineRoutes(rows, now)
+	c.byTarget = combineRoutes(rows, prob, now)
 	c.built = now
 	n := 0
 	for _, rs := range c.byTarget {
@@ -90,21 +93,17 @@ func (c *comboIndex) refresh(ctx context.Context, q comboQuerier, now time.Time)
 	rebalLog(fmt.Sprintf("Combined %d routes for %d targets from %d saved routes", n, len(c.byTarget), len(rows)))
 }
 
-// candidates returns up to limit combined routes of a target over the given
-// sources whose estimated fee fits budget(source) (with comboSlack), cheapest
-// first.
-func (c *comboIndex) candidates(target string, chanIDs []string, budget func(string) int, limit int) []rankedRoute {
+// candidates returns the combined routes of a target over the given sources
+// whose estimated fee fits budget(source) (with comboSlack), cheapest first.
+func (c *comboIndex) candidates(target string, chanIDs []string, budget func(string) int) []routeCandidate {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	allowed := make(map[string]bool, len(chanIDs))
 	for _, id := range chanIDs {
 		allowed[id] = true
 	}
-	var out []rankedRoute
+	var out []routeCandidate
 	for _, cr := range c.byTarget[target] {
-		if len(out) >= limit {
-			break
-		}
 		if !allowed[cr.outChan] {
 			continue
 		}
@@ -112,13 +111,16 @@ func (c *comboIndex) candidates(target string, chanIDs []string, budget func(str
 		if b <= 0 || cr.estPpm > float64(b)*comboSlack {
 			continue
 		}
-		out = append(out, rankedRoute{
-			row: db.GuiRebalanceroute{
-				TargetPubkey: target, OutgoingChanID: cr.outChan, Route: strings.Join(cr.nodes, "-"),
-				LastFeePpm: pgtype.Float8{Float64: cr.estPpm, Valid: true},
+		out = append(out, routeCandidate{
+			ranked: rankedRoute{
+				row: db.GuiRebalanceroute{
+					TargetPubkey: target, OutgoingChanID: cr.outChan, Route: strings.Join(cr.nodes, "-"),
+					LastFeePpm: pgtype.Float8{Float64: cr.estPpm, Valid: true},
+				},
+				list:     listCombined,
+				evidence: cr.evidence,
 			},
-			list:     listCombined,
-			evidence: cr.evidence,
+			carries: true, fee: cr.estPpm, rep: 0.5,
 		})
 	}
 	return out
@@ -143,7 +145,7 @@ func splitRoute(r db.GuiRebalanceroute, now time.Time) (partRoute, bool) {
 		}
 	}
 	list, evidence := classifyRoute(r, now)
-	if evidence.IsZero() || now.Sub(evidence) > provenWindow {
+	if evidence.IsZero() || now.Sub(evidence) > partWindow {
 		return partRoute{}, false
 	}
 	p.evidence = evidence
@@ -160,23 +162,12 @@ func splitRoute(r db.GuiRebalanceroute, now time.Time) (partRoute, bool) {
 	return p, true
 }
 
-// edgeState is the latest attempt over an edge.
-type edgeState struct {
-	at time.Time
-	ok bool
-}
-
 // combineRoutes builds the combined routes per target from saved routes,
-// at most comboPerTarget per target, cheapest estimated fee first.
-func combineRoutes(rows []db.GuiRebalanceroute, now time.Time) map[string][]comboRoute {
+// at most comboPerTarget per target, cheapest estimated fee first. prob is the
+// success chance of a path.
+func combineRoutes(rows []db.GuiRebalanceroute, prob func(path string) float64, now time.Time) map[string][]comboRoute {
 	var parts []partRoute
 	existing := map[string]bool{} // target|outChan|path of every saved route
-	edges := map[pathEdge]edgeState{}
-	setEdge := func(e pathEdge, at time.Time, ok bool) {
-		if cur, seen := edges[e]; !seen || at.After(cur.at) {
-			edges[e] = edgeState{at, ok}
-		}
-	}
 	for _, r := range rows {
 		existing[r.TargetPubkey+"|"+r.OutgoingChanID+"|"+r.Route] = true
 		p, ok := splitRoute(r, now)
@@ -184,12 +175,6 @@ func combineRoutes(rows []db.GuiRebalanceroute, now time.Time) map[string][]comb
 			continue
 		}
 		parts = append(parts, p)
-		for i := 0; i+1 < p.good; i++ {
-			setEdge(pathEdge{p.nodes[i], p.nodes[i+1]}, p.evidence, true)
-		}
-		if p.good < len(p.nodes) {
-			setEdge(pathEdge{p.nodes[p.good-1], p.nodes[p.good]}, p.evidence, false)
-		}
 	}
 
 	// Tails: the part of a fully working route to its target from node X on.
@@ -229,11 +214,12 @@ func combineRoutes(rows []db.GuiRebalanceroute, now time.Time) map[string][]comb
 					if len(nodes) > comboMaxHops || !uniqueNodes(nodes) {
 						continue
 					}
-					key := target + "|" + head.outChan + "|" + strings.Join(nodes, "-")
+					path := strings.Join(nodes, "-")
+					key := target + "|" + head.outChan + "|" + path
 					if existing[key] || seen[key] {
 						continue
 					}
-					if !edgesWork(nodes, edges) {
+					if prob(path) < minRouteProb {
 						continue
 					}
 					seen[key] = true
@@ -275,17 +261,6 @@ func uniqueNodes(nodes []string) bool {
 			return false
 		}
 		seen[n] = true
-	}
-	return true
-}
-
-// edgesWork reports whether the latest attempt over every edge of the path worked.
-func edgesWork(nodes []string, edges map[pathEdge]edgeState) bool {
-	for i := 0; i+1 < len(nodes); i++ {
-		s, ok := edges[pathEdge{nodes[i], nodes[i+1]}]
-		if !ok || !s.ok {
-			return false
-		}
 	}
 	return true
 }
