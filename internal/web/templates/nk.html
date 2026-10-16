@@ -7,12 +7,12 @@
     <ul>
       <li><b>Below its target</b> (local %) the fee goes up NK-StepUp %, <b>above</b> it goes down NK-StepDown %.</li>
       <li><b>Lock:</b> no decrease after a forward or balance-out of at least NK-LockFlowPct % of capacity, for NK-LockMin up to NK-LockMax minutes (longer for a higher fee and an emptier channel).</li>
-      <li><b>Sold price:</b> the ppm the channel's outbound flow paid (forwards and balance-outs, 24 h, else 72 h). Above NK-AnchorPct % of it a decrease jumps there; below it the fee falls at half speed.</li>
+      <li><b>Sold price:</b> the ppm the channel's outbound flow paid (forwards and balance-outs, 24 h, else 72 h). Above NK-AnchorPct % of it a decrease jumps there; below it the fee holds or falls by NK-BelowFlowPct % of the normal step.</li>
       <li><b>Cap:</b> NK-CapFactor x the sold price (24 h, 72 h, else 30 days), at least NK-CapMin; NK-CapMin without a sale in 30 days. Under NK-EmptyPct % local the fee goes to the cap and max_htlc to its minimum.</li>
       <li><b>max_htlc</b> stays between half and all of the available liquidity (halved or doubled).</li>
-      <li><b>Inbound discount</b> (channels with dynamic inbound checked), while the channel is below its target: the price it sold at (6 h, else 24 h, else 72 h) less NK-InboundMargin, never more than its own fee. None at or above the target.</li>
+      <li><b>Inbound discount</b> (channels with dynamic inbound checked), while the channel is below its target: what the rebalancer would pay, the price it sold at (6 h, else 24 h, else 72 h) less the fill margin, never more than its own fee. None at or above the target.</li>
       <li>A change goes out at most every NK-MinInterval minutes; the policy is resent every NK-Republish minutes.</li>
-      <li><b>Rebalance budget</b> of an NK channel: at most min(fee, sold price of 24 h, 72 h, else 30 days) less a margin from NK-BudgetMarginMin ppm (empty) to NK-BudgetMarginMax % (at the target), instead of fee x max cost; min(fee, NK-CapMin) without a sale in 30 days. The raised fee of an empty channel never raises the budget.</li>
+      <li><b>Rebalance budget</b> of an NK channel: at most min(fee, sold price of 24 h, 72 h, else 30 days) less the fill margin, from NK-BudgetMarginMin ppm (empty) to NK-BudgetMarginMax % of the price (full), instead of fee x max cost; min(fee, NK-CapMin) without a sale in 30 days. The raised fee of an empty channel never raises the budget.</li>
     </ul>
     <p>With NK-Shadow on, the other channels get shadow decisions: what NK would set, logged and never applied. <a href="/nk/log/" target="_blank">NK decision log</a></p>
   </div>

@@ -84,7 +84,7 @@ func TestNkFeesAppliesNkChannels(t *testing.T) {
 	for _, r := range client.policyReqs {
 		assert.InDelta(t, 1030.0/1e6, r.FeeRate, 1e-12, "the peer's highest fee + 3 %")
 		assert.Equal(t, int64(1), r.BaseFeeMsat)
-		assert.Equal(t, int32(-789), r.InboundFee.FeeRatePpm, "sold at 800 less 11")
+		assert.Equal(t, int32(-767), r.InboundFee.FeeRatePpm, "sold at 800 less the margin at 15 % local: 10 + (160 - 10) x 0.15")
 		assert.Equal(t, int32(-1), r.InboundFee.BaseFeeMsat)
 	}
 	assert.Equal(t, uint64(1_237_500_000), client.policyReqs[0].MaxHtlcMsat, "9.9M halved into 0.95M-1.9M available")

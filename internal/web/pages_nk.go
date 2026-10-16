@@ -89,7 +89,7 @@ func (s *Server) handleNk(w http.ResponseWriter, r *http.Request) {
 			row["lock_until"] = nkTime(lock)
 		}
 		if nk {
-			row["budget_ppm"] = af.NkBudgetPpm(int(ch.LocalFeeRate), f, localPct, target, p)
+			row["budget_ppm"] = af.NkBudgetPpm(int(ch.LocalFeeRate), f, localPct, p)
 		}
 		if l, ok := lastBy[ch.ChanID]; ok {
 			t, _ := l["timestamp"].(time.Time)

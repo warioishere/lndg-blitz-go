@@ -16,10 +16,10 @@ var nkNow = time.Unix(1_700_000_000, 0)
 
 func nkTestParams() NkParams {
 	return NkParams{
-		StepUpPct: 3, StepDownPct: 1, LockMin: 12 * time.Minute, LockMax: 360 * time.Minute,
+		StepUpPct: 3, StepDownPct: 1, BelowFlowPct: 10, LockMin: 12 * time.Minute, LockMax: 360 * time.Minute,
 		LockFlowPct: 2, LockFeeRef: 2000, AnchorPct: 110, CapFactor: 2, CapMin: 1000, MaxRate: 7000,
 		MinRate: 1, EmptyPct: 2, MinInterval: 10 * time.Minute, Republish: 30 * time.Minute,
-		BaseMsat: 1, InboundMargin: 11, BudgetMarginMin: 10, BudgetMarginMaxPct: 20,
+		BaseMsat: 1, BudgetMarginMin: 10, BudgetMarginMaxPct: 20,
 	}
 }
 
@@ -108,10 +108,15 @@ func TestNkDecideAnchor(t *testing.T) {
 	d := NkDecide(in, p, nkNow)
 	assert.Equal(t, 880, d.Fee)
 	assert.Equal(t, "to anchor", d.Reason)
-	// below the sold price it falls at half speed
+	// below the sold price it falls by 10 % of the step: round(700 x 0.999)
 	in.Fee = 700
 	d = NkDecide(in, p, nkNow)
-	assert.Equal(t, 696, d.Fee) // floor(700 x 0.995)
+	assert.Equal(t, 699, d.Fee)
+	assert.Equal(t, "above target, below flow", d.Reason)
+	// a step under half a ppm keeps the fee
+	in.Fee = 400
+	d = NkDecide(in, p, nkNow)
+	assert.Equal(t, 400, d.Fee)
 	assert.Equal(t, "above target, below flow", d.Reason)
 }
 
@@ -156,9 +161,10 @@ func TestNkDecideInbound(t *testing.T) {
 	flow.Fwd6hAmt, flow.Fwd6hFee = 1_000_000, 794
 	in := idle(NkInput{Fee: 1200, LocalPct: 20, TargetPct: 50, Flow: flow, InboundDynamic: true})
 	d := NkDecide(in, p, nkNow)
-	assert.Equal(t, -783, d.Inbound, "sold price less the margin")
+	// margin at 20 % local: 10 + (20 % x 794 - 10) x 0.2 = 40
+	assert.Equal(t, -754, d.Inbound, "sold price less the fill margin")
 	// at or above the target: no discount
-	in.LocalPct, in.Inbound = 50, -783
+	in.LocalPct, in.Inbound = 50, -754
 	assert.Equal(t, 0, NkDecide(in, p, nkNow).Inbound)
 	in.LocalPct = 20
 	// never more than the own outbound fee
@@ -192,16 +198,18 @@ func TestNkBudgetPpm(t *testing.T) {
 	p := nkTestParams()
 	flow := sold24(5000, 1_000_000)
 	// empty: 5000 - 10
-	assert.Equal(t, 4990, NkBudgetPpm(6000, flow, 0, 50, p))
-	// at the target: 5000 - 20 %
-	assert.Equal(t, 4000, NkBudgetPpm(6000, flow, 50, 50, p))
+	assert.Equal(t, 4990, NkBudgetPpm(6000, flow, 0, p))
+	// half full: 5000 - (10 + (1000 - 10) x 0.5)
+	assert.Equal(t, 4495, NkBudgetPpm(6000, flow, 50, p))
+	// full: 5000 - 20 %
+	assert.Equal(t, 4000, NkBudgetPpm(6000, flow, 100, p))
 	// the current fee when it is below the sold price
-	assert.Equal(t, 2990, NkBudgetPpm(3000, flow, 0, 50, p))
+	assert.Equal(t, 2990, NkBudgetPpm(3000, flow, 0, p))
 	// no sale in 72 h: the sold price of 30 days
-	assert.Equal(t, 590, NkBudgetPpm(3000, NkFlow{All30dAmt: 1_000_000, All30dFee: 600}, 0, 50, p))
+	assert.Equal(t, 590, NkBudgetPpm(3000, NkFlow{All30dAmt: 1_000_000, All30dFee: 600}, 0, p))
 	// no sale in 30 days: NK-CapMin, never the raised fee of an empty channel
-	assert.Equal(t, 990, NkBudgetPpm(3000, NkFlow{}, 0, 50, p))
-	assert.Equal(t, 490, NkBudgetPpm(500, NkFlow{}, 0, 50, p))
+	assert.Equal(t, 990, NkBudgetPpm(3000, NkFlow{}, 0, p))
+	assert.Equal(t, 490, NkBudgetPpm(500, NkFlow{}, 0, p))
 }
 
 type fakeNkQ struct {

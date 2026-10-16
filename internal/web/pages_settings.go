@@ -317,6 +317,7 @@ func buildSettingsForm(prefixes []string) []map[string]any {
 			lsf("unit", "", "form_id", "nk_shadow", "value", 1, "label", "Shadow", "id", "NK-Shadow", "title", "Shadow decisions for the channels that run LNDg auto-fees (logged, never applied)", "min", 0, "max", 1),
 			lsf("unit", "%", "form_id", "nk_step_up", "value", 3, "label", "Step Up", "id", "NK-StepUp", "title", "Fee increase per change while the channel is below its target", "min", 0.1),
 			lsf("unit", "%", "form_id", "nk_step_down", "value", 1, "label", "Step Down", "id", "NK-StepDown", "title", "Fee decrease per change while the channel is above its target", "min", 0.1),
+			lsf("unit", "%", "form_id", "nk_below_flow", "value", 10, "label", "Below Flow", "id", "NK-BelowFlowPct", "title", "Below the sold price a decrease is this share of the normal step", "min", 0),
 			lsf("unit", "min", "form_id", "nk_lock_min", "value", 12, "label", "Lock Min", "id", "NK-LockMin", "title", "Shortest decrease lock after a large outbound flow", "min", 1),
 			lsf("unit", "min", "form_id", "nk_lock_max", "value", 360, "label", "Lock Max", "id", "NK-LockMax", "title", "Longest decrease lock (high fee, empty channel)", "min", 1),
 			lsf("unit", "%", "form_id", "nk_lock_flow", "value", 2, "label", "Lock Flow", "id", "NK-LockFlowPct", "title", "A forward or balance-out of at least this share of capacity sets the lock", "min", 0.1),
@@ -330,9 +331,8 @@ func buildSettingsForm(prefixes []string) []map[string]any {
 			lsf("unit", "min", "form_id", "nk_min_interval", "value", 10, "label", "Min Interval", "id", "NK-MinInterval", "title", "Least time between two changes", "min", 1),
 			lsf("unit", "min", "form_id", "nk_republish", "value", 30, "label", "Republish", "id", "NK-Republish", "title", "The policy is resent this often even when unchanged", "min", 1),
 			lsf("unit", "msat", "form_id", "nk_base_msat", "value", 1, "label", "Base Fee", "id", "NK-BaseMsat", "title", "Base fee on NK channels, -1 keeps the channel's base fee"),
-			lsf("unit", "ppm", "form_id", "nk_inbound_margin", "value", 11, "label", "Inbound Margin", "id", "NK-InboundMargin", "title", "Inbound discount = sold price less this", "min", 0),
-			lsf("unit", "ppm", "form_id", "nk_budget_min", "value", 10, "label", "Budget Margin Min", "id", "NK-BudgetMarginMin", "title", "Rebalance margin of an empty channel", "min", 0),
-			lsf("unit", "%", "form_id", "nk_budget_max", "value", 20, "label", "Budget Margin Max", "id", "NK-BudgetMarginMax", "title", "Rebalance margin at the target, share of the price", "min", 0),
+			lsf("unit", "ppm", "form_id", "nk_budget_min", "value", 10, "label", "Budget Margin Min", "id", "NK-BudgetMarginMin", "title", "Fill margin of an empty channel (rebalance budget and inbound discount)", "min", 0),
+			lsf("unit", "%", "form_id", "nk_budget_max", "value", 20, "label", "Budget Margin Max", "id", "NK-BudgetMarginMax", "title", "Fill margin of a full channel, share of the price", "min", 0),
 		)
 	}
 	if has("NODE_CACHE") {
