@@ -324,6 +324,7 @@
     </tfoot>
   </table>
 </div>
+<script src="/static/rebalances_table.js"></script>
 {{template "rebalances_table.html" (dict "count" 10 "load_count" 10 "title" (safe "<a href=\"/rebalances\" target=\"_blank\">Rebalance Requests</a>"))}}
 <div id="payments_container" style="display:none" class="w3-container w3-padding-small">
   <table id="paymentsTable" class="w3-table-all w3-centered w3-hoverable">
@@ -461,6 +462,5 @@
     <input type="submit" value="OK" onclick="Sync.POST('sign_message/', {body: {message:byId('signmsg').value}}, r => {showBannerMsg('Signature:', r.data, true, r.data);qr_addr(r.data);})">
   </div>
 </div>
-<script src="/static/rebalances_table.js"></script>
 <script src="/static/home.js"></script>
 {{end}}
