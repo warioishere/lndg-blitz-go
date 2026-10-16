@@ -8,11 +8,11 @@
       <li><b>Below its target</b> (local %) the fee goes up NK-StepUp %, <b>above</b> it goes down NK-StepDown %.</li>
       <li><b>Lock:</b> no decrease after a forward or balance-out of at least NK-LockFlowPct % of capacity, for NK-LockMin up to NK-LockMax minutes (longer for a higher fee and an emptier channel).</li>
       <li><b>Sold price:</b> the ppm the channel's outbound flow paid (forwards and balance-outs, 24 h, else 72 h). Above NK-AnchorPct % of it a decrease jumps there; below it the fee falls at half speed.</li>
-      <li><b>Cap:</b> NK-CapFactor x the sold price, at least NK-CapMin (NK-MaxRate without sales). Under NK-EmptyPct % local the fee goes to the cap and max_htlc to its minimum.</li>
+      <li><b>Cap:</b> NK-CapFactor x the sold price (24 h, 72 h, else 30 days), at least NK-CapMin; NK-CapMin without a sale in 30 days. Under NK-EmptyPct % local the fee goes to the cap and max_htlc to its minimum.</li>
       <li><b>max_htlc</b> stays between half and all of the available liquidity (halved or doubled).</li>
-      <li><b>Inbound discount</b> (channels with dynamic inbound checked): the price the channel sold at (6 h, else 24 h, else 72 h) less NK-InboundMargin, never more than its own fee.</li>
+      <li><b>Inbound discount</b> (channels with dynamic inbound checked), while the channel is below its target: the price it sold at (6 h, else 24 h, else 72 h) less NK-InboundMargin, never more than its own fee. None at or above the target.</li>
       <li>A change goes out at most every NK-MinInterval minutes; the policy is resent every NK-Republish minutes.</li>
-      <li><b>Budget</b> (checked): the rebalancer pays at most min(fee, sold price) less a margin from NK-BudgetMarginMin ppm (empty) to NK-BudgetMarginMax % (at the target), instead of fee x max cost.</li>
+      <li><b>Rebalance budget</b> of an NK channel: at most min(fee, sold price of 24 h, 72 h, else 30 days) less a margin from NK-BudgetMarginMin ppm (empty) to NK-BudgetMarginMax % (at the target), instead of fee x max cost; min(fee, NK-CapMin) without a sale in 30 days. The raised fee of an empty channel never raises the budget.</li>
     </ul>
     <p>With NK-Shadow on, the other channels get shadow decisions: what NK would set, logged and never applied. <a href="/nk/log/" target="_blank">NK decision log</a></p>
   </div>
@@ -29,17 +29,16 @@
           <th onclick="sortTable(event.target, 0, 'String', 0, 'a')">Channel</th>
           <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Peer</th>
           <th title="checked: NK fee mode, unchecked: LNDg auto-fees">NK</th>
-          <th title="NK rebalance budget instead of fee x max cost">Budget</th>
           <th title="local liquidity target in %, empty: 100 - AR inbound target">Target %</th>
-          <th onclick="sortTable(event.target, 5, 'int')">Local %</th>
-          <th onclick="sortTable(event.target, 6, 'int')">Fee</th>
-          <th onclick="sortTable(event.target, 7, 'int')" title="inbound fee rate; * dynamic inbound checked">Inbound</th>
-          <th onclick="sortTable(event.target, 8, 'int')">max_htlc</th>
-          <th onclick="sortTable(event.target, 9, 'int')" title="ppm the outbound flow paid in 24 h">Sold 24h</th>
-          <th onclick="sortTable(event.target, 10, 'int')" title="ppm the outbound flow paid in 72 h">Sold 72h</th>
-          <th onclick="sortTable(event.target, 11, 'int')">Cap</th>
+          <th onclick="sortTable(event.target, 4, 'int')">Local %</th>
+          <th onclick="sortTable(event.target, 5, 'int')">Fee</th>
+          <th onclick="sortTable(event.target, 6, 'int')" title="inbound fee rate; * dynamic inbound checked">Inbound</th>
+          <th onclick="sortTable(event.target, 7, 'int')">max_htlc</th>
+          <th onclick="sortTable(event.target, 8, 'int')" title="ppm the outbound flow paid in 24 h">Sold 24h</th>
+          <th onclick="sortTable(event.target, 9, 'int')" title="ppm the outbound flow paid in 72 h">Sold 72h</th>
+          <th onclick="sortTable(event.target, 10, 'int')">Cap</th>
           <th title="no decrease until (UTC)">Lock until</th>
-          <th onclick="sortTable(event.target, 13, 'int')" title="NK rebalance budget before the source fee">Budget ppm</th>
+          <th onclick="sortTable(event.target, 12, 'int')" title="NK rebalance budget before the source fee">Budget ppm</th>
           <th>Last decision (UTC)</th>
         </tr>
         {{range $c := .channels}}
@@ -50,7 +49,6 @@
             <input type="hidden" name="channels" value="{{$c.chan_id}}">
             <input type="checkbox" class="nkbox" name="nk" value="{{$c.chan_id}}"{{if $c.nk}} checked{{end}}>
           </td>
-          <td><input type="checkbox" name="budget" value="{{$c.chan_id}}"{{if $c.budget}} checked{{end}}></td>
           <td><input type="number" min="0" max="100" style="width:60px" name="target_{{$c.chan_id}}" placeholder="{{$c.target}}"{{if $c.target_set}} value="{{$c.target}}"{{end}}></td>
           <td>{{$c.local_pct}}</td>
           <td>{{$c.fee | intcomma}}</td>

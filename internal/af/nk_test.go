@@ -30,6 +30,12 @@ func sold24(feePpm, amt float64) NkFlow {
 		All24hAmt: amt, All24hFee: fee, All72hAmt: amt, All72hFee: fee}
 }
 
+// sold30 is a flow that sold only further back than 72 hours: it sets the
+// cap (2 x feePpm) without an anchor.
+func sold30(feePpm float64) NkFlow {
+	return NkFlow{All30dAmt: 1_000_000, All30dFee: feePpm}
+}
+
 // idle is an NkInput whose last change and publish are long past.
 func idle(in NkInput) NkInput {
 	in.LastChange, in.LastPublish = nkNow.Add(-time.Hour), nkNow.Add(-time.Hour)
@@ -59,7 +65,7 @@ func TestNkFlowWindows(t *testing.T) {
 func TestNkDecideSteps(t *testing.T) {
 	p := nkTestParams()
 	// below target: up 3 %
-	d := NkDecide(idle(NkInput{Fee: 1000, LocalPct: 20, TargetPct: 50}), p, nkNow)
+	d := NkDecide(idle(NkInput{Fee: 1000, LocalPct: 20, TargetPct: 50, Flow: sold30(1500)}), p, nkNow)
 	assert.Equal(t, 1030, d.Fee)
 	assert.Equal(t, "below target", d.Reason)
 	assert.True(t, d.Publish)
@@ -75,7 +81,7 @@ func TestNkDecideSteps(t *testing.T) {
 
 func TestNkDecideLock(t *testing.T) {
 	p := nkTestParams()
-	in := idle(NkInput{Fee: 2000, LocalPct: 60, TargetPct: 50})
+	in := idle(NkInput{Fee: 2000, LocalPct: 60, TargetPct: 50, Flow: sold30(1500)})
 	in.LastPublish = nkNow.Add(-time.Minute)
 	in.Flow.LastBig = nkNow.Add(-time.Hour)
 	// fee at the reference, 60 % local: 12 min + 348 min x 1 x 0.4 = 151.2 min
@@ -119,8 +125,10 @@ func TestNkDecideCapAndEmpty(t *testing.T) {
 	assert.Equal(t, "below target, cap", d.Reason)
 	// cap at least NK-CapMin
 	assert.Equal(t, 1000, NkCap(sold24(100, 1_000_000), p))
-	// without flow: NK-MaxRate
-	assert.Equal(t, 7000, NkCap(NkFlow{}, p))
+	// no sale in 72 h: the sold price of 30 days
+	assert.Equal(t, 1200, NkCap(NkFlow{All30dAmt: 1_000_000, All30dFee: 600}, p))
+	// no sale in 30 days: NK-CapMin
+	assert.Equal(t, 1000, NkCap(NkFlow{}, p))
 	// empty: straight to the cap
 	in.Fee, in.LocalPct = 500, 1
 	d = NkDecide(in, p, nkNow)
@@ -131,7 +139,7 @@ func TestNkDecideCapAndEmpty(t *testing.T) {
 
 func TestNkDecidePacing(t *testing.T) {
 	p := nkTestParams()
-	in := NkInput{Fee: 1000, LocalPct: 20, TargetPct: 50, LastChange: nkNow.Add(-5 * time.Minute), LastPublish: nkNow.Add(-5 * time.Minute)}
+	in := NkInput{Fee: 1000, LocalPct: 20, TargetPct: 50, Flow: sold30(1500), LastChange: nkNow.Add(-5 * time.Minute), LastPublish: nkNow.Add(-5 * time.Minute)}
 	d := NkDecide(in, p, nkNow)
 	assert.Equal(t, 1000, d.Fee, "a change waits for NK-MinInterval")
 	assert.Equal(t, "below target, wait", d.Reason)
@@ -146,9 +154,13 @@ func TestNkDecideInbound(t *testing.T) {
 	p := nkTestParams()
 	flow := sold24(794, 1_000_000)
 	flow.Fwd6hAmt, flow.Fwd6hFee = 1_000_000, 794
-	in := idle(NkInput{Fee: 1200, LocalPct: 80, TargetPct: 50, Flow: flow, InboundDynamic: true})
+	in := idle(NkInput{Fee: 1200, LocalPct: 20, TargetPct: 50, Flow: flow, InboundDynamic: true})
 	d := NkDecide(in, p, nkNow)
 	assert.Equal(t, -783, d.Inbound, "sold price less the margin")
+	// at or above the target: no discount
+	in.LocalPct, in.Inbound = 50, -783
+	assert.Equal(t, 0, NkDecide(in, p, nkNow).Inbound)
+	in.LocalPct = 20
 	// never more than the own outbound fee
 	in.Flow = sold24(5000, 1_000_000)
 	in.Fee, in.LocalPct = 100, 20
@@ -185,8 +197,11 @@ func TestNkBudgetPpm(t *testing.T) {
 	assert.Equal(t, 4000, NkBudgetPpm(6000, flow, 50, 50, p))
 	// the current fee when it is below the sold price
 	assert.Equal(t, 2990, NkBudgetPpm(3000, flow, 0, 50, p))
-	// no flow: the current fee
-	assert.Equal(t, 2990, NkBudgetPpm(3000, NkFlow{}, 0, 50, p))
+	// no sale in 72 h: the sold price of 30 days
+	assert.Equal(t, 590, NkBudgetPpm(3000, NkFlow{All30dAmt: 1_000_000, All30dFee: 600}, 0, 50, p))
+	// no sale in 30 days: NK-CapMin, never the raised fee of an empty channel
+	assert.Equal(t, 990, NkBudgetPpm(3000, NkFlow{}, 0, 50, p))
+	assert.Equal(t, 490, NkBudgetPpm(500, NkFlow{}, 0, 50, p))
 }
 
 type fakeNkQ struct {
@@ -228,16 +243,11 @@ func TestTargetBudget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []int{3000, 90}, []int{fee, cost})
 
-	// NK with budget: min(3000, 1000 sold) - 10 at an empty channel, at 100 %
-	tc.AfMode, tc.NkBudget = "nk", true
+	// NK: min(3000, 1000 sold) - 10 at an empty channel, at 100 %
+	tc.AfMode = "nk"
 	fee, cost, err = TargetBudget(context.Background(), q, tc, nkNow)
 	require.NoError(t, err)
 	assert.Equal(t, []int{990, 100}, []int{fee, cost})
-
-	// NK without the budget flag keeps ar_max_cost
-	tc.NkBudget = false
-	fee, cost, _ = TargetBudget(context.Background(), q, tc, nkNow)
-	assert.Equal(t, []int{3000, 90}, []int{fee, cost})
 }
 
 func TestLoadNkParamsDefaults(t *testing.T) {

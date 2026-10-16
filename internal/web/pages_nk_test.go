@@ -57,19 +57,17 @@ func TestNkPagesIntegration(t *testing.T) {
 	defer ts.Close()
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.PostForm(ts.URL+"/nk/", url.Values{
-		"channels": {"700", "701"}, "nk": {"700"}, "budget": {"700"}, "target_700": {"5"}, "target_701": {""},
+		"channels": {"700", "701"}, "nk": {"700"}, "target_700": {"5"}, "target_701": {""},
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusFound, resp.StatusCode)
 	var mode string
-	var budget bool
 	var target *int32
-	require.NoError(t, pool.QueryRow(ctx, `SELECT af_mode, nk_budget, nk_target FROM gui_channels WHERE chan_id='700'`).Scan(&mode, &budget, &target))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT af_mode, nk_target FROM gui_channels WHERE chan_id='700'`).Scan(&mode, &target))
 	require.Equal(t, "nk", mode)
-	require.True(t, budget)
 	require.NotNil(t, target)
 	require.EqualValues(t, 5, *target)
-	require.NoError(t, pool.QueryRow(ctx, `SELECT af_mode, nk_budget, nk_target FROM gui_channels WHERE chan_id='701'`).Scan(&mode, &budget, &target))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT af_mode, nk_target FROM gui_channels WHERE chan_id='701'`).Scan(&mode, &target))
 	require.Equal(t, "lndg", mode)
 	require.Nil(t, target)
 

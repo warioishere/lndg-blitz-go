@@ -71,7 +71,7 @@ func (q *Queries) InsertNkFeeLog(ctx context.Context, arg InsertNkFeeLogParams) 
 }
 
 const listNkJobChannels = `-- name: ListNkJobChannels :many
-SELECT remote_pubkey, chan_id, funding_txid, output_index, capacity, local_balance, remote_balance, unsettled_balance, initiator, alias, local_base_fee, local_fee_rate, is_active, is_open, auto_rebalance, remote_base_fee, remote_fee_rate, local_commit, local_chan_reserve, ar_in_target, num_updates, ar_amt_target, ar_out_target, ar_max_cost, last_update, local_disabled, remote_disabled, htlc_count, pending_inbound, pending_outbound, private, total_received, total_sent, fees_updated, auto_fees, local_cltv, remote_cltv, local_max_htlc_msat, local_min_htlc_msat, remote_max_htlc_msat, remote_min_htlc_msat, short_chan_id, notes, close_address, push_amt, local_inbound_base_fee, local_inbound_fee_rate, remote_inbound_base_fee, remote_inbound_fee_rate, ar_source, ar_source_ppm_diff, inbound_offset, offset_updated, maxhtlc_percent, maxhtlc_updated, mx_liq_threshold, mx_liq_value, mx_liq_upper, ep_target, ep_updated, ep_enabled, ep_inc_pct, ep_cooldown, ep_live_threshold, ep_live_inc_pct, flp_enabled, flp_safety, htlc_boost_checked, af_mode, nk_target, nk_budget, nk_last_change, nk_last_publish FROM gui_channels
+SELECT remote_pubkey, chan_id, funding_txid, output_index, capacity, local_balance, remote_balance, unsettled_balance, initiator, alias, local_base_fee, local_fee_rate, is_active, is_open, auto_rebalance, remote_base_fee, remote_fee_rate, local_commit, local_chan_reserve, ar_in_target, num_updates, ar_amt_target, ar_out_target, ar_max_cost, last_update, local_disabled, remote_disabled, htlc_count, pending_inbound, pending_outbound, private, total_received, total_sent, fees_updated, auto_fees, local_cltv, remote_cltv, local_max_htlc_msat, local_min_htlc_msat, remote_max_htlc_msat, remote_min_htlc_msat, short_chan_id, notes, close_address, push_amt, local_inbound_base_fee, local_inbound_fee_rate, remote_inbound_base_fee, remote_inbound_fee_rate, ar_source, ar_source_ppm_diff, inbound_offset, offset_updated, maxhtlc_percent, maxhtlc_updated, mx_liq_threshold, mx_liq_value, mx_liq_upper, ep_target, ep_updated, ep_enabled, ep_inc_pct, ep_cooldown, ep_live_threshold, ep_live_inc_pct, flp_enabled, flp_safety, htlc_boost_checked, af_mode, nk_target, nk_last_change, nk_last_publish FROM gui_channels
 WHERE is_open = true AND is_active = true AND private = false AND auto_fees = true
 ORDER BY chan_id
 `
@@ -158,7 +158,6 @@ func (q *Queries) ListNkJobChannels(ctx context.Context) ([]GuiChannel, error) {
 			&i.HtlcBoostChecked,
 			&i.AfMode,
 			&i.NkTarget,
-			&i.NkBudget,
 			&i.NkLastChange,
 			&i.NkLastPublish,
 		); err != nil {
@@ -176,17 +175,20 @@ const nkBalanceOutFlows = `-- name: NkBalanceOutFlows :many
 SELECT p.chan_out::varchar AS chan_id,
     COALESCE(SUM(CASE WHEN p.creation_date >= $1 THEN p.value END), 0)::float8 AS amt_24h,
     COALESCE(SUM(CASE WHEN p.creation_date >= $1 THEN p.value * COALESCE(p.source_fee_rate, 0) / 1000000.0 END), 0)::float8 AS fee_24h,
-    COALESCE(SUM(p.value), 0)::float8 AS amt_72h,
-    COALESCE(SUM(p.value * COALESCE(p.source_fee_rate, 0) / 1000000.0), 0)::float8 AS fee_72h,
-    MAX(CASE WHEN p.value * 100 >= c.capacity * $2::float8 THEN p.creation_date END)::timestamptz AS last_big
+    COALESCE(SUM(CASE WHEN p.creation_date >= $2 THEN p.value END), 0)::float8 AS amt_72h,
+    COALESCE(SUM(CASE WHEN p.creation_date >= $2 THEN p.value * COALESCE(p.source_fee_rate, 0) / 1000000.0 END), 0)::float8 AS fee_72h,
+    COALESCE(SUM(p.value), 0)::float8 AS amt_30d,
+    COALESCE(SUM(p.value * COALESCE(p.source_fee_rate, 0) / 1000000.0), 0)::float8 AS fee_30d,
+    MAX(CASE WHEN p.value * 100 >= c.capacity * $3::float8 THEN p.creation_date END)::timestamptz AS last_big
 FROM gui_payments p JOIN gui_channels c ON c.chan_id = p.chan_out
 WHERE p.status = 2 AND p.rebal_chan IS NOT NULL
-  AND p.chan_out = ANY($3::varchar[]) AND p.creation_date >= $4
+  AND p.chan_out = ANY($4::varchar[]) AND p.creation_date >= $5
 GROUP BY p.chan_out
 `
 
 type NkBalanceOutFlowsParams struct {
 	Since24h pgtype.Timestamptz `json:"since24h"`
+	Since72h pgtype.Timestamptz `json:"since72h"`
 	BigPct   float64            `json:"big_pct"`
 	ChanIds  []string           `json:"chan_ids"`
 	Since    pgtype.Timestamptz `json:"since"`
@@ -198,16 +200,19 @@ type NkBalanceOutFlowsRow struct {
 	Fee24h  float64            `json:"fee_24h"`
 	Amt72h  float64            `json:"amt_72h"`
 	Fee72h  float64            `json:"fee_72h"`
+	Amt30d  float64            `json:"amt_30d"`
+	Fee30d  float64            `json:"fee_30d"`
 	LastBig pgtype.Timestamptz `json:"last_big"`
 }
 
-// Balance-outs of the given channels since @since: rebalances that took
-// liquidity from the channel, valued at the channel's fee rate then (the
+// Balance-outs of the given channels since @since (30 days): rebalances that
+// took liquidity from the channel, valued at the channel's fee rate then (the
 // liquidity is sold at that price like a forward), per window; last_big as in
 // NkForwardFlows.
 func (q *Queries) NkBalanceOutFlows(ctx context.Context, arg NkBalanceOutFlowsParams) ([]NkBalanceOutFlowsRow, error) {
 	rows, err := q.db.Query(ctx, nkBalanceOutFlows,
 		arg.Since24h,
+		arg.Since72h,
 		arg.BigPct,
 		arg.ChanIds,
 		arg.Since,
@@ -225,6 +230,8 @@ func (q *Queries) NkBalanceOutFlows(ctx context.Context, arg NkBalanceOutFlowsPa
 			&i.Fee24h,
 			&i.Amt72h,
 			&i.Fee72h,
+			&i.Amt30d,
+			&i.Fee30d,
 			&i.LastBig,
 		); err != nil {
 			return nil, err
@@ -243,17 +250,20 @@ SELECT f.chan_id_out AS chan_id,
     COALESCE(SUM(CASE WHEN f.forward_date >= $1 THEN f.fee + f.inbound_fee END), 0)::float8 AS fee_6h,
     COALESCE(SUM(CASE WHEN f.forward_date >= $2 THEN f.amt_out_msat / 1000.0 END), 0)::float8 AS amt_24h,
     COALESCE(SUM(CASE WHEN f.forward_date >= $2 THEN f.fee + f.inbound_fee END), 0)::float8 AS fee_24h,
-    COALESCE(SUM(f.amt_out_msat / 1000.0), 0)::float8 AS amt_72h,
-    COALESCE(SUM(f.fee + f.inbound_fee), 0)::float8 AS fee_72h,
-    MAX(CASE WHEN f.amt_out_msat / 10.0 >= c.capacity * $3::float8 THEN f.forward_date END)::timestamptz AS last_big
+    COALESCE(SUM(CASE WHEN f.forward_date >= $3 THEN f.amt_out_msat / 1000.0 END), 0)::float8 AS amt_72h,
+    COALESCE(SUM(CASE WHEN f.forward_date >= $3 THEN f.fee + f.inbound_fee END), 0)::float8 AS fee_72h,
+    COALESCE(SUM(f.amt_out_msat / 1000.0), 0)::float8 AS amt_30d,
+    COALESCE(SUM(f.fee + f.inbound_fee), 0)::float8 AS fee_30d,
+    MAX(CASE WHEN f.amt_out_msat / 10.0 >= c.capacity * $4::float8 THEN f.forward_date END)::timestamptz AS last_big
 FROM gui_forwards f JOIN gui_channels c ON c.chan_id = f.chan_id_out
-WHERE f.chan_id_out = ANY($4::varchar[]) AND f.forward_date >= $5
+WHERE f.chan_id_out = ANY($5::varchar[]) AND f.forward_date >= $6
 GROUP BY f.chan_id_out
 `
 
 type NkForwardFlowsParams struct {
 	Since6h  pgtype.Timestamptz `json:"since6h"`
 	Since24h pgtype.Timestamptz `json:"since24h"`
+	Since72h pgtype.Timestamptz `json:"since72h"`
 	BigPct   float64            `json:"big_pct"`
 	ChanIds  []string           `json:"chan_ids"`
 	Since    pgtype.Timestamptz `json:"since"`
@@ -267,16 +277,19 @@ type NkForwardFlowsRow struct {
 	Fee24h  float64            `json:"fee_24h"`
 	Amt72h  float64            `json:"amt_72h"`
 	Fee72h  float64            `json:"fee_72h"`
+	Amt30d  float64            `json:"amt_30d"`
+	Fee30d  float64            `json:"fee_30d"`
 	LastBig pgtype.Timestamptz `json:"last_big"`
 }
 
-// Forwards out of the given channels since @since (72 hours) with their gross
+// Forwards out of the given channels since @since (30 days) with their gross
 // fee (the inbound discount the incoming channel gave included), per window;
 // last_big is the latest forward of at least @big_pct percent of capacity.
 func (q *Queries) NkForwardFlows(ctx context.Context, arg NkForwardFlowsParams) ([]NkForwardFlowsRow, error) {
 	rows, err := q.db.Query(ctx, nkForwardFlows,
 		arg.Since6h,
 		arg.Since24h,
+		arg.Since72h,
 		arg.BigPct,
 		arg.ChanIds,
 		arg.Since,
@@ -296,6 +309,8 @@ func (q *Queries) NkForwardFlows(ctx context.Context, arg NkForwardFlowsParams) 
 			&i.Fee24h,
 			&i.Amt72h,
 			&i.Fee72h,
+			&i.Amt30d,
+			&i.Fee30d,
 			&i.LastBig,
 		); err != nil {
 			return nil, err

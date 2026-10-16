@@ -401,7 +401,7 @@ func getTargetInfo(ctx context.Context, q targetInfoQuerier, lastHopPubkey strin
 	fee, cost, berr := af.TargetBudget(ctx, q, af.TargetChannel{
 		ChanID: row.ChanID, LocalFeeRate: row.LocalFeeRate, ArMaxCost: row.ArMaxCost, ArInTarget: row.ArInTarget,
 		Capacity: row.Capacity, LocalBalance: row.LocalBalance, PendOut: row.PendingOutbound,
-		AfMode: row.AfMode, NkTarget: row.NkTarget, NkBudget: row.NkBudget,
+		AfMode: row.AfMode, NkTarget: row.NkTarget,
 	}, now)
 	if berr != nil {
 		rebalLog(fmt.Sprintf("Error reading the NK budget of %s: %s", row.ChanID, berr))

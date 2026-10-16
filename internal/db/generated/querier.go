@@ -203,12 +203,12 @@ type Querier interface {
 	MaxPaymentIndex(ctx context.Context) (int32, error)
 	// last_block = 0 if no rows else max(block_height)+1 (jobs.py:591).
 	NextOnchainBlockHeight(ctx context.Context) (int32, error)
-	// Balance-outs of the given channels since @since: rebalances that took
-	// liquidity from the channel, valued at the channel's fee rate then (the
+	// Balance-outs of the given channels since @since (30 days): rebalances that
+	// took liquidity from the channel, valued at the channel's fee rate then (the
 	// liquidity is sold at that price like a forward), per window; last_big as in
 	// NkForwardFlows.
 	NkBalanceOutFlows(ctx context.Context, arg NkBalanceOutFlowsParams) ([]NkBalanceOutFlowsRow, error)
-	// Forwards out of the given channels since @since (72 hours) with their gross
+	// Forwards out of the given channels since @since (30 days) with their gross
 	// fee (the inbound discount the incoming channel gave included), per window;
 	// last_big is the latest forward of at least @big_pct percent of capacity.
 	NkForwardFlows(ctx context.Context, arg NkForwardFlowsParams) ([]NkForwardFlowsRow, error)

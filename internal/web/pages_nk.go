@@ -78,7 +78,7 @@ func (s *Server) handleNk(w http.ResponseWriter, r *http.Request) {
 		}
 		row := map[string]any{
 			"chan_id": ch.ChanID, "short_chan_id": ch.ShortChanID, "alias": ch.Alias, "remote_pubkey": ch.RemotePubkey,
-			"nk": nk, "budget": ch.NkBudget, "target": target, "target_set": ch.NkTarget.Valid,
+			"nk": nk, "target": target, "target_set": ch.NkTarget.Valid,
 			"local_pct": int(math.Round(localPct)), "fee": ch.LocalFeeRate, "inbound": ch.LocalInboundFeeRate,
 			"dynamic_inbound": ch.InboundOffset != 0, "max_htlc": ch.LocalMaxHtlcMsat / 1000,
 			"cap": af.NkCap(f, p),
@@ -88,7 +88,7 @@ func (s *Server) handleNk(w http.ResponseWriter, r *http.Request) {
 		if lock := af.NkLockUntil(f, int(ch.LocalFeeRate), localPct, p); now.Before(lock) {
 			row["lock_until"] = nkTime(lock)
 		}
-		if nk && ch.NkBudget {
+		if nk {
 			row["budget_ppm"] = af.NkBudgetPpm(int(ch.LocalFeeRate), f, localPct, target, p)
 		}
 		if l, ok := lastBy[ch.ChanID]; ok {
@@ -109,7 +109,7 @@ func (s *Server) handleNk(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleNkPost saves per channel the fee mode (checked "nk": NK, else LNDg
-// auto-fees), the NK budget flag and the NK target (empty: 100 - ar_in_target).
+// auto-fees) and the NK target (empty: 100 - ar_in_target).
 func (s *Server) handleNkPost(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	f := &flasher{}
@@ -121,7 +121,7 @@ func (s *Server) handleNkPost(w http.ResponseWriter, r *http.Request) {
 		}
 		return m
 	}
-	nk, budget := set("nk"), set("budget")
+	nk := set("nk")
 	changed := 0
 	for _, id := range r.PostForm["channels"] {
 		mode := "lndg"
@@ -137,9 +137,9 @@ func (s *Server) handleNkPost(w http.ResponseWriter, r *http.Request) {
 			}
 			target = v
 		}
-		tag, err := s.db.Exec(ctx, `UPDATE gui_channels SET af_mode = $2, nk_budget = $3, nk_target = $4
-			WHERE chan_id = $1 AND (af_mode, nk_budget, nk_target) IS DISTINCT FROM ($2, $3, $4::integer)`,
-			id, mode, budget[id], target)
+		tag, err := s.db.Exec(ctx, `UPDATE gui_channels SET af_mode = $2, nk_target = $3
+			WHERE chan_id = $1 AND (af_mode, nk_target) IS DISTINCT FROM ($2, $3::integer)`,
+			id, mode, target)
 		if err != nil {
 			f.add("Error updating " + id + ": " + err.Error())
 			continue

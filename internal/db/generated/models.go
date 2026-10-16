@@ -118,7 +118,6 @@ type GuiChannel struct {
 	HtlcBoostChecked     pgtype.Timestamptz `json:"htlc_boost_checked"`
 	AfMode               string             `json:"af_mode"`
 	NkTarget             pgtype.Int4        `json:"nk_target"`
-	NkBudget             bool               `json:"nk_budget"`
 	NkLastChange         pgtype.Timestamptz `json:"nk_last_change"`
 	NkLastPublish        pgtype.Timestamptz `json:"nk_last_publish"`
 }

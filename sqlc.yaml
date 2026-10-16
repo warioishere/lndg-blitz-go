@@ -12,6 +12,7 @@ sql:
       - "internal/db/migrations/000006_route_combination.up.sql"
       - "internal/db/migrations/000007_market_policy.up.sql"
       - "internal/db/migrations/000008_nk_fee_mode.up.sql"
+      - "internal/db/migrations/000009_nk_budget_always.up.sql"
     queries: "internal/db/queries"
     gen:
       go:

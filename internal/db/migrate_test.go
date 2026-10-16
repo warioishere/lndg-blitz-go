@@ -121,7 +121,7 @@ func TestMigrateTakesOverDjangoDatabase(t *testing.T) {
 	var version int
 	var dirty bool
 	require.NoError(t, conn.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty))
-	assert.Equal(t, 8, version)
+	assert.Equal(t, 9, version)
 	assert.False(t, dirty)
 	var value string
 	require.NoError(t, conn.QueryRow(ctx, `SELECT value FROM gui_localsettings WHERE key='AR-Enabled'`).Scan(&value))
@@ -147,4 +147,7 @@ func TestMigrateTakesOverDjangoDatabase(t *testing.T) {
 	var hasMode bool
 	require.NoError(t, conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='gui_channels' AND column_name='af_mode')`).Scan(&hasMode))
 	assert.True(t, hasMode, "000008 applied")
+	var hasBudget bool
+	require.NoError(t, conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='gui_channels' AND column_name='nk_budget')`).Scan(&hasBudget))
+	assert.False(t, hasBudget, "000009 applied")
 }
