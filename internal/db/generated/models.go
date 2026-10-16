@@ -491,6 +491,16 @@ type RouteAttemptLog struct {
 	DurationMs     pgtype.Int4        `json:"duration_ms"`
 }
 
+type ScoutPath struct {
+	ID             int64              `json:"id"`
+	TargetPubkey   string             `json:"target_pubkey"`
+	OutgoingChanID string             `json:"outgoing_chan_id"`
+	Route          string             `json:"route"`
+	RouteHex       string             `json:"route_hex"`
+	ValueSat       int64              `json:"value_sat"`
+	LastVerified   pgtype.Timestamptz `json:"last_verified"`
+}
+
 type ShadowFeeLog struct {
 	ID                  int64              `json:"id"`
 	Timestamp           pgtype.Timestamptz `json:"timestamp"`

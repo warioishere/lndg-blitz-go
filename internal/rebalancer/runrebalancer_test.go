@@ -124,6 +124,9 @@ func (f *fakeRebalQ) ListRoutesForTarget(ctx context.Context, arg db.ListRoutesF
 func (f *fakeRebalQ) ListSentRouteAttempts(ctx context.Context, timestamp pgtype.Timestamptz) ([]db.ListSentRouteAttemptsRow, error) {
 	return nil, nil
 }
+func (f *fakeRebalQ) ListScoutPaths(ctx context.Context, since pgtype.Timestamptz) ([]db.ScoutPath, error) {
+	return nil, nil
+}
 func (f *fakeRebalQ) ListCombinableRoutes(ctx context.Context) ([]db.GuiRebalanceroute, error) {
 	return f.combinable, nil
 }

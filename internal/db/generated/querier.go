@@ -38,6 +38,7 @@ type Querier interface {
 	// ProbeLog.objects.order_by('-timestamp')[100:].delete() -- behalte die neuesten 100.
 	DeleteOldProbeLogs(ctx context.Context) error
 	DeleteOldRouteAttempts(ctx context.Context, timestamp pgtype.Timestamptz) error
+	DeleteOldScoutPaths(ctx context.Context, lastVerified pgtype.Timestamptz) error
 	DeleteOnchainZeroBlock(ctx context.Context) error
 	DeletePaymentHops(ctx context.Context, paymentHashID string) error
 	DeletePendingChannel(ctx context.Context, arg DeletePendingChannelParams) error
@@ -204,6 +205,8 @@ type Querier interface {
 	// Saved routes of a target from the given sources; a route that failed after
 	// cutoff is left out.
 	ListRoutesForTarget(ctx context.Context, arg ListRoutesForTargetParams) ([]GuiRebalanceroute, error)
+	// Paths the route scout verified since $1.
+	ListScoutPaths(ctx context.Context, lastVerified pgtype.Timestamptz) ([]ScoutPath, error)
 	// Attempts that went out since $1 with their path: the evidence for the
 	// success chance and the speed of each node pair.
 	ListSentRouteAttempts(ctx context.Context, timestamp pgtype.Timestamptz) ([]ListSentRouteAttemptsRow, error)
@@ -213,6 +216,8 @@ type Querier interface {
 	MarkRebalanceRouteFailure(ctx context.Context, arg MarkRebalanceRouteFailureParams) error
 	MaxInvoiceIndex(ctx context.Context) (int32, error)
 	MaxPaymentIndex(ctx context.Context) (int32, error)
+	// The median amount of the rebalances paid since $1 (0 without one).
+	MedianRebalanceValue(ctx context.Context, stop pgtype.Timestamptz) (float64, error)
 	// last_block = 0 if no rows else max(block_height)+1 (jobs.py:591).
 	NextOnchainBlockHeight(ctx context.Context) (int32, error)
 	// Balance-outs of the given channels since @since (30 days): rebalances that
@@ -283,6 +288,8 @@ type Querier interface {
 	UpsertLocalSetting(ctx context.Context, arg UpsertLocalSettingParams) error
 	// Spiegelt NodeCache.objects.update_or_create(pubkey, defaults={data, updated_at}).
 	UpsertNodeCache(ctx context.Context, arg UpsertNodeCacheParams) error
+	// A path the route scout verified; a path seen again gets the new route and time.
+	UpsertScoutPath(ctx context.Context, arg UpsertScoutPathParams) error
 }
 
 var _ Querier = (*Queries)(nil)

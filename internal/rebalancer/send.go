@@ -62,6 +62,20 @@ type htlcCounter struct {
 
 func newHtlcCounter() *htlcCounter { return &htlcCounter{counts: map[uint64]int{}} }
 
+// HtlcCounter counts pending HTLCs per channel for users outside the rebalancer.
+type HtlcCounter = htlcCounter
+
+// ListChannelsClient is the ListChannels subset HtlcCounter needs.
+type ListChannelsClient = listChannelsClient
+
+// NewHtlcCounter returns an empty HtlcCounter.
+func NewHtlcCounter() *HtlcCounter { return newHtlcCounter() }
+
+// Count returns the pending HTLCs of a channel (see htlcCounter.count).
+func (h *htlcCounter) Count(ctx context.Context, lc ListChannelsClient, chanID uint64, now time.Time) int {
+	return h.count(ctx, lc, chanID, now)
+}
+
 // count returns the pending HTLCs of a channel; 0 when LND cannot be asked.
 func (h *htlcCounter) count(ctx context.Context, lc listChannelsClient, chanID uint64, now time.Time) int {
 	h.mu.Lock()

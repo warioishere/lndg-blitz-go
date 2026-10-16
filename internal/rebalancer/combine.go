@@ -11,17 +11,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
+	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 )
 
 // Combined routes: two saved routes that pass through the same node X give a
 // new route made of the first one up to X and the second one from X on. The
 // part up to X comes from any saved route (to any target) that worked up to X:
 // paid, verified by the prober, or failed only after X. The part from X on
-// comes from a paid or verified route to the target. Parts come from routes
-// with evidence within partWindow; a combination needs a success chance of at
-// least minRouteProb (stats.go). The index is rebuilt every comboRefresh. The
-// fee of a combination is estimated from the fees stored with its parts;
-// BuildRoute prices it live before it is sent.
+// comes from a paid or verified route to the target. A path the route scout
+// verified to a node X of the network is a part up to X as well (any node of
+// it, X included, can be the joint). Parts come from routes with evidence
+// within partWindow; a combination needs a success chance of at least
+// minRouteProb (stats.go). The index is rebuilt every comboRefresh. The fee of
+// a combination is estimated from the fees stored with its parts; BuildRoute
+// prices it live before it is sent.
 const (
 	comboRefresh   = 30 * time.Minute
 	partWindow     = 7 * 24 * time.Hour
@@ -35,6 +38,7 @@ const (
 
 type comboQuerier interface {
 	ListCombinableRoutes(ctx context.Context) ([]db.GuiRebalanceroute, error)
+	ListScoutPaths(ctx context.Context, lastVerified pgtype.Timestamptz) ([]db.ScoutPath, error)
 }
 
 // pathEdge is a directed edge between two route nodes.
@@ -43,7 +47,8 @@ type pathEdge struct{ from, to string }
 // partRoute is a saved route split into what the combination needs: nodes are
 // the hop pubkeys (the last one is our node), edgePpm[i] the stored fee of the
 // edge nodes[i] -> nodes[i+1], good the number of leading nodes that were
-// reached in the latest attempt.
+// reached in the latest attempt. A scout part ends at a node of the network
+// instead of our node; it is only ever a head.
 type partRoute struct {
 	id       int64
 	target   string
@@ -52,6 +57,7 @@ type partRoute struct {
 	edgePpm  []float64
 	good     int
 	evidence time.Time
+	scout    bool
 }
 
 // comboRoute is a combined route: nodes end with our node.
@@ -84,13 +90,18 @@ func (c *comboIndex) refresh(ctx context.Context, q comboQuerier, prob func(path
 		rebalLog(fmt.Sprintf("Error combining routes: %s", err))
 		return
 	}
-	c.byTarget = combineRoutes(rows, prob, now)
+	scouts, err := q.ListScoutPaths(ctx, pgtype.Timestamptz{Time: now.Add(-partWindow), Valid: true})
+	if err != nil {
+		rebalLog(fmt.Sprintf("Error combining routes: %s", err))
+		return
+	}
+	c.byTarget = combineRoutes(rows, scouts, prob, now)
 	c.built = now
 	n := 0
 	for _, rs := range c.byTarget {
 		n += len(rs)
 	}
-	rebalLog(fmt.Sprintf("Combined %d routes for %d targets from %d saved routes", n, len(c.byTarget), len(rows)))
+	rebalLog(fmt.Sprintf("Combined %d routes for %d targets from %d saved routes and %d scout paths", n, len(c.byTarget), len(rows), len(scouts)))
 }
 
 // candidates returns the combined routes of a target over the given sources
@@ -126,24 +137,42 @@ func (c *comboIndex) candidates(target string, chanIDs []string, budget func(str
 	return out
 }
 
+// routeNodes returns the hop pubkeys of a route and the stored fee ppm of each
+// edge between them.
+func routeNodes(hops []*lnrpc.Hop) (nodes []string, edgePpm []float64) {
+	for i, h := range hops {
+		nodes = append(nodes, h.GetPubKey())
+		if i < len(hops)-1 {
+			ppm := 0.0
+			if amt := h.GetAmtToForwardMsat(); amt > 0 {
+				ppm = float64(h.GetFeeMsat()) * 1e6 / float64(amt)
+			}
+			edgePpm = append(edgePpm, ppm)
+		}
+	}
+	return nodes, edgePpm
+}
+
+// splitScout parses a scout path; ok is false when it holds nothing usable.
+func splitScout(s db.ScoutPath) (partRoute, bool) {
+	parsed, err := parseRouteHex(s.RouteHex)
+	if err != nil || len(parsed.GetHops()) < 2 {
+		return partRoute{}, false
+	}
+	p := partRoute{target: s.TargetPubkey, outChan: s.OutgoingChanID, evidence: tsTime(s.LastVerified), scout: true}
+	p.nodes, p.edgePpm = routeNodes(parsed.GetHops())
+	p.good = len(p.nodes)
+	return p, true
+}
+
 // splitRoute parses a saved route; ok is false when it holds nothing usable.
 func splitRoute(r db.GuiRebalanceroute, now time.Time) (partRoute, bool) {
 	parsed, err := parseRouteHex(r.RouteHex.String)
 	if err != nil || len(parsed.GetHops()) < 2 {
 		return partRoute{}, false
 	}
-	hops := parsed.GetHops()
 	p := partRoute{id: r.ID, target: r.TargetPubkey, outChan: r.OutgoingChanID}
-	for i, h := range hops {
-		p.nodes = append(p.nodes, h.GetPubKey())
-		if i < len(hops)-1 {
-			ppm := 0.0
-			if amt := h.GetAmtToForwardMsat(); amt > 0 {
-				ppm = float64(h.GetFeeMsat()) * 1e6 / float64(amt)
-			}
-			p.edgePpm = append(p.edgePpm, ppm)
-		}
-	}
+	p.nodes, p.edgePpm = routeNodes(parsed.GetHops())
 	list, evidence := classifyRoute(r, now)
 	if evidence.IsZero() || now.Sub(evidence) > partWindow {
 		return partRoute{}, false
@@ -162,10 +191,10 @@ func splitRoute(r db.GuiRebalanceroute, now time.Time) (partRoute, bool) {
 	return p, true
 }
 
-// combineRoutes builds the combined routes per target from saved routes,
-// at most comboPerTarget per target, cheapest estimated fee first. prob is the
-// success chance of a path.
-func combineRoutes(rows []db.GuiRebalanceroute, prob func(path string) float64, now time.Time) map[string][]comboRoute {
+// combineRoutes builds the combined routes per target from saved routes and
+// scout paths, at most comboPerTarget per target, cheapest estimated fee first.
+// prob is the success chance of a path.
+func combineRoutes(rows []db.GuiRebalanceroute, scouts []db.ScoutPath, prob func(path string) float64, now time.Time) map[string][]comboRoute {
 	var parts []partRoute
 	existing := map[string]bool{} // target|outChan|path of every saved route
 	for _, r := range rows {
@@ -176,6 +205,11 @@ func combineRoutes(rows []db.GuiRebalanceroute, prob func(path string) float64, 
 		}
 		parts = append(parts, p)
 	}
+	for _, s := range scouts {
+		if p, ok := splitScout(s); ok {
+			parts = append(parts, p)
+		}
+	}
 
 	// Tails: the part of a fully working route to its target from node X on.
 	type tail struct {
@@ -185,7 +219,7 @@ func combineRoutes(rows []db.GuiRebalanceroute, prob func(path string) float64, 
 	tails := map[string]map[string][]tail{} // target -> X -> tails
 	for i := range parts {
 		p := &parts[i]
-		if p.good < len(p.nodes) {
+		if p.scout || p.good < len(p.nodes) {
 			continue
 		}
 		for x := 0; x < len(p.nodes)-1; x++ {
@@ -200,12 +234,17 @@ func combineRoutes(rows []db.GuiRebalanceroute, prob func(path string) float64, 
 	seen := map[string]bool{}
 	for i := range parts {
 		head := &parts[i]
-		// Heads end at a node the route reached and that is not ours.
-		for x := 0; x < head.good && x < len(head.nodes)-1; x++ {
+		// Heads end at a node the route reached and that is not ours (a scout
+		// path does not end at our node).
+		last := len(head.nodes) - 1
+		if head.scout {
+			last = len(head.nodes)
+		}
+		for x := 0; x < head.good && x < last; x++ {
 			joint := head.nodes[x]
 			for target, byNode := range tails {
 				for _, t := range byNode[joint] {
-					if t.part.id == head.id {
+					if !head.scout && t.part.id == head.id {
 						continue
 					}
 					nodes := make([]string, 0, x+len(t.part.nodes)-t.from)

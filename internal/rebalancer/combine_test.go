@@ -1,6 +1,7 @@
 package rebalancer
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +65,7 @@ func comboRows() []db.GuiRebalanceroute {
 func likely(string) float64 { return 0.5 }
 
 func TestCombineRoutes(t *testing.T) {
-	got := combineRoutes(comboRows(), likely, savedNow)
+	got := combineRoutes(comboRows(), nil, likely, savedNow)
 
 	// T1: heads up to X from route 2 and from the working part of route 3, tail from route 1
 	assert.Equal(t, []string{"2:S2-X-T1-me", "3:S3-Y-X-T1-me"}, comboPaths(got["T1"]))
@@ -92,7 +93,7 @@ func TestCombineRoutesSkipsUnlikelyAndSavedRoutes(t *testing.T) {
 		}
 		return 0.5
 	}
-	got := combineRoutes(rows, prob, savedNow)
+	got := combineRoutes(rows, nil, prob, savedNow)
 
 	assert.Empty(t, got["T1"])
 	assert.Equal(t, []string{"4:S4-X-T2-me", "3:S3-Y-X-T2-me"}, comboPaths(got["T2"]))
@@ -100,7 +101,7 @@ func TestCombineRoutesSkipsUnlikelyAndSavedRoutes(t *testing.T) {
 
 func TestComboCandidates(t *testing.T) {
 	c := newComboIndex()
-	c.byTarget = combineRoutes(comboRows(), likely, savedNow)
+	c.byTarget = combineRoutes(comboRows(), nil, likely, savedNow)
 	budget := func(chanID string) int {
 		if chanID == "3" {
 			return 300 // 370 > 300 * comboSlack
@@ -120,4 +121,37 @@ func TestComboCandidates(t *testing.T) {
 	assert.True(t, got[0].carries)
 
 	assert.Empty(t, c.candidates("T1", []string{"9"}, budget), "only the given sources")
+}
+
+// A path the scout verified to node X is a head up to any of its nodes, X
+// included: S9 -> X plus the working part of route 1 from X on gives a route to T1.
+func TestCombineRoutesWithScoutHead(t *testing.T) {
+	r := &lnrpc.Route{Hops: []*lnrpc.Hop{{PubKey: "S9", AmtToForwardMsat: 1_000_000, FeeMsat: 7}, {PubKey: "X", AmtToForwardMsat: 1_000_000}}}
+	scout := db.ScoutPath{TargetPubkey: "X", OutgoingChanID: "9", Route: "S9-X", RouteHex: routeHexOf(r), LastVerified: ts(savedNow.Add(-time.Hour))}
+	rows := []db.GuiRebalanceroute{paidAgo(savedRoute(1, "T1", "1", []string{"S1", "X", "T1", "me"}, []int64{100, 300, 50}), 1)}
+	got := combineRoutes(rows, []db.ScoutPath{scout}, likely, savedNow)
+	assert.Equal(t, []string{"9:S9-X-T1-me"}, comboPaths(got["T1"]))
+	assert.InDelta(t, 357, got["T1"][0].estPpm, 1e-9) // 7 + 300 + 50
+	assert.Empty(t, got["X"], "a scout path is no tail")
+
+	// a scout path older than partWindow is no part
+	scout.LastVerified = ts(savedNow.Add(-8 * 24 * time.Hour))
+	c := newComboIndex()
+	q := &fakeComboQ{rows: rows, scouts: []db.ScoutPath{scout}}
+	c.refresh(context.Background(), q, likely, savedNow)
+	assert.True(t, q.scoutSince.Time.Equal(savedNow.Add(-partWindow)))
+}
+
+type fakeComboQ struct {
+	rows       []db.GuiRebalanceroute
+	scouts     []db.ScoutPath
+	scoutSince pgtype.Timestamptz
+}
+
+func (f *fakeComboQ) ListCombinableRoutes(ctx context.Context) ([]db.GuiRebalanceroute, error) {
+	return f.rows, nil
+}
+func (f *fakeComboQ) ListScoutPaths(ctx context.Context, since pgtype.Timestamptz) ([]db.ScoutPath, error) {
+	f.scoutSince = since
+	return f.scouts, nil
 }

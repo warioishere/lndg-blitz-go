@@ -78,6 +78,38 @@ func newRouteStats() *routeStats {
 	return &routeStats{pairs: map[pathEdge]*pairStat{}, banned: map[pathEdge]time.Time{}}
 }
 
+// RouteStats are the route statistics for users outside the rebalancer (the
+// route scout), built from the same attempts.
+type RouteStats struct{ s *routeStats }
+
+// StatsQuerier is the DB access RouteStats.Refresh needs.
+type StatsQuerier = statsQuerier
+
+// NewRouteStats returns empty route statistics.
+func NewRouteStats() RouteStats { return RouteStats{newRouteStats()} }
+
+// Refresh rebuilds the statistics when they are older than statsRefresh.
+func (r RouteStats) Refresh(ctx context.Context, q StatsQuerier, now time.Time) {
+	r.s.refresh(ctx, q, now)
+}
+
+// Observe adds one sent attempt at once (see routeStats.observe).
+func (r RouteStats) Observe(path, outcome string, hop, durationMs int, at time.Time) {
+	r.s.observe(path, outcome, hop, durationMs, at)
+}
+
+// RouteProb returns the success chance of a path (hop pubkeys joined by "-").
+func (r RouteStats) RouteProb(path string) float64 { return r.s.routeProb(path) }
+
+// BannedPairs returns the slow node pairs banned at now as (from, to) pubkeys.
+func (r RouteStats) BannedPairs(now time.Time) [][2]string {
+	var out [][2]string
+	for _, e := range r.s.bannedPairs(now) {
+		out = append(out, [2]string{e.from, e.to})
+	}
+	return out
+}
+
 // latencyBanFactor reads AR-LatencyBanFactor (default 2, 0 turns the bans off).
 func latencyBanFactor(ctx context.Context, q settingsQuerier) float64 {
 	v, err := getLocalSettingStr(ctx, q, "AR-LatencyBanFactor", "2")

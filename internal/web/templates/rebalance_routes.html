@@ -210,6 +210,40 @@
             <input type="hidden" name="key" value="QR-PathsPerSource">
             <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
           </form>
+          <h4 class="w3-margin-top" title="Probes paths from this node to the nodes of the network with many channels (random payment hash, no payment settles). The success chances of the node pairs go to the route statistics, verified paths are parts for combined routes.">Route Scout</h4>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            <label for="scout_enabled"><b>Scout:</b></label>
+            <select class="w3-select w3-border" id="scout_enabled" name="value">
+              <option value="1" {{if .scout_enabled}}selected{{end}}>On</option>
+              <option value="0" {{if not .scout_enabled}}selected{{end}}>Off</option>
+            </select>
+            <input type="hidden" name="key" value="QR-ScoutEnabled">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            <label for="scout_per_hour" title="At most this many scout probes go out per hour"><b>Probes per hour</b>:</label>
+            <input class="w3-input w3-border" id="scout_per_hour" name="value" type="number" min="1" value="{{.scout_per_hour}}">
+            <input type="hidden" name="key" value="QR-ScoutPerHour">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            <label for="scout_paths" title="A node is done while this many verified paths to it have a success chance of at least 50%"><b>Paths per node</b>:</label>
+            <input class="w3-input w3-border" id="scout_paths" name="value" type="number" min="1" value="{{.scout_paths}}">
+            <input type="hidden" name="key" value="QR-ScoutPaths">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            <label for="scout_tries" title="At most this many probes to one node in one pass"><b>Probes per node and pass</b>:</label>
+            <input class="w3-input w3-border" id="scout_tries" name="value" type="number" min="1" value="{{.scout_tries}}">
+            <input type="hidden" name="key" value="QR-ScoutTries">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            <label for="scout_min_chans" title="Only nodes with at least this many public channels are scouted"><b>Min channels of a node</b>:</label>
+            <input class="w3-input w3-border" id="scout_min_chans" name="value" type="number" min="1" value="{{.scout_min_chans}}">
+            <input type="hidden" name="key" value="QR-ScoutMinChannels">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
         </div>
       </div>
     </div>

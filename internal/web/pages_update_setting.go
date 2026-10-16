@@ -348,6 +348,21 @@ func (s *Server) handleUpdateSetting(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.add("Max probes per target updated to: " + strconv.Itoa(target))
+	case "QR-ScoutEnabled":
+		norm := onOff(value == "1", "1", "0")
+		if !setLS("QR-ScoutEnabled", norm) {
+			return
+		}
+		f.add("Route scout " + onOff(norm == "1", "enabled", "disabled"))
+	case "QR-ScoutPerHour", "QR-ScoutPaths", "QR-ScoutTries", "QR-ScoutMinChannels":
+		v, ok := intVal()
+		if !ok {
+			return
+		}
+		if !setLS(key, strconv.Itoa(v)) {
+			return
+		}
+		f.add(key + " updated to: " + strconv.Itoa(v))
 	case "QR-PathsPerSource":
 		target, ok := intVal()
 		if !ok {

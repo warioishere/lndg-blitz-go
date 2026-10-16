@@ -96,6 +96,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("connecting to lnd: %w", err)
 	}
+	scoutConn, err := lnd.Connect()
+	if err != nil {
+		return fmt.Errorf("connecting to lnd: %w", err)
+	}
 
 	q := db.New(pool)
 	sleep := func(d time.Duration) {
@@ -123,6 +127,11 @@ func run() error {
 	// route prober for the rebalancer (own loop: a run takes minutes).
 	start(func() {
 		jobs.ProbeLoop(ctx, q, func() (*grpc.ClientConn, error) { return probeConn, nil }, sleep)
+	})
+
+	// route scout: probes paths to the big nodes of the network (own loop: a pass takes hours).
+	start(func() {
+		jobs.ScoutLoop(ctx, q, func() (*grpc.ClientConn, error) { return scoutConn, nil }, sleep)
 	})
 
 	// rebalancer.
