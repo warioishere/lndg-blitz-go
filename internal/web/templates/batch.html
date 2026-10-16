@@ -3,20 +3,19 @@
 <script>
   const channelsList = GET('channels', {data: {is_open:true} })
   async function check_pubkey(input, num_line){
-    if(input.value.trim().length != '66') {
+    const pubkey = input.value.trim().split('@')[0]
+    if(pubkey.length != 66) {
         byId("pubkey_tag_"+num_line).innerHTML = '❌'
         byId("pubkey_tag_"+num_line).title = 'Invalid pubkey.'
         return
     }
     for (ch of (await channelsList).results){
-      if (ch.remote_pubkey == input.value.trim()){
+      if (ch.remote_pubkey == pubkey){
         byId("pubkey_tag_"+num_line).innerHTML = '⚠️'
         byId("pubkey_tag_"+num_line).title = 'You already have a channel with this peer.'
         return
       }
     }
-    console.log(input.value.trim().length)
-    console.log(input.value.trim().length != 66)
     byId("pubkey_tag_"+num_line).innerHTML = ''
   }
   function update_total(input){
@@ -24,6 +23,11 @@
     document.getElementById("remaining").innerHTML = "Remaining Onchain Balance: " + ({{.balances.total_balance}} - total).toLocaleString()
     document.getElementById("total").innerHTML = "Total: " + total.toLocaleString()
   }
+  // entries kept after a failed open: show their checks and the total
+  document.addEventListener('DOMContentLoaded', () => {
+    update_total()
+    document.querySelectorAll('input[id^="pubkey"]').forEach((el, i) => { if (el.value) check_pubkey(el, i + 1) })
+  })
 </script>
 <div class="w3-container w3-padding-small">
   <h2>Batch Open Up To 10 Channels</h2>
@@ -35,18 +39,18 @@
         <th>Pubkey</th>
         <th>Amount (sats)</th>
       </tr>
-      {{range $num := .iterator}}
+      {{range $row := .rows}}
       <tr>
-        <td>{{$num}}</td>
-        <td id="pubkey_tag_{{$num}}"></td>
-        <td><input style="text-align:center;min-width:800px" oninput="check_pubkey(this, {{$num}})" id="pubkey{{$num}}" name="pubkey{{$num}}" value=""></td>
-        <td><input style="text-align:center" oninput="update_total(this)" id="amt{{$num}}" type="number" min="0" step="1" name="amt{{$num}}" value=""></td>
+        <td>{{$row.num}}</td>
+        <td id="pubkey_tag_{{$row.num}}"></td>
+        <td><input style="text-align:center;min-width:800px" oninput="check_pubkey(this, {{$row.num}})" id="pubkey{{$row.num}}" name="pubkey{{$row.num}}" value="{{$row.pubkey}}"></td>
+        <td><input style="text-align:center" oninput="update_total(this)" id="amt{{$row.num}}" type="number" min="0" step="1" name="amt{{$row.num}}" value="{{$row.amt}}"></td>
       </tr>
       {{end}}
       <tr><td>#</td><td></td><td id="remaining" style="min-width:800px">Remaining Onchain Balance: {{.balances.total_balance | intcomma}}</td><td id="total">Total: 0</td></tr>
     </table>
     <ul>
-      Opening Fee Rate (sats/vbyte): <input style="text-align:center" id="fee_rate" type="number" min="1" name="fee_rate" value="">
+      Opening Fee Rate (sats/vbyte): <input style="text-align:center" id="fee_rate" type="number" min="1" name="fee_rate" value="{{.fee_rate}}">
       <input type="submit" value="OK">
     </ul>
   </form>

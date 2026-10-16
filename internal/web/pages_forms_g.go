@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	lnd "github.com/warioishere/lndg-blitz-go/internal/lnd"
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
@@ -34,72 +35,92 @@ func (s *Server) openPeer(ctx context.Context, pubkey string) bool {
 	return true
 }
 
-// handleBatchOpen connects to up to 10 peers and opens channels via BatchOpenChannel.
-// Redirects to /batch.
+// batchPubkey normalises an entered pubkey: surrounding whitespace dropped and
+// an address after "@" (pubkey@host:port) cut off. ok is false unless 66 hex
+// characters remain.
+func batchPubkey(raw string) (pubkey string, ok bool) {
+	pubkey, _, _ = strings.Cut(strings.TrimSpace(raw), "@")
+	if len(pubkey) != 66 {
+		return pubkey, false
+	}
+	_, err := hex.DecodeString(pubkey)
+	return pubkey, err == nil
+}
+
+// handleBatchOpen connects to up to 10 peers and opens channels via
+// BatchOpenChannel. On success it redirects to /batch; on any error it renders
+// the form again with the entries kept and the reasons listed.
 func (s *Server) handleBatchOpen(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	f := &flasher{}
 	_ = r.ParseForm()
 
-	feeRate, err := strconv.ParseInt(r.PostForm.Get("fee_rate"), 10, 64)
-	if err != nil { // fee_rate IntegerField required
-		f.add(invalidRequest)
-		s.redirect(w, r, "/batch", f)
-		return
+	lines := make([]batchLine, batchLines)
+	for i := range lines {
+		n := strconv.Itoa(i + 1)
+		lines[i] = batchLine{pubkey: strings.TrimSpace(r.PostForm.Get("pubkey" + n)), amt: strings.TrimSpace(r.PostForm.Get("amt" + n))}
 	}
-	// amt_i must parse when present (form validation).
+	feeRaw := strings.TrimSpace(r.PostForm.Get("fee_rate"))
+	var msgs []string
+	fail := func() { s.renderBatch(w, r, lines, feeRaw, msgs) }
+
+	feeRate, err := strconv.ParseInt(feeRaw, 10, 64)
+	if err != nil || feeRate < 1 {
+		msgs = append(msgs, "Opening fee rate missing or invalid.")
+	}
 	type pair struct {
 		pubkey string
 		amt    int64
 	}
-	var openList []pair
-	failed := false
-	for i := 1; i <= 10; i++ {
-		pubkey := r.PostForm.Get("pubkey" + strconv.Itoa(i))
-		amtRaw := r.PostForm.Get("amt" + strconv.Itoa(i))
-		var amt int64
-		if amtRaw != "" {
-			v, perr := strconv.ParseInt(amtRaw, 10, 64)
-			if perr != nil {
-				f.add(invalidRequest)
-				s.redirect(w, r, "/batch", f)
-				return
-			}
-			amt = v
+	var candidates []pair
+	var lineOf []int
+	for i, l := range lines {
+		if l.pubkey == "" && l.amt == "" {
+			continue
 		}
-		if pubkey != "" && amt != 0 && len(pubkey) == 66 {
-			if s.openPeer(ctx, pubkey) {
-				openList = append(openList, pair{pubkey, amt})
-			} else {
-				failed = true
-				f.add(fmt.Sprintf("Unable to connect with peer %d!", i))
-			}
+		n := i + 1
+		pubkey, ok := batchPubkey(l.pubkey)
+		amt, aerr := strconv.ParseInt(l.amt, 10, 64)
+		switch {
+		case l.pubkey == "":
+			msgs = append(msgs, fmt.Sprintf("Line %d: pubkey missing.", n))
+		case !ok:
+			msgs = append(msgs, fmt.Sprintf("Line %d: the pubkey must be 66 hex characters (got %d).", n, len(pubkey)))
+		case aerr != nil || amt <= 0:
+			msgs = append(msgs, fmt.Sprintf("Line %d: amount missing or invalid.", n))
+		default:
+			candidates = append(candidates, pair{pubkey, amt})
+			lineOf = append(lineOf, n)
 		}
 	}
-	if failed {
-		s.redirect(w, r, "/batch", f)
+	if len(msgs) > 0 {
+		fail()
 		return
 	}
-	if len(openList) == 0 {
-		f.add("No channels specified!")
-		s.redirect(w, r, "/batch", f)
+	if len(candidates) == 0 {
+		msgs = append(msgs, "No channels specified!")
+		fail()
 		return
 	}
-	channels := make([]*lnrpc.BatchOpenChannel, 0, len(openList))
-	for _, p := range openList {
-		pk, derr := hex.DecodeString(p.pubkey)
-		if derr != nil {
-			f.add("Batch open failed! Error: " + derr.Error())
-			s.redirect(w, r, "/batch", f)
-			return
+	for k, p := range candidates {
+		if !s.openPeer(ctx, p.pubkey) {
+			msgs = append(msgs, fmt.Sprintf("Unable to connect with peer %d!", lineOf[k]))
 		}
+	}
+	if len(msgs) > 0 {
+		fail()
+		return
+	}
+	channels := make([]*lnrpc.BatchOpenChannel, 0, len(candidates))
+	for _, p := range candidates {
+		pk, _ := hex.DecodeString(p.pubkey)
 		channels = append(channels, &lnrpc.BatchOpenChannel{NodePubkey: pk, LocalFundingAmount: p.amt})
 	}
 	if _, err := s.lnd.Lightning.BatchOpenChannel(ctx, &lnrpc.BatchOpenChannelRequest{Channels: channels, SatPerVbyte: feeRate}); err != nil {
-		f.add("Batch open failed! Error: " + grpcErrorMsg(err))
-		s.redirect(w, r, "/batch", f)
+		msgs = append(msgs, "Batch open failed! Error: "+grpcErrorMsg(err))
+		fail()
 		return
 	}
+	f := &flasher{}
 	f.add("Batch opened channels!")
 	s.redirect(w, r, "/batch", f)
 }

@@ -31,22 +31,43 @@ func grpcCodeString(err error) string {
 	return "StatusCode." + strings.ToUpper(b.String())
 }
 
+// batchLines is the number of channel lines on the Batch-Open form.
+const batchLines = 10
+
 // handleBatch renders the Batch-Open form for up to 10 channels plus the current
 // on-chain balance. DB/LND errors return 500.
 func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
+	s.renderBatch(w, r, make([]batchLine, batchLines), "", nil)
+}
+
+// batchLine is one channel line of the Batch-Open form as entered.
+type batchLine struct{ pubkey, amt string }
+
+// renderBatch renders the Batch-Open form filled with lines and feeRate; msgs,
+// when set, are shown instead of flash messages (a failed open keeps the entries).
+func (s *Server) renderBatch(w http.ResponseWriter, r *http.Request, lines []batchLine, feeRate string, msgs []string) {
 	balances, err := s.lnd.Lightning.WalletBalance(r.Context(), &lnrpc.WalletBalanceRequest{})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	iterator := make([]int, 10)
-	for i := range iterator {
-		iterator[i] = i + 1
+	rows := make([]map[string]any, len(lines))
+	for i, l := range lines {
+		rows[i] = map[string]any{"num": i + 1, "pubkey": l.pubkey, "amt": l.amt}
 	}
-	s.renderTemplate(w, r, "batch.html", map[string]any{
-		"iterator": iterator,
+	ctx := map[string]any{
+		"rows":     rows,
+		"fee_rate": feeRate,
 		"balances": map[string]any{"total_balance": balances.GetTotalBalance()},
-	})
+	}
+	if msgs != nil {
+		m := make([]map[string]any, len(msgs))
+		for i, msg := range msgs {
+			m[i] = map[string]any{"message": msg}
+		}
+		ctx["messages"] = m
+	}
+	s.renderTemplate(w, r, "batch.html", ctx)
 }
 
 // handlePendingHtlcs renders pending in/outgoing HTLCs with blocks_til_expiration

@@ -43,12 +43,15 @@ func TestBatchOpenPostIntegration(t *testing.T) {
 
 	insertRow(t, pool, "gui_peers", map[string]any{"pubkey": pubkey66, "connected": true})
 
-	var gotChannels int
+	var gotChannels, calls int
 	var gotFee int64
 	fake := &fakeLightning{batchOpenFn: func(_ context.Context, in *lnrpc.BatchOpenChannelRequest, _ ...grpc.CallOption) (*lnrpc.BatchOpenChannelResponse, error) {
+		calls++
 		gotChannels = len(in.GetChannels())
 		gotFee = in.GetSatPerVbyte()
 		return &lnrpc.BatchOpenChannelResponse{}, nil
+	}, walletBalanceFn: func(context.Context, *lnrpc.WalletBalanceRequest, ...grpc.CallOption) (*lnrpc.WalletBalanceResponse, error) {
+		return &lnrpc.WalletBalanceResponse{TotalBalance: 10_000_000}, nil
 	}}
 	srv := NewServer(&config.Settings{}, pool, WithLND(&LND{Lightning: fake}))
 	ts := httptest.NewServer(srv.Handler())
@@ -64,10 +67,37 @@ func TestBatchOpenPostIntegration(t *testing.T) {
 	require.Equal(t, 1, gotChannels)
 	require.EqualValues(t, 5, gotFee)
 
-	// No channels specified.
+	// A pasted pubkey with whitespace or an address after @ opens too.
+	resp, err = client.PostForm(ts.URL+"/batchopen/", url.Values{
+		"pubkey1": {" " + pubkey66 + "@1.2.3.4:9735\n"}, "amt1": {" 2000000 "}, "fee_rate": {"5"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusFound, resp.StatusCode)
+	require.Contains(t, flashCookieMsg(t, ts, client, resp), "Batch opened channels!")
+
+	// Errors render the form again with the entries kept.
+	body := func(resp *http.Response) string {
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
 	resp, err = client.PostForm(ts.URL+"/batchopen/", url.Values{"fee_rate": {"5"}})
 	require.NoError(t, err)
-	require.Contains(t, flashCookieMsg(t, ts, client, resp), "No channels specified!")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Contains(t, body(resp), "No channels specified!")
+
+	resp, err = client.PostForm(ts.URL+"/batchopen/", url.Values{
+		"pubkey1": {pubkey66}, "amt1": {"1000000"}, "pubkey2": {"02abc"}, "amt2": {"500000"}, "fee_rate": {"7"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	html := body(resp)
+	require.Contains(t, html, "Line 2: the pubkey must be 66 hex characters (got 5).")
+	require.Contains(t, html, `value="`+pubkey66+`"`)
+	require.Contains(t, html, `value="02abc"`)
+	require.Contains(t, html, `value="500000"`)
+	require.Contains(t, html, `name="fee_rate" value="7"`)
+	require.Equal(t, 2, calls, "no batch open on errors")
 }
 
 func TestAdvancedRebalancingPostIntegration(t *testing.T) {
