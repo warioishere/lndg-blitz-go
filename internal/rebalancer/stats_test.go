@@ -2,6 +2,7 @@ package rebalancer
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
 
@@ -111,6 +112,25 @@ func TestRouteStatsRefresh(t *testing.T) {
 	assert.Equal(t, 1, q.calls, "not rebuilt within statsRefresh")
 	st.refresh(context.Background(), q, savedNow.Add(statsRefresh))
 	assert.Equal(t, 2, q.calls)
+}
+
+func TestPairReport(t *testing.T) {
+	q := &fakeStatsQ{rows: []db.ListSentRouteAttemptsRow{
+		{Timestamp: ts(savedNow), Route: pgtype.Text{String: "a-b-me", Valid: true}, Outcome: "success",
+			DurationMs: pgtype.Int4{Int32: 3000, Valid: true}},
+		{Timestamp: ts(savedNow), Route: pgtype.Text{String: "a-b-me", Valid: true}, Outcome: "failed",
+			FailureHop: pgtype.Int4{Int32: 2, Valid: true}},
+	}}
+	pairs, avg, globalMs, err := PairReport(context.Background(), q, savedNow)
+	require.NoError(t, err)
+	require.Len(t, pairs, 2)
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].From < pairs[j].From })
+	assert.InDelta(t, 0.75, avg, 1e-9, "3 of 4 pair crossings")
+	assert.InDelta(t, 1000, globalMs, 1e-9)
+	assert.Equal(t, PairStat{From: "a", To: "b", Attempts: 2, Successes: 2, Prob: (2 + 0.75) / 3,
+		HopP90Ms: 1000, Samples: 1, LastUsed: savedNow}, pairs[0])
+	assert.Equal(t, 1, pairs[1].Successes)
+	assert.InDelta(t, (1+0.75)/3, pairs[1].Prob, 1e-9)
 }
 
 func TestP90(t *testing.T) {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -19,8 +18,7 @@ import (
 // prober-verified amount is below half the rebalance value (and that was not
 // paid since) is left out. A route at sureRouteProb or more is always tried, a
 // weaker one with the chance prob / sureRouteProb, so it is tried less often
-// but not never. The chosen routes go by falling chance, then fee, then node
-// reputation. Routes LND finds per source come after them.
+// but not never. The chosen routes go by falling chance, then fee. Routes LND finds per source come after them.
 //
 // list records where a route came from:
 //
@@ -45,7 +43,6 @@ const (
 // savedRoutesQuerier bundles the DB selects required by getSavedRoutes.
 type savedRoutesQuerier interface {
 	ListRoutesForTarget(ctx context.Context, arg db.ListRoutesForTargetParams) ([]db.GuiRebalanceroute, error)
-	ListNodeReputations(ctx context.Context, dollar_1 []string) ([]db.ListNodeReputationsRow, error)
 }
 
 // rankedRoute is a saved route with the list it was taken from, its 1-based
@@ -93,7 +90,6 @@ type routeCandidate struct {
 	ranked  rankedRoute
 	carries bool    // no prober amount below half the rebalance value, or paid since the probe
 	fee     float64 // last_fee_ppm (estimate for a combined route); +Inf when unknown
-	rep     float64 // lowest node reputation on the route
 }
 
 // getSavedRoutes returns the saved routes of a target over the given sources
@@ -111,26 +107,6 @@ func getSavedRoutes(ctx context.Context, q savedRoutesQuerier, pubkey string, ch
 		return nil
 	}
 
-	pubkeySet := map[string]struct{}{}
-	for _, r := range rows {
-		for _, pk := range strings.Split(r.Route, "-") {
-			pubkeySet[pk] = struct{}{}
-		}
-	}
-	pubkeys := make([]string, 0, len(pubkeySet))
-	for pk := range pubkeySet {
-		pubkeys = append(pubkeys, pk)
-	}
-	reps, err := q.ListNodeReputations(ctx, pubkeys)
-	if err != nil {
-		rebalLog(fmt.Sprintf("Error getting saved routes: %s", err))
-		return nil
-	}
-	repMap := make(map[string]float64, len(reps))
-	for _, nr := range reps {
-		repMap[nr.Pubkey] = calcWeightedRatio(int(nr.SuccessCount), int(nr.FailureCount), 10)
-	}
-
 	out := make([]routeCandidate, 0, len(rows))
 	for _, r := range rows {
 		list, evidence := classifyRoute(r, now)
@@ -138,17 +114,9 @@ func getSavedRoutes(ctx context.Context, q savedRoutesQuerier, pubkey string, ch
 			ranked:  rankedRoute{row: r, list: list, evidence: evidence},
 			carries: !r.ProbedAmountSat.Valid || 2*r.ProbedAmountSat.Int64 >= value || tsTime(r.LastSuccess).After(tsTime(r.LastProbed)),
 			fee:     math.Inf(1),
-			rep:     1,
 		}
 		if r.LastFeePpm.Valid {
 			c.fee = r.LastFeePpm.Float64
-		}
-		for _, pk := range strings.Split(r.Route, "-") {
-			s, ok := repMap[pk]
-			if !ok {
-				s = 0.5
-			}
-			c.rep = math.Min(c.rep, s)
 		}
 		out = append(out, c)
 	}
@@ -196,9 +164,6 @@ func selectRoutes(pool []routeCandidate, st *routeStats, draw func() float64, li
 		}
 		if a.c.fee != b.c.fee {
 			return a.c.fee < b.c.fee
-		}
-		if a.c.rep != b.c.rep {
-			return a.c.rep > b.c.rep
 		}
 		return a.c.ranked.row.ID < b.c.ranked.row.ID
 	})

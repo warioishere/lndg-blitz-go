@@ -39,10 +39,9 @@ type sourceRouterClient interface {
 	SendToRouteV2(ctx context.Context, in *routerrpc.SendToRouteRequest, opts ...grpc.CallOption) (*lnrpc.HTLCAttempt, error)
 }
 
-// sourceQuerier bundles the DB access required by updateRoute and updateNodeReputations.
+// sourceQuerier bundles the DB access required by updateRoute and the attempt log.
 type sourceQuerier interface {
 	routeQuerier
-	reputationQuerier
 	attemptLogQuerier
 }
 
@@ -338,7 +337,6 @@ func (e *engine) trySingleSource(
 			logAttempt("success", -1, -1, sent.durationMs)
 			feesMsat := sendResp.GetRoute().GetTotalFeesMsat()
 			updateRoute(ctx, q, rebalance.LastHopPubkey, sourceChanID, rebuiltHex, true, false, -1, now)
-			updateNodeReputations(ctx, q, rebuiltHex, true, 0, false, now)
 			e.routePaid(routeMsg, sourceChanID, rebalance.LastHopPubkey)
 			feesPaid := 0.0
 			if feesMsat != 0 {
@@ -380,7 +378,6 @@ func (e *engine) trySingleSource(
 			}
 		}
 		updateRoute(ctx, q, rebalance.LastHopPubkey, sourceChanID, rebuiltHex, false, false, failHop, now)
-		updateNodeReputations(ctx, q, rebuiltHex, false, fsi, failureSet, now)
 
 		// TEMPORARY_CHANNEL_FAILURE at the target channel — try a smaller amount via probe.
 		totalHops := len(routeMsg.GetHops())
@@ -427,7 +424,6 @@ func (e *engine) trySingleSource(
 					}
 					probeHex := hex.EncodeToString(pBytes)
 					updateRoute(ctx, q, rebalance.LastHopPubkey, sourceChanID, probeHex, true, true, -1, now)
-					updateNodeReputations(ctx, q, probeHex, true, 0, false, now)
 					e.routePaid(probeBuild.GetRoute(), sourceChanID, rebalance.LastHopPubkey)
 					// Scale fee_limit so RapidFire children maintain the same ppm.
 					scaled := pyround.Round(rebalance.FeeLimit*(float64(probed)/float64(rebalance.Value)), 3)

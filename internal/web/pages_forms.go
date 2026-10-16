@@ -110,28 +110,6 @@ func (s *Server) handleRemoveAvoid(w http.ResponseWriter, r *http.Request) {
 	s.redirect(w, r, refererOr(r, "/"), f)
 }
 
-// handleResetNodeReputation deletes all NodeReputation records and redirects to
-// /rebalanceroutes (or the referrer).
-func (s *Server) handleResetNodeReputation(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	f := &flasher{}
-	var count int64
-	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM gui_nodereputation`).Scan(&count); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if _, err := s.db.Exec(ctx, `DELETE FROM gui_nodereputation`); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	plural := "s"
-	if count == 1 {
-		plural = ""
-	}
-	f.add("Cleared " + strconv.FormatInt(count, 10) + " node reputation record" + plural + ".")
-	s.redirect(w, r, refererOr(r, "/rebalanceroutes"), f)
-}
-
 // handleResetPost handles the POST for the reset page (the actual reset runs via
 // api/reset) and redirects to the referrer.
 func (s *Server) handleResetPost(w http.ResponseWriter, r *http.Request) {

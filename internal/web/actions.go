@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
+	"github.com/warioishere/lndg-blitz-go/internal/rebalancer"
 )
 
 // mountActions registers the JSON action endpoints.
@@ -19,6 +20,8 @@ func (s *Server) mountActions(api chi.Router) {
 	api.Get("/balances", s.handleBalances)
 	api.Get("/rebalance_stats/", s.handleRebalanceStats)
 	api.Get("/rebalance_stats", s.handleRebalanceStats)
+	api.Get("/pair_stats/", s.handlePairStats)
+	api.Get("/pair_stats", s.handlePairStats)
 	api.Get("/forwards_summary/", s.handleForwardsSummary)
 	api.Get("/forwards_summary", s.handleForwardsSummary)
 	api.Get("/node_info/", s.handleNodeInfo)
@@ -241,4 +244,54 @@ func (s *Server) handleRebalanceStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+// handlePairStats returns the node pair statistics the rebalancer builds from
+// the route attempts of the last 72 hours, with the peer aliases.
+func (s *Server) handlePairStats(w http.ResponseWriter, r *http.Request) {
+	pairs, avg, globalMs, err := rebalancer.PairReport(r.Context(), s.queries, time.Now())
+	if err != nil {
+		writeAPIError(w, "Unable to fetch pair stats! Error: "+err.Error())
+		return
+	}
+	aliases := map[string]string{}
+	rows, err := s.db.Query(r.Context(), `SELECT pubkey, alias FROM gui_peers WHERE alias IS NOT NULL`)
+	if err != nil {
+		writeAPIError(w, "Unable to fetch pair stats! Error: "+err.Error())
+		return
+	}
+	for rows.Next() {
+		var pk, alias string
+		if err := rows.Scan(&pk, &alias); err != nil {
+			rows.Close()
+			writeAPIError(w, "Unable to fetch pair stats! Error: "+err.Error())
+			return
+		}
+		aliases[pk] = alias
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		writeAPIError(w, "Unable to fetch pair stats! Error: "+err.Error())
+		return
+	}
+
+	results := make([]any, 0, len(pairs))
+	for _, p := range pairs {
+		results = append(results, newOrderedMap().
+			Set("from", p.From).
+			Set("from_alias", aliases[p.From]).
+			Set("to", p.To).
+			Set("to_alias", aliases[p.To]).
+			Set("attempts", p.Attempts).
+			Set("successes", p.Successes).
+			Set("prob", p.Prob).
+			Set("hop_p90_ms", p.HopP90Ms).
+			Set("samples", p.Samples).
+			Set("last_used", drfDateTime(pgtype.Timestamptz{Time: p.LastUsed, Valid: !p.LastUsed.IsZero()})).
+			Set("slow", p.Slow))
+	}
+	writeJSON(w, http.StatusOK, newOrderedMap().
+		Set("average_prob", avg).
+		Set("hop_p90_ms", globalMs).
+		Set("pairs", results))
 }

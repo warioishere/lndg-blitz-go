@@ -47,7 +47,6 @@ type Querier interface {
 	DeleteRoutesNotOpenOutgoing(ctx context.Context, dollar_1 []string) (int64, error)
 	// Routes to peers without an open auto-rebalance channel.
 	DeleteRoutesOfNonTargets(ctx context.Context) (int64, error)
-	DeleteStaleNodeReputations(ctx context.Context, lastSuccess pgtype.Timestamptz) error
 	// Tested routes whose latest evidence (payment, failure or prober verification)
 	// is older than the cutoff. A route that failed part way stays until then: the
 	// part before the failing node is material for combined routes.
@@ -98,9 +97,6 @@ type Querier interface {
 	// chan_id wie Djangos .first() (Primaerschluessel), sonst ist die Wahl bei mehreren
 	// Channels zum selben Peer zufaellig.
 	GetTargetChannelInfo(ctx context.Context, remotePubkey string) (GetTargetChannelInfoRow, error)
-	IncrNodeReputationFailure(ctx context.Context, arg IncrNodeReputationFailureParams) error
-	// get_or_create(pubkey) + success_count += 1 + last_success = now.
-	IncrNodeReputationSuccess(ctx context.Context, arg IncrNodeReputationSuccessParams) error
 	// Autofees(chan_id, peer_alias, setting, old_value, new_value). timestamp = auto_now_add.
 	InsertAutofee(ctx context.Context, arg InsertAutofeeParams) error
 	// auto_enable: Autopilot(chan_id, peer_alias, setting, old_value, new_value).save().
@@ -183,7 +179,6 @@ type Querier interface {
 	// The NK channels to one peer that the NK job decides together (the NK ones of
 	// ListNkJobChannels).
 	ListNkPeerChannels(ctx context.Context, remotePubkey string) ([]GuiChannel, error)
-	ListNodeReputations(ctx context.Context, dollar_1 []string) ([]ListNodeReputationsRow, error)
 	// _trigger_probe targets: offene AR-Channels zu remote_pubkey. ORDER BY chan_id wie
 	// Djangos targets.first() (Primaerschluessel); targets[0] bestimmt Fee und Budget.
 	ListOpenARChannelsByPubkey(ctx context.Context, remotePubkey string) ([]GuiChannel, error)
@@ -274,7 +269,7 @@ type Querier interface {
 	UpdatePaymentHopResults(ctx context.Context, arg UpdatePaymentHopResultsParams) error
 	UpdatePeerAlias(ctx context.Context, arg UpdatePeerAliasParams) error
 	UpdatePeerData(ctx context.Context, arg UpdatePeerDataParams) error
-	// rebalancer.py — Route-Record-, NodeReputation- und Purge-Queries.
+	// rebalancer.py — Route-Record- und Purge-Queries.
 	// route_obj.save() (Full-Row der mutable Felder) in update_route. Gekeyt auf den
 	// unique_together-Schluessel (target_pubkey, outgoing_chan_id, route), damit nach
 	// get_or_create-Insert keine id zurueckgelesen werden muss.

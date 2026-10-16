@@ -16,7 +16,7 @@ import (
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 )
 
-// routeHexOf marshals a Route to the hex string update_route/update_node_reputations parse.
+// routeHexOf marshals a Route to the hex string updateRoute parses.
 func routeHexOf(r *lnrpc.Route) string {
 	b, err := proto.Marshal(r)
 	if err != nil {
@@ -33,15 +33,12 @@ type fakeRouteQ struct {
 	updated      []db.UpdateRebalanceRouteParams
 	feeUpdates   []db.UpdateRebalanceRouteFeeParams
 	markFails    []db.MarkRebalanceRouteFailureParams
-	repSuccess   []string
-	repFailure   []string
 	openIDs      []string
 	deletedNotIn [][]string
 	delTested    int
 	attempts     []db.InsertRouteAttemptParams
 	unconfirmed  []pgtype.Timestamptz
 	delNonTarget int
-	delReps      int
 }
 
 func newFakeRouteQ() *fakeRouteQ {
@@ -82,14 +79,6 @@ func (f *fakeRouteQ) MarkRebalanceRouteFailure(ctx context.Context, arg db.MarkR
 	f.markFails = append(f.markFails, arg)
 	return nil
 }
-func (f *fakeRouteQ) IncrNodeReputationSuccess(ctx context.Context, arg db.IncrNodeReputationSuccessParams) error {
-	f.repSuccess = append(f.repSuccess, arg.Pubkey)
-	return nil
-}
-func (f *fakeRouteQ) IncrNodeReputationFailure(ctx context.Context, arg db.IncrNodeReputationFailureParams) error {
-	f.repFailure = append(f.repFailure, arg.Pubkey)
-	return nil
-}
 func (f *fakeRouteQ) ListOpenChannelIDs(ctx context.Context) ([]string, error) { return f.openIDs, nil }
 func (f *fakeRouteQ) DeleteRoutesNotOpenOutgoing(ctx context.Context, dollar_1 []string) (int64, error) {
 	f.deletedNotIn = append(f.deletedNotIn, dollar_1)
@@ -106,10 +95,6 @@ func (f *fakeRouteQ) DeleteUnconfirmedRoutes(ctx context.Context, ts pgtype.Time
 func (f *fakeRouteQ) DeleteRoutesOfNonTargets(ctx context.Context) (int64, error) {
 	f.delNonTarget++
 	return 0, nil
-}
-func (f *fakeRouteQ) DeleteStaleNodeReputations(ctx context.Context, ts pgtype.Timestamptz) error {
-	f.delReps++
-	return nil
 }
 
 func twoHopRoute() *lnrpc.Route {
@@ -187,21 +172,6 @@ func TestUpdateRoute_CollectDisabled(t *testing.T) {
 	assert.Empty(t, q.updated)
 }
 
-func TestUpdateNodeReputations_Success(t *testing.T) {
-	q := newFakeRouteQ()
-	updateNodeReputations(context.Background(), q, routeHexOf(twoHopRoute()), true, 0, false, time.Now())
-	assert.Equal(t, []string{"aa", "bb"}, q.repSuccess)
-	assert.Empty(t, q.repFailure)
-}
-
-func TestUpdateNodeReputations_FailureAtIndex(t *testing.T) {
-	q := newFakeRouteQ()
-	r := &lnrpc.Route{Hops: []*lnrpc.Hop{{PubKey: "aa"}, {PubKey: "bb"}, {PubKey: "cc"}}}
-	updateNodeReputations(context.Background(), q, routeHexOf(r), false, 1, true, time.Now())
-	assert.Equal(t, []string{"aa"}, q.repSuccess) // i<1 success
-	assert.Equal(t, []string{"bb"}, q.repFailure) // i==1 failure, then break (cc untouched)
-}
-
 func TestMarkRouteFailure(t *testing.T) {
 	q := newFakeRouteQ()
 	markRouteFailure(context.Background(), q, 42, time.Unix(1_700_000_000, 0))
@@ -216,7 +186,6 @@ func TestPurgeStaleRoutes(t *testing.T) {
 	require.Len(t, q.deletedNotIn, 1)
 	assert.Equal(t, []string{"111", "222"}, q.deletedNotIn[0])
 	assert.Equal(t, 1, q.delTested)
-	assert.Equal(t, 1, q.delReps)
 	assert.Equal(t, 1, q.delNonTarget)
 	require.Len(t, q.unconfirmed, 1)
 	assert.Equal(t, time.Unix(1_700_000_000, 0).Add(-24*time.Hour), q.unconfirmed[0].Time)

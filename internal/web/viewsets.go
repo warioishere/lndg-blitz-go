@@ -237,14 +237,6 @@ func (s *Server) mountAPI(api chi.Router) {
 		),
 		paginate: true,
 	}, rebalanceRouteToResult)
-
-	// nodereputation — explicit field list + weighted_ratio score + alias; order wr_score ASC.
-	registerViewSet(api, s.db, "nodereputation", "NodeReputation", "nr.pubkey", listSpec{
-		selectExpr: "nr.pubkey, nr.success_count, nr.failure_count, nr.last_success, nr.last_failure, p.alias",
-		fromExpr:   "gui_nodereputation nr LEFT JOIN gui_peers p ON p.pubkey = nr.pubkey",
-		order:      weightedRatioSQL("nr.success_count", "nr.failure_count"),
-		paginate:   true,
-	}, nodeReputationToResult)
 }
 
 // apiGet registers a list handler under /api/<prefix>/ and /api/<prefix>.

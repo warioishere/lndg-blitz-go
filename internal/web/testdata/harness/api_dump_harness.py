@@ -15,10 +15,10 @@ from gui import models as gm
 
 PREFIXES = ['payments','paymenthops','invoices','forwards','onchain','closures','resolutions','peers','channels',
             'rebalancer','settings','pendinghtlcs','failedhtlcs','peerevents','feelog','inboundfeelog',
-            'rebalanceroutes','nodereputation','graphevents','probelogs','graphprobelogs']
+            'rebalanceroutes','graphevents','probelogs','graphprobelogs']
 MODELS = [gm.Payments, gm.PaymentHops, gm.Invoices, gm.Forwards, gm.Onchain, gm.Closures, gm.Resolutions, gm.Peers,
           gm.Channels, gm.Rebalancer, gm.LocalSettings, gm.PendingHTLCs, gm.FailedHTLCs, gm.PeerEvents, gm.Autofees,
-          gm.InboundFeeLog, gm.RebalanceRoute, gm.NodeReputation, gm.GraphEvent, gm.ProbeLog, gm.GraphProbeLog]
+          gm.InboundFeeLog, gm.RebalanceRoute, gm.GraphEvent, gm.ProbeLog, gm.GraphProbeLog]
 
 def value_for(f, i, model):
     t = f.get_internal_type()

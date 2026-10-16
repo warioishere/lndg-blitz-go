@@ -172,10 +172,9 @@ func TestTrySingleSourceSuccess(t *testing.T) {
 	assert.Equal(t, "0102", res.paymentHash)
 	assert.Equal(t, int64(100000), res.value)
 	assert.Nil(t, res.scaledFeeLimit)
-	// update_route(success) + update_node_reputations(success) ran.
+	// updateRoute(success) ran.
 	require.Len(t, q.updated, 1)
 	assert.Equal(t, int32(1), q.updated[0].SuccessCount)
-	assert.Equal(t, []string{"aa", "bb"}, q.repSuccess)
 	assert.Equal(t, []int32{FinalCltvDelta}, builtCltv) // not derived from the QueryRoutes expiries
 	assert.False(t, e.brake.blocked("555", sampleRebalance().LastHopPubkey))
 	// the attempt is logged with its path

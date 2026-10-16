@@ -140,37 +140,48 @@ func TestRebalanceRouteViewSetIntegration(t *testing.T) {
 	require.Equal(t, "chanA", r["outgoing_alias"])
 }
 
-func TestNodeReputationViewSetIntegration(t *testing.T) {
+func TestPairStatsIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping container-based test in -short mode")
 	}
 	pool, cleanup := setupDB(t)
 	defer cleanup()
 
-	insertRow(t, pool, "gui_peers", map[string]any{"pubkey": "pk2", "alias": "peer2"})
-	insertRow(t, pool, "gui_nodereputation", map[string]any{
-		"pubkey": "pk2", "success_count": 2, "failure_count": 0,
-	})
+	now := time.Now().UTC()
+	insertRow(t, pool, "gui_peers", map[string]any{"pubkey": "pkA", "alias": "peerA"})
+	attempt := func(id int64, outcome string, hop any, at time.Time) {
+		insertRow(t, pool, "route_attempt_log", map[string]any{
+			"id": id, "timestamp": at, "list": "proven", "outcome": outcome,
+			"route": "pkA-pkB-pkMe", "failure_hop": hop, "duration_ms": 3000,
+		})
+	}
+	attempt(1, "success", nil, now)
+	attempt(2, "failed", 2, now)
+	attempt(3, "success", nil, now.Add(-73*time.Hour)) // outside the 72h window
 
-	srv := NewServer(&config.Settings{}, pool)
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(NewServer(&config.Settings{}, pool).Handler())
 	defer ts.Close()
-
-	var page struct {
-		Count   int              `json:"count"`
-		Results []map[string]any `json:"results"`
+	var got struct {
+		AverageProb float64          `json:"average_prob"`
+		HopP90Ms    float64          `json:"hop_p90_ms"`
+		Pairs       []map[string]any `json:"pairs"`
 	}
-	getJSON(t, ts.URL+"/api/nodereputation/", &page)
-	require.Equal(t, 1, page.Count)
-	r := page.Results[0]
-	// exactly the 7 fields from the explicit serializer fields list
-	keys := make([]string, 0, len(r))
-	for k := range r {
-		keys = append(keys, k)
+	getJSON(t, ts.URL+"/api/pair_stats/", &got)
+	require.InDelta(t, 0.75, got.AverageProb, 1e-9)
+	require.InDelta(t, 1500, got.HopP90Ms, 1e-9, "shares 1000, 1000 and 3000 ms over the 2 hops up to pkB")
+	require.Len(t, got.Pairs, 2)
+	byFrom := map[string]map[string]any{}
+	for _, p := range got.Pairs {
+		byFrom[p["from"].(string)] = p
 	}
-	require.ElementsMatch(t, []string{"pubkey", "success_count", "failure_count", "last_success", "last_failure", "weighted_ratio", "alias"}, keys)
-	require.InDelta(t, (3.0/4.0)*(2.0/12.0), r["weighted_ratio"], 1e-9)
-	require.Equal(t, "peer2", r["alias"])
+	ab := byFrom["pkA"]
+	require.Equal(t, "peerA", ab["from_alias"])
+	require.Equal(t, "", ab["to_alias"])
+	require.EqualValues(t, 2, ab["attempts"])
+	require.EqualValues(t, 2, ab["successes"])
+	require.Equal(t, false, ab["slow"])
+	require.NotNil(t, ab["last_used"])
+	require.EqualValues(t, 1, byFrom["pkB"]["successes"])
 }
 
 func TestProbeLogViewSetIntegration(t *testing.T) {

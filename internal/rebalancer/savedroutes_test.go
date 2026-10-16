@@ -13,18 +13,14 @@ import (
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 )
 
-// fakeSavedQ returns fixed routes and node reputations.
+// fakeSavedQ returns fixed routes.
 type fakeSavedQ struct {
 	routes   []db.GuiRebalanceroute
-	reps     []db.ListNodeReputationsRow
 	attempts []db.InsertRouteAttemptParams
 }
 
 func (f *fakeSavedQ) ListRoutesForTarget(ctx context.Context, arg db.ListRoutesForTargetParams) ([]db.GuiRebalanceroute, error) {
 	return f.routes, nil
-}
-func (f *fakeSavedQ) ListNodeReputations(ctx context.Context, dollar_1 []string) ([]db.ListNodeReputationsRow, error) {
-	return f.reps, nil
 }
 func (f *fakeSavedQ) InsertRouteAttempt(ctx context.Context, arg db.InsertRouteAttemptParams) error {
 	f.attempts = append(f.attempts, arg)
@@ -106,27 +102,21 @@ func TestGetSavedRoutesCandidates(t *testing.T) {
 	half.ProbedAmountSat = sats(25_000) // half the value still carries
 	unknownFee := paid(4, 1, 0)
 	unknownFee.LastFeePpm = pgtype.Float8{}
-	badHop := paid(5, 1, 100)
-	badHop.Route = "a-x"
-	q := &fakeSavedQ{
-		routes: []db.GuiRebalanceroute{small, paidSinceProbe, half, unknownFee, badHop},
-		reps:   []db.ListNodeReputationsRow{{Pubkey: "x", SuccessCount: 0, FailureCount: 20}},
-	}
+	q := &fakeSavedQ{routes: []db.GuiRebalanceroute{small, paidSinceProbe, half, unknownFee}}
 	got := getSavedRoutes(context.Background(), q, "tgt", []string{"1"}, 50_000, savedNow)
-	require.Equal(t, []int64{1, 2, 3, 4, 5}, candidateIDs(got))
+	require.Equal(t, []int64{1, 2, 3, 4}, candidateIDs(got))
 	assert.False(t, got[0].carries, "probed 20k for a 50k rebalance")
 	assert.True(t, got[1].carries)
 	assert.True(t, got[2].carries)
 	assert.Equal(t, listExplore, got[2].ranked.list)
 	assert.True(t, math.IsInf(got[3].fee, 1))
-	assert.Less(t, got[4].rep, got[3].rep, "a node with failures lowers the route")
 	assert.Equal(t, savedNow.Add(-time.Hour), got[1].ranked.evidence)
 }
 
 // candidate is a pool entry over path with fee ppm.
 func candidate(id int64, path string, fee float64) routeCandidate {
 	return routeCandidate{ranked: rankedRoute{row: db.GuiRebalanceroute{ID: id, Route: path}, list: listProven},
-		carries: true, fee: fee, rep: 1}
+		carries: true, fee: fee}
 }
 
 func TestSelectRoutes(t *testing.T) {

@@ -94,7 +94,7 @@ func (f *fakeRebalQ) GetOrCreateLocalSetting(ctx context.Context, arg db.GetOrCr
 	return db.GuiLocalsetting{Key: arg.Key, Value: arg.Value}, nil
 }
 
-// routeQuerier / reputationQuerier
+// routeQuerier
 func (f *fakeRebalQ) GetRebalanceRoute(ctx context.Context, arg db.GetRebalanceRouteParams) (db.GuiRebalanceroute, error) {
 	return db.GuiRebalanceroute{}, pgx.ErrNoRows
 }
@@ -108,12 +108,6 @@ func (f *fakeRebalQ) UpdateRebalanceRouteFee(ctx context.Context, arg db.UpdateR
 	return nil
 }
 func (f *fakeRebalQ) MarkRebalanceRouteFailure(ctx context.Context, arg db.MarkRebalanceRouteFailureParams) error {
-	return nil
-}
-func (f *fakeRebalQ) IncrNodeReputationSuccess(ctx context.Context, arg db.IncrNodeReputationSuccessParams) error {
-	return nil
-}
-func (f *fakeRebalQ) IncrNodeReputationFailure(ctx context.Context, arg db.IncrNodeReputationFailureParams) error {
 	return nil
 }
 
@@ -134,9 +128,6 @@ func (f *fakeRebalQ) InsertRouteAttempt(ctx context.Context, arg db.InsertRouteA
 	f.attempts = append(f.attempts, arg)
 	return nil
 }
-func (f *fakeRebalQ) ListNodeReputations(ctx context.Context, dollar_1 []string) ([]db.ListNodeReputationsRow, error) {
-	return nil, nil
-}
 
 // purgeQuerier
 func (f *fakeRebalQ) ListOpenChannelIDs(ctx context.Context) ([]string, error) { return nil, nil }
@@ -150,9 +141,6 @@ func (f *fakeRebalQ) DeleteUnconfirmedRoutes(ctx context.Context, lastProbed pgt
 	return nil
 }
 func (f *fakeRebalQ) DeleteRoutesOfNonTargets(ctx context.Context) (int64, error) { return 0, nil }
-func (f *fakeRebalQ) DeleteStaleNodeReputations(ctx context.Context, lastSuccess pgtype.Timestamptz) error {
-	return nil
-}
 
 // orchestrator queriers
 func (f *fakeRebalQ) ListChannelFeeAndDiffByIDs(ctx context.Context, dollar_1 []string) ([]db.ListChannelFeeAndDiffByIDsRow, error) {

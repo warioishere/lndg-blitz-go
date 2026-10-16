@@ -58,7 +58,6 @@ func (s *Server) mountPages(r chi.Router) {
 	r.Post("/update_keysend/", s.handleUpdateKeysend)
 	r.Post("/add_avoid/", s.handleAddAvoid)
 	r.Post("/remove_avoid/", s.handleRemoveAvoid)
-	r.Post("/reset_node_reputation/", s.handleResetNodeReputation)
 	r.Post("/reset/", s.handleResetPost)
 	// Batch B: Channel/pending updates (LND policy + DB writes).
 	r.Post("/update_channel/", s.handleUpdateChannel)
@@ -92,7 +91,6 @@ func (s *Server) mountPages(r chi.Router) {
 		"/update_closing/", "/update_keysend/", "/add_avoid/", "/remove_avoid/"} {
 		r.Get(p, redirectReferer("/"))
 	}
-	r.Get("/reset_node_reputation/", redirectReferer("/rebalanceroutes"))
 	for _, p := range []string{"/openchannel/", "/closechannel/", "/connectpeer/", "/createinvoice/"} {
 		r.Get(p, redirectTo("/"))
 	}

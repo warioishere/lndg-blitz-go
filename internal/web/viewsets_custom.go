@@ -104,29 +104,6 @@ func rebalanceRouteToResult(row *rebalanceRouteRow) *orderedMap {
 		Set("outgoing_alias", row.OutgoingAlias)
 }
 
-// --- NodeReputation (explicit field list + weighted_ratio score + alias) ---
-
-type nodeReputationRow struct {
-	Pubkey       string             `json:"pubkey"`
-	SuccessCount int32              `json:"success_count"`
-	FailureCount int32              `json:"failure_count"`
-	LastSuccess  pgtype.Timestamptz `json:"last_success"`
-	LastFailure  pgtype.Timestamptz `json:"last_failure"`
-	Alias        pgtype.Text        `json:"-"`
-}
-
-func nodeReputationToResult(row *nodeReputationRow) *orderedMap {
-	// Fields are emitted in the order required by the serializer.
-	return newOrderedMap().
-		Set("pubkey", row.Pubkey).
-		Set("success_count", row.SuccessCount).
-		Set("failure_count", row.FailureCount).
-		Set("last_success", drfDateTime(row.LastSuccess)).
-		Set("last_failure", drfDateTime(row.LastFailure)).
-		Set("weighted_ratio", weightedRatio(row.SuccessCount, row.FailureCount)).
-		Set("alias", row.Alias)
-}
-
 // --- ProbeLog (details jsonb returned as raw JSON rather than base64) ---
 
 func probeLogToResult(p *db.GuiProbelog) *orderedMap {

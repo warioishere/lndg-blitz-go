@@ -6,7 +6,7 @@
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Overview')">Overview</button>
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Routes')">Routes</button>
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Probing')">Probing</button>
-    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Reputation')">Node Reputation</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Pairs')">Node Pairs</button>
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Settings')">Settings</button>
   </div>
 
@@ -26,10 +26,11 @@
       </div>
       <div class="w3-half w3-margin-bottom">
         <div class="w3-card w3-padding">
-          <h4>Node Reputation</h4>
+          <h4>Node Pairs (72h)</h4>
           <table class="w3-table">
-            <tr><td>Tracked nodes</td><td id="stat-total-nodes" class="w3-right-align">--</td></tr>
-            <tr><td>Poor reputation (&lt;30%)</td><td id="stat-poor-nodes" class="w3-right-align">--</td></tr>
+            <tr><td>Tracked pairs</td><td id="stat-total-pairs" class="w3-right-align">--</td></tr>
+            <tr><td>Average pair chance</td><td id="stat-avg-pair" class="w3-right-align">--</td></tr>
+            <tr><td>Slow pairs</td><td id="stat-slow-pairs" class="w3-right-align">--</td></tr>
             <tr><td>Last probe time</td><td id="stat-last-probe" class="w3-right-align">--</td></tr>
           </table>
         </div>
@@ -125,26 +126,33 @@
     </div>
   </div>
 
-  <!-- Node Reputation Tab -->
-  <div id="Reputation" class="tabcontent" style="display:none">
+  <!-- Node Pairs Tab -->
+  <div id="Pairs" class="tabcontent" style="display:none">
+    <p class="w3-small w3-text-grey">The directed node pairs of the route attempts of the last 72 hours, as the rebalancer rates them.
+      Chance: the share of attempts that crossed the pair, pulled towards the average of all pairs while the pair has few attempts.
+      P90/hop: the 90th percentile of the attempt durations spread over the hops.
+      Slow: P90/hop above AR-LatencyBanFactor times the P90/hop of all pairs (with at least 10 durations, used within 24h); the rebalancer leaves such a pair out for 4 hours.</p>
     <div class="w3-row" style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
-      <input class="w3-input w3-border" id="repSearch" type="text" placeholder="Search by alias or pubkey..." oninput="filterReputation()" style="flex:1">
-      <form action="/reset_node_reputation/" method="post" onsubmit="return confirm('Delete all node reputation records?');" style="margin:0">
-        <button type="submit" class="w3-button w3-red">Reset Node Reputation</button>
-      </form>
+      <input class="w3-input w3-border" id="pairSearch" type="text" placeholder="Search by alias or pubkey..." oninput="renderPairs()" style="flex:1">
+      <label>Min attempts <input class="w3-input w3-border" id="pairMin" type="number" min="0" value="3" oninput="renderPairs()" style="width:80px;display:inline-block"></label>
+      <label><input class="w3-check" id="pairSlowOnly" type="checkbox" onchange="renderPairs()"> Slow only</label>
     </div>
+    <p id="pairInfo" class="w3-small"></p>
     <table class="w3-table-all w3-centered w3-hoverable">
       <thead>
         <tr>
-          <th>Node</th>
-          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('success_count')">Successes <span id="rep-sort-success_count"></span></th>
-          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('failure_count')">Failures <span id="rep-sort-failure_count"></span></th>
-          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('weighted_ratio')">Score <span id="rep-sort-weighted_ratio"></span></th>
-          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('last_success')">Last Success <span id="rep-sort-last_success"></span></th>
-          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('last_failure')">Last Failure <span id="rep-sort-last_failure"></span></th>
+          <th>From</th>
+          <th>To</th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortPairs('attempts')">Attempts <span id="pair-sort-attempts"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortPairs('successes')">Crossed <span id="pair-sort-successes"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortPairs('prob')">Chance <span id="pair-sort-prob"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortPairs('hop_p90_ms')">P90/hop <span id="pair-sort-hop_p90_ms"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortPairs('samples')">Durations <span id="pair-sort-samples"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortPairs('last_used')">Last Used <span id="pair-sort-last_used"></span></th>
+          <th>Slow</th>
         </tr>
       </thead>
-      <tbody id="reputationTable"></tbody>
+      <tbody id="pairsTable"></tbody>
     </table>
   </div>
 

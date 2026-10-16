@@ -10,14 +10,14 @@ function openTab(evt, name) {
 }
 
 function restoreTab() {
-  const valid = ['Overview', 'Routes', 'Probing', 'Reputation', 'Settings'];
+  const valid = ['Overview', 'Routes', 'Probing', 'Pairs', 'Settings'];
   const saved = localStorage.getItem('routes-tab');
   const tab = valid.includes(saved) ? saved : 'Overview';
   document.querySelectorAll('.tabcontent').forEach(el => el.style.display = 'none');
   document.querySelectorAll('.tablink').forEach(el => el.classList.remove('w3-blue'));
   document.getElementById(tab).style.display = 'block';
   document.querySelectorAll('.tablink').forEach(el => {
-    if (el.textContent.trim() === tab || (tab === 'Reputation' && el.textContent.trim() === 'Node Reputation'))
+    if (el.textContent.trim() === tab || (tab === 'Pairs' && el.textContent.trim() === 'Node Pairs'))
       el.classList.add('w3-blue');
   });
 }
@@ -31,7 +31,7 @@ function ageColor(dateStr) {
 }
 
 let routesData = [];
-let reputationData = [];
+let pairsData = [];
 let routesLoaded;
 
 async function loadRoutes() {
@@ -104,77 +104,83 @@ function renderRoutes(data) {
   });
 }
 
-async function loadReputation() {
-  const res = await GET('nodereputation', {data:{}});
-  if (!res.results) return;
-  reputationData = res.results;
-  renderReputation();
-  updateOverview();
-}
-
-let repSortKey = 'weighted_ratio';
-let repSortAsc = true;
-
-function filterReputation() {
-  renderReputation();
-}
-
-function sortReputation(key) {
-  if (repSortKey === key) {
-    repSortAsc = !repSortAsc;
-  } else {
-    repSortKey = key;
-    repSortAsc = false;
+async function loadPairs() {
+  const res = await GET('pair_stats', {data:{}});
+  if (!res || res.error || !res.pairs) {
+    byId('pairInfo').innerText = res && res.error ? res.error : 'No pair statistics.';
+    return;
   }
-  renderReputation();
+  pairsData = res.pairs;
+  byId('stat-total-pairs').innerText = pairsData.length;
+  byId('stat-avg-pair').innerText = (res.average_prob * 100).toFixed(1) + '%';
+  byId('stat-slow-pairs').innerText = pairsData.filter(p => p.slow).length;
+  pairsInfo = `${pairsData.length} pairs, average chance ${(res.average_prob * 100).toFixed(1)}%, P90/hop of all pairs ${Math.round(res.hop_p90_ms)} ms`;
+  renderPairs();
 }
 
-function renderReputation() {
-  const q = byId('repSearch').value.toLowerCase();
-  let data = reputationData;
+const PAIRS_SHOWN = 200;
+let pairsInfo = '';
+let pairSortKey = 'prob';
+let pairSortAsc = true;
+
+function sortPairs(key) {
+  if (pairSortKey === key) {
+    pairSortAsc = !pairSortAsc;
+  } else {
+    pairSortKey = key;
+    pairSortAsc = key === 'prob';
+  }
+  renderPairs();
+}
+
+function pairNode(cell, pubkey, alias) {
+  const link = document.createElement('a');
+  link.href = GRAPH_LINKS + '/node/' + pubkey;
+  link.target = '_blank';
+  link.innerText = alias || pubkey.substring(0, 12) + '...';
+  link.title = pubkey;
+  cell.appendChild(link);
+}
+
+function renderPairs() {
+  const q = byId('pairSearch').value.toLowerCase();
+  const minAttempts = parseInt(byId('pairMin').value) || 0;
+  const slowOnly = byId('pairSlowOnly').checked;
+  let data = pairsData.filter(p => p.attempts >= minAttempts && (!slowOnly || p.slow));
   if (q) {
-    data = data.filter(n =>
-      (n.alias || '').toLowerCase().includes(q) ||
-      n.pubkey.toLowerCase().includes(q)
+    data = data.filter(p =>
+      (p.from_alias || '').toLowerCase().includes(q) || p.from.toLowerCase().includes(q) ||
+      (p.to_alias || '').toLowerCase().includes(q) || p.to.toLowerCase().includes(q)
     );
   }
-  data = [...data].sort((a, b) => {
-    let av = a[repSortKey], bv = b[repSortKey];
-    if (repSortKey === 'last_success' || repSortKey === 'last_failure') {
+  data.sort((a, b) => {
+    let av = a[pairSortKey], bv = b[pairSortKey];
+    if (pairSortKey === 'last_used') {
       av = av ? new Date(av).getTime() : 0;
       bv = bv ? new Date(bv).getTime() : 0;
     }
-    av = av ?? -1; bv = bv ?? -1;
-    return repSortAsc ? av - bv : bv - av;
+    return pairSortAsc ? av - bv : bv - av;
   });
-  // Update sort indicators
-  ['success_count','failure_count','weighted_ratio','last_success','last_failure'].forEach(k => {
-    const el = byId('rep-sort-' + k);
-    if (el) el.innerText = repSortKey === k ? (repSortAsc ? '\u25B2' : '\u25BC') : '';
+  ['attempts','successes','prob','hop_p90_ms','samples','last_used'].forEach(k => {
+    const el = byId('pair-sort-' + k);
+    if (el) el.innerText = pairSortKey === k ? (pairSortAsc ? '\u25B2' : '\u25BC') : '';
   });
-  const table = byId('reputationTable');
+  byId('pairInfo').innerText = pairsInfo + ` - ${data.length} match` + (data.length > PAIRS_SHOWN ? `, first ${PAIRS_SHOWN} shown` : '');
+  const table = byId('pairsTable');
   table.innerHTML = '';
-  data.forEach(n => {
+  data.slice(0, PAIRS_SHOWN).forEach(p => {
     const row = table.insertRow();
-    const score = n.weighted_ratio;
-    if (score < 0.3) row.className = 'w3-pale-red';
-    else if (score < 0.5) row.className = 'w3-pale-yellow';
-    const nodeCell = row.insertCell();
-    const alias = n.alias || n.pubkey.substring(0, 20) + '...';
-    const link = document.createElement('a');
-    link.href = GRAPH_LINKS + '/node/' + n.pubkey;
-    link.target = '_blank';
-    link.innerText = alias;
-    nodeCell.appendChild(link);
-    const small = document.createElement('small');
-    small.innerText = ' ' + n.pubkey.substring(0, 12) + '...';
-    small.className = 'w3-text-grey';
-    nodeCell.appendChild(small);
-    row.insertCell().innerText = n.success_count;
-    row.insertCell().innerText = n.failure_count;
-    row.insertCell().innerText = (score * 100).toFixed(1) + '%';
-    row.insertCell().innerText = n.last_success ? formatDate(n.last_success) : '---';
-    row.insertCell().innerText = n.last_failure ? formatDate(n.last_failure) : '---';
+    if (p.slow) row.className = 'w3-pale-red';
+    else if (p.prob < 0.3) row.className = 'w3-pale-yellow';
+    pairNode(row.insertCell(), p.from, p.from_alias);
+    pairNode(row.insertCell(), p.to, p.to_alias);
+    row.insertCell().innerText = p.attempts;
+    row.insertCell().innerText = p.successes;
+    row.insertCell().innerText = (p.prob * 100).toFixed(1) + '%';
+    row.insertCell().innerText = p.samples > 0 ? Math.round(p.hop_p90_ms) + ' ms' : '---';
+    row.insertCell().innerText = p.samples;
+    row.insertCell().innerText = p.last_used ? formatDate(p.last_used) : '---';
+    row.insertCell().innerText = p.slow ? 'yes' : '';
   });
 }
 
@@ -313,7 +319,7 @@ function showProbeDetail(idx) {
 }
 
 function updateOverview() {
-  if (routesData.length > 0 || reputationData.length > 0) {
+  if (routesData.length > 0) {
     byId('stat-total-routes').innerText = routesData.length;
     const probed = routesData.filter(r => r.success_count === 0 && r.failure_count === 0).length;
     byId('stat-probed').innerText = probed;
@@ -325,8 +331,6 @@ function updateOverview() {
       return Math.max(ls, lf) > dayAgo;
     }).length;
     byId('stat-recent').innerText = recent;
-    byId('stat-total-nodes').innerText = reputationData.length;
-    byId('stat-poor-nodes').innerText = reputationData.filter(n => n.weighted_ratio < 0.3).length;
   }
 }
 
@@ -401,6 +405,6 @@ async function cleanupUntested() {
 document.addEventListener('DOMContentLoaded', () => {
   restoreTab();
   routesLoaded = loadRoutes();
-  loadReputation();
+  loadPairs();
   loadProbeData();
 });

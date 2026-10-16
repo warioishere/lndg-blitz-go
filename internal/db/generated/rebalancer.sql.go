@@ -113,17 +113,6 @@ func (q *Queries) DeleteRoutesOfNonTargets(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
-const deleteStaleNodeReputations = `-- name: DeleteStaleNodeReputations :exec
-DELETE FROM gui_nodereputation
-WHERE (last_success < $1 OR last_success IS NULL)
-  AND (last_failure < $1 OR last_failure IS NULL)
-`
-
-func (q *Queries) DeleteStaleNodeReputations(ctx context.Context, lastSuccess pgtype.Timestamptz) error {
-	_, err := q.db.Exec(ctx, deleteStaleNodeReputations, lastSuccess)
-	return err
-}
-
 const deleteStaleTestedRoutes = `-- name: DeleteStaleTestedRoutes :exec
 DELETE FROM gui_rebalanceroute
 WHERE GREATEST(last_success, last_failure, last_probed) < $1::timestamptz
@@ -231,41 +220,6 @@ func (q *Queries) GetTargetChannelInfo(ctx context.Context, remotePubkey string)
 		&i.NkTarget,
 	)
 	return i, err
-}
-
-const incrNodeReputationFailure = `-- name: IncrNodeReputationFailure :exec
-INSERT INTO gui_nodereputation (pubkey, success_count, failure_count, last_failure)
-VALUES ($1, 0, 1, $2)
-ON CONFLICT (pubkey) DO UPDATE
-SET failure_count = gui_nodereputation.failure_count + 1, last_failure = $2
-`
-
-type IncrNodeReputationFailureParams struct {
-	Pubkey      string             `json:"pubkey"`
-	LastFailure pgtype.Timestamptz `json:"last_failure"`
-}
-
-func (q *Queries) IncrNodeReputationFailure(ctx context.Context, arg IncrNodeReputationFailureParams) error {
-	_, err := q.db.Exec(ctx, incrNodeReputationFailure, arg.Pubkey, arg.LastFailure)
-	return err
-}
-
-const incrNodeReputationSuccess = `-- name: IncrNodeReputationSuccess :exec
-INSERT INTO gui_nodereputation (pubkey, success_count, failure_count, last_success)
-VALUES ($1, 1, 0, $2)
-ON CONFLICT (pubkey) DO UPDATE
-SET success_count = gui_nodereputation.success_count + 1, last_success = $2
-`
-
-type IncrNodeReputationSuccessParams struct {
-	Pubkey      string             `json:"pubkey"`
-	LastSuccess pgtype.Timestamptz `json:"last_success"`
-}
-
-// get_or_create(pubkey) + success_count += 1 + last_success = now.
-func (q *Queries) IncrNodeReputationSuccess(ctx context.Context, arg IncrNodeReputationSuccessParams) error {
-	_, err := q.db.Exec(ctx, incrNodeReputationSuccess, arg.Pubkey, arg.LastSuccess)
-	return err
 }
 
 const insertAutopilot = `-- name: InsertAutopilot :exec
@@ -665,37 +619,6 @@ func (q *Queries) ListCombinableRoutes(ctx context.Context) ([]GuiRebalanceroute
 	return items, nil
 }
 
-const listNodeReputations = `-- name: ListNodeReputations :many
-SELECT pubkey, success_count, failure_count FROM gui_nodereputation
-WHERE pubkey = ANY($1::varchar[])
-`
-
-type ListNodeReputationsRow struct {
-	Pubkey       string `json:"pubkey"`
-	SuccessCount int32  `json:"success_count"`
-	FailureCount int32  `json:"failure_count"`
-}
-
-func (q *Queries) ListNodeReputations(ctx context.Context, dollar_1 []string) ([]ListNodeReputationsRow, error) {
-	rows, err := q.db.Query(ctx, listNodeReputations, dollar_1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListNodeReputationsRow{}
-	for rows.Next() {
-		var i ListNodeReputationsRow
-		if err := rows.Scan(&i.Pubkey, &i.SuccessCount, &i.FailureCount); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listOpenChannelIDs = `-- name: ListOpenChannelIDs :many
 SELECT chan_id FROM gui_channels WHERE is_open = true
 `
@@ -971,7 +894,7 @@ type UpdateRebalanceRouteParams struct {
 	LastFailureHop pgtype.Int4        `json:"last_failure_hop"`
 }
 
-// rebalancer.py — Route-Record-, NodeReputation- und Purge-Queries.
+// rebalancer.py — Route-Record- und Purge-Queries.
 // route_obj.save() (Full-Row der mutable Felder) in update_route. Gekeyt auf den
 // unique_together-Schluessel (target_pubkey, outgoing_chan_id, route), damit nach
 // get_or_create-Insert keine id zurueckgelesen werden muss.

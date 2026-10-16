@@ -216,7 +216,6 @@ func (e *engine) trySavedRoute(
 			*successfulOut, *successfulIn = nil, nil
 		}
 		updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, *rebuiltHex, true, false, -1, now())
-		updateNodeReputations(ctx, q, *rebuiltHex, true, 0, false, now())
 		e.routePaid(routeMsg, sr.OutgoingChanID, rebalance.LastHopPubkey)
 		*savedSucceeded = true
 		return savedRouteResult{outcome: "success", code: -1, hop: -1, durationMs: sent.durationMs}
@@ -240,7 +239,6 @@ func (e *engine) trySavedRoute(
 		failHop = fsi
 	}
 	updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, *rebuiltHex, false, false, failHop, now())
-	updateNodeReputations(ctx, q, *rebuiltHex, false, fsi, failureSet, now())
 	failed := savedRouteResult{outcome: "failed", code: -1, hop: -1, durationMs: sent.durationMs}
 	if failureSet {
 		failed.code, failed.hop = codeNum, fsi
@@ -300,7 +298,6 @@ func (e *engine) trySavedRoute(
 					pb, _ := proto.Marshal(probeBuild.GetRoute())
 					ph := hex.EncodeToString(pb)
 					updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, ph, true, true, -1, now())
-					updateNodeReputations(ctx, q, ph, true, 0, false, now())
 					e.routePaid(probeBuild.GetRoute(), sr.OutgoingChanID, rebalance.LastHopPubkey)
 					rebalLog(fmt.Sprintf("Probe payment succeeded: %d sats via %s", probed, srLabel))
 					*savedSucceeded = true

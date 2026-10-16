@@ -132,10 +132,23 @@ func (s *routeStats) refresh(ctx context.Context, q statsQuerier, now time.Time)
 	if !due {
 		return
 	}
-	rows, err := q.ListSentRouteAttempts(ctx, pgtype.Timestamptz{Time: now.Add(-statsWindow), Valid: true})
+	n, err := s.load(ctx, q, now)
 	if err != nil {
 		rebalLog(fmt.Sprintf("Error reading route attempts: %s", err))
 		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rebalLog(fmt.Sprintf("Route statistics: %d attempts, %d node pairs, average pair chance %.0f%%, %d slow pairs banned",
+		n, len(s.pairs), s.avgLocked()*100, len(s.banned)))
+}
+
+// load rebuilds the statistics from the attempts of statsWindow and returns
+// how many attempts it read.
+func (s *routeStats) load(ctx context.Context, q statsQuerier, now time.Time) (int, error) {
+	rows, err := q.ListSentRouteAttempts(ctx, pgtype.Timestamptz{Time: now.Add(-statsWindow), Valid: true})
+	if err != nil {
+		return 0, err
 	}
 	factor := latencyBanFactor(ctx, q)
 
@@ -156,8 +169,43 @@ func (s *routeStats) refresh(ctx context.Context, q statsQuerier, now time.Time)
 	}
 	s.rebuildBansLocked(factor, now)
 	s.built = now
-	rebalLog(fmt.Sprintf("Route statistics: %d attempts, %d node pairs, average pair chance %.0f%%, %d slow pairs banned",
-		len(rows), len(s.pairs), s.avgLocked()*100, len(s.banned)))
+	return len(rows), nil
+}
+
+// PairStat is one directed node pair of the route statistics.
+type PairStat struct {
+	From, To  string
+	Attempts  int     // attempts that reached the pair
+	Successes int     // attempts that crossed it
+	Prob      float64 // success chance the rebalancer uses for the pair
+	HopP90Ms  float64 // 90th percentile of the pair's hop shares; 0 without durations
+	Samples   int     // hop shares with a duration
+	LastUsed  time.Time
+	Slow      bool // banned as a slow pair
+}
+
+// PairReport builds the route statistics from the attempt log as the
+// rebalancer does and returns every pair, the average pair chance and the 90th
+// percentile of all hop shares. Slow marks the pairs this build bans; the
+// rebalancer keeps a ban for latencyBan, so it can hold bans from earlier
+// builds as well.
+func PairReport(ctx context.Context, q StatsQuerier, now time.Time) ([]PairStat, float64, float64, error) {
+	s := newRouteStats()
+	if _, err := s.load(ctx, q, now); err != nil {
+		return nil, 0, 0, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	avg := s.avgLocked()
+	out := make([]PairStat, 0, len(s.pairs))
+	for e, p := range s.pairs {
+		_, slow := s.banned[e]
+		out = append(out, PairStat{
+			From: e.from, To: e.to, Attempts: int(p.n), Successes: int(p.ok), Prob: s.pairProbLocked(e, avg),
+			HopP90Ms: p90(p.hopMs), Samples: len(p.hopMs), LastUsed: p.lastUsed, Slow: slow,
+		})
+	}
+	return out, avg, s.globalMs, nil
 }
 
 // observe adds one sent attempt: its path (hop pubkeys joined by "-", our node

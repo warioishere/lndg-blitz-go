@@ -1,4 +1,4 @@
--- rebalancer.py — Route-Record-, NodeReputation- und Purge-Queries.
+-- rebalancer.py — Route-Record- und Purge-Queries.
 
 -- name: UpdateRebalanceRoute :exec
 -- route_obj.save() (Full-Row der mutable Felder) in update_route. Gekeyt auf den
@@ -40,28 +40,6 @@ WHERE NOT EXISTS (
 DELETE FROM gui_rebalanceroute
 WHERE GREATEST(last_success, last_failure, last_probed) < sqlc.arg(cutoff)::timestamptz
   AND NOT (success_count = 0 AND failure_count = 0);
-
--- name: DeleteStaleNodeReputations :exec
-DELETE FROM gui_nodereputation
-WHERE (last_success < $1 OR last_success IS NULL)
-  AND (last_failure < $1 OR last_failure IS NULL);
-
--- name: IncrNodeReputationSuccess :exec
--- get_or_create(pubkey) + success_count += 1 + last_success = now.
-INSERT INTO gui_nodereputation (pubkey, success_count, failure_count, last_success)
-VALUES ($1, 1, 0, $2)
-ON CONFLICT (pubkey) DO UPDATE
-SET success_count = gui_nodereputation.success_count + 1, last_success = $2;
-
--- name: IncrNodeReputationFailure :exec
-INSERT INTO gui_nodereputation (pubkey, success_count, failure_count, last_failure)
-VALUES ($1, 0, 1, $2)
-ON CONFLICT (pubkey) DO UPDATE
-SET failure_count = gui_nodereputation.failure_count + 1, last_failure = $2;
-
--- name: ListNodeReputations :many
-SELECT pubkey, success_count, failure_count FROM gui_nodereputation
-WHERE pubkey = ANY($1::varchar[]);
 
 -- name: ListOpenChannelIDs :many
 SELECT chan_id FROM gui_channels WHERE is_open = true;

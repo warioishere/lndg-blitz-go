@@ -40,19 +40,6 @@ func TestCheckOpportunityCost_BudgetCappedByMaxFeeRate(t *testing.T) {
 	assert.Equal(t, 500, maxPpm)
 }
 
-func TestCalcSuccessRatio(t *testing.T) {
-	assert.InDelta(t, 0.5, calcSuccessRatio(0, 0), 1e-9) // 1/2
-	assert.InDelta(t, float64(11)/13, calcSuccessRatio(10, 1), 1e-9)
-}
-
-func TestCalcWeightedRatio(t *testing.T) {
-	// total 0 -> ratio * (0/10) = 0.
-	assert.InDelta(t, 0, calcWeightedRatio(0, 0, 10), 1e-9)
-	// sc=9 fc=1: ratio = 10/12; total=10; weighted = ratio * 10/20.
-	ratio := float64(10) / 12
-	assert.InDelta(t, ratio*(10.0/20.0), calcWeightedRatio(9, 1, 10), 1e-9)
-}
-
 func TestFailureCodeName(t *testing.T) {
 	assert.Equal(t, "TEMPORARY_CHANNEL_FAILURE", failureCodeName(15))
 	assert.Equal(t, "FEE_INSUFFICIENT", failureCodeName(12))

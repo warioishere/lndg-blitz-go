@@ -1,5 +1,5 @@
 // Package rebalancer implements the auto-rebalance engine: queue manager,
-// workers, saved-route selection, mission-control edge cache, node reputation,
+// workers, saved-route selection, mission-control edge cache, route statistics,
 // opportunity-cost checks, probing, RapidFire, auto_schedule, and autopilot.
 package rebalancer
 

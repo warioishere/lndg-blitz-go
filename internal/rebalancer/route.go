@@ -177,57 +177,6 @@ func markRouteFailure(ctx context.Context, q routeQuerier, id int64, now time.Ti
 	}
 }
 
-// reputationQuerier bundles the DB access required for node reputation updates.
-type reputationQuerier interface {
-	settingsQuerier
-	IncrNodeReputationSuccess(ctx context.Context, arg db.IncrNodeReputationSuccessParams) error
-	IncrNodeReputationFailure(ctx context.Context, arg db.IncrNodeReputationFailureParams) error
-}
-
-// updateNodeReputations increments success/failure counts for the nodes on a route.
-func updateNodeReputations(ctx context.Context, q reputationQuerier, routeHex string, success bool, failureSourceIndex int, fsiSet bool, now time.Time) {
-	disabled, err := collectRoutesDisabled(ctx, q)
-	if err != nil {
-		rebalLog(fmt.Sprintf("Error updating node reputations: %s", err))
-		return
-	}
-	if disabled {
-		return
-	}
-	parsed, err := parseRouteHex(routeHex)
-	if err != nil {
-		rebalLog(fmt.Sprintf("Error updating node reputations: %s", err))
-		return
-	}
-	hops := parsed.GetHops()
-	if len(hops) == 0 {
-		return
-	}
-	ts := pgtype.Timestamptz{Time: now, Valid: true}
-	if success {
-		for _, h := range hops {
-			if e := q.IncrNodeReputationSuccess(ctx, db.IncrNodeReputationSuccessParams{Pubkey: h.GetPubKey(), LastSuccess: ts}); e != nil {
-				rebalLog(fmt.Sprintf("Error updating node reputations: %s", e))
-				return
-			}
-		}
-	} else if fsiSet && failureSourceIndex < len(hops) {
-		for i, h := range hops {
-			if i < failureSourceIndex {
-				if e := q.IncrNodeReputationSuccess(ctx, db.IncrNodeReputationSuccessParams{Pubkey: h.GetPubKey(), LastSuccess: ts}); e != nil {
-					rebalLog(fmt.Sprintf("Error updating node reputations: %s", e))
-					return
-				}
-			} else if i == failureSourceIndex {
-				if e := q.IncrNodeReputationFailure(ctx, db.IncrNodeReputationFailureParams{Pubkey: h.GetPubKey(), LastFailure: ts}); e != nil {
-					rebalLog(fmt.Sprintf("Error updating node reputations: %s", e))
-				}
-				break
-			}
-		}
-	}
-}
-
 // purgeQuerier bundles the DB access required by purgeStaleRoutes.
 type purgeQuerier interface {
 	settingsQuerier
@@ -236,7 +185,6 @@ type purgeQuerier interface {
 	DeleteStaleTestedRoutes(ctx context.Context, lastSuccess pgtype.Timestamptz) error
 	DeleteUnconfirmedRoutes(ctx context.Context, lastProbed pgtype.Timestamptz) error
 	DeleteRoutesOfNonTargets(ctx context.Context) (int64, error)
-	DeleteStaleNodeReputations(ctx context.Context, lastSuccess pgtype.Timestamptz) error
 }
 
 // unconfirmedRouteTTL is how long a never-paid route stays without the route
@@ -245,8 +193,7 @@ const unconfirmedRouteTTL = 24 * time.Hour
 
 // purgeStaleRoutes removes routes for closed channels and for peers without an
 // open auto-rebalance channel, tested routes without a success for 7 days,
-// never-paid routes the prober has not verified for unconfirmedRouteTTL, and
-// node reputations older than 14 days.
+// and never-paid routes the prober has not verified for unconfirmedRouteTTL.
 func purgeStaleRoutes(ctx context.Context, q purgeQuerier, now time.Time) {
 	disabled, err := collectRoutesDisabled(ctx, q)
 	if err != nil {
@@ -283,11 +230,6 @@ func purgeStaleRoutes(ctx context.Context, q purgeQuerier, now time.Time) {
 		return
 	}
 	if e := q.DeleteUnconfirmedRoutes(ctx, pgtype.Timestamptz{Time: now.Add(-unconfirmedRouteTTL), Valid: true}); e != nil {
-		rebalLog(fmt.Sprintf("Error purging stale routes: %s", e))
-		return
-	}
-	repCutoff := pgtype.Timestamptz{Time: now.Add(-14 * 24 * time.Hour), Valid: true}
-	if e := q.DeleteStaleNodeReputations(ctx, repCutoff); e != nil {
 		rebalLog(fmt.Sprintf("Error purging stale routes: %s", e))
 	}
 }

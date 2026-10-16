@@ -81,7 +81,6 @@ func TestMethodFallbacks(t *testing.T) {
 
 	for path, want := range map[string]string{
 		"/update_channel/": "/back", "/openchannel/": "/", "/batchopen/": "/batch",
-		"/reset_node_reputation/": "/back",
 	} {
 		req, _ := http.NewRequest("GET", ts.URL+path, nil)
 		req.Header.Set("Referer", "/back")
@@ -91,10 +90,10 @@ func TestMethodFallbacks(t *testing.T) {
 		require.Equal(t, http.StatusFound, resp.StatusCode, path)
 		require.Equal(t, want, resp.Header.Get("Location"), path)
 	}
-	resp, err := noRedirect.Get(ts.URL + "/reset_node_reputation/")
+	resp, err := noRedirect.Get(ts.URL + "/update_channel/")
 	require.NoError(t, err)
 	resp.Body.Close()
-	require.Equal(t, "/rebalanceroutes", resp.Header.Get("Location"), "no referer")
+	require.Equal(t, "/", resp.Header.Get("Location"), "no referer")
 
 	for path, want := range map[string]string{
 		"/api/chanpolicy/":          `{"detail":"Method \"GET\" not allowed."}`,

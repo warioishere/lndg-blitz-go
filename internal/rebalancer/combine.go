@@ -131,7 +131,7 @@ func (c *comboIndex) candidates(target string, chanIDs []string, budget func(str
 				list:     listCombined,
 				evidence: cr.evidence,
 			},
-			carries: true, fee: cr.estPpm, rep: 0.5,
+			carries: true, fee: cr.estPpm,
 		})
 	}
 	return out

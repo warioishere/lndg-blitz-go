@@ -457,7 +457,7 @@ func stableSortByFee(ids []string, feeMap map[string]int) {
 }
 
 // sendPaymentV2 sends a payment via LND's SendPaymentV2 streaming RPC and
-// updates the rebalance record and route/reputation tables based on the outcome.
+// updates the rebalance record and saved routes based on the outcome.
 func (e *engine) sendPaymentV2(
 	ctx context.Context,
 	routerstub rebalRouterClient,
@@ -536,7 +536,6 @@ func (e *engine) sendPaymentV2(
 			routeHex := hex.EncodeToString(b)
 			outChan := strconv.FormatUint(so, 10)
 			updateRoute(ctx, q, rebalance.LastHopPubkey, outChan, routeHex, true, false, -1, now())
-			updateNodeReputations(ctx, q, routeHex, true, 0, false, now())
 			e.routePaid(htlc0.GetRoute(), outChan, rebalance.LastHopPubkey)
 		case lnrpc.Payment_FAILED: // status == 3
 			if len(pay.GetHtlcs()) > 0 {
@@ -551,7 +550,6 @@ func (e *engine) sendPaymentV2(
 				}
 				e.mc.recordRouteFailure(htlc0.GetRoute(), htlc0.GetFailure())
 				updateRoute(ctx, q, rebalance.LastHopPubkey, outChan, routeHex, false, false, failHop, now())
-				updateNodeReputations(ctx, q, routeHex, false, fsi, htlc0.GetFailure() != nil, now())
 			}
 			switch pay.GetFailureReason() {
 			case lnrpc.PaymentFailureReason_FAILURE_REASON_TIMEOUT:

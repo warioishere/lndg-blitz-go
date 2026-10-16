@@ -97,12 +97,4 @@ func TestFormsBatchAIntegration(t *testing.T) {
 	var costs int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT closing_costs FROM gui_closures WHERE funding_txid='ftx' AND funding_index=0`).Scan(&costs))
 	require.Equal(t, 1234, costs)
-
-	// --- reset_node_reputation ---
-	insertRow(t, pool, "gui_nodereputation", map[string]any{"pubkey": "03a"})
-	insertRow(t, pool, "gui_nodereputation", map[string]any{"pubkey": "03b"})
-	resp = post("/reset_node_reputation/", url.Values{})
-	require.Contains(t, pageWith(flashOf(resp)), "Cleared 2 node reputation records.")
-	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM gui_nodereputation`).Scan(&cnt))
-	require.Equal(t, 0, cnt)
 }
