@@ -169,7 +169,7 @@ func TestLogRouteAttempt(t *testing.T) {
 	require.Len(t, q.attempts, 2)
 	a := q.attempts[0]
 	assert.Equal(t, int64(42), a.RebalanceID)
-	assert.Equal(t, int64(7), a.RouteID)
+	assert.Equal(t, pgtype.Int8{Int64: 7, Valid: true}, a.RouteID)
 	assert.Equal(t, "explore", a.List)
 	assert.Equal(t, int32(2), a.Position)
 	assert.InDelta(t, 90.0, a.EvidenceAgeS.Float64, 1e-9)
@@ -179,7 +179,17 @@ func TestLogRouteAttempt(t *testing.T) {
 	assert.Equal(t, int32(15), a.FailureCode.Int32)
 	assert.Equal(t, int32(2), a.FailureHop.Int32)
 	b := q.attempts[1]
+	assert.Equal(t, pgtype.Int8{Int64: 8, Valid: true}, b.RouteID)
 	assert.False(t, b.EvidenceAgeS.Valid)
 	assert.False(t, b.FailureCode.Valid)
 	assert.Equal(t, "success", b.Outcome)
+}
+
+func TestLogRouteAttemptCombinedHasNoRouteID(t *testing.T) {
+	q := &fakeSavedQ{}
+	logRouteAttempt(context.Background(), q, 1, rankedRoute{row: db.GuiRebalanceroute{TargetPubkey: "tgt"}, list: listCombined, position: 3},
+		50_000, savedRouteResult{outcome: "skip_cost", code: -1, hop: -1}, savedNow)
+	require.Len(t, q.attempts, 1)
+	assert.False(t, q.attempts[0].RouteID.Valid)
+	assert.Equal(t, "combined", q.attempts[0].List)
 }

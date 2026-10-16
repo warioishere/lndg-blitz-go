@@ -121,7 +121,7 @@ func TestMigrateTakesOverDjangoDatabase(t *testing.T) {
 	var version int
 	var dirty bool
 	require.NoError(t, conn.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty))
-	assert.Equal(t, 5, version)
+	assert.Equal(t, 6, version)
 	assert.False(t, dirty)
 	var value string
 	require.NoError(t, conn.QueryRow(ctx, `SELECT value FROM gui_localsettings WHERE key='AR-Enabled'`).Scan(&value))
@@ -138,4 +138,7 @@ func TestMigrateTakesOverDjangoDatabase(t *testing.T) {
 	var hasAttempts bool
 	require.NoError(t, conn.QueryRow(ctx, `SELECT to_regclass('public.route_attempt_log') IS NOT NULL`).Scan(&hasAttempts))
 	assert.True(t, hasAttempts, "000005 applied")
+	var hasFailHop bool
+	require.NoError(t, conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='gui_rebalanceroute' AND column_name='last_failure_hop')`).Scan(&hasFailHop))
+	assert.True(t, hasFailHop, "000006 applied")
 }

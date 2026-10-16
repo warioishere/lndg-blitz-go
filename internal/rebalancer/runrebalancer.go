@@ -30,6 +30,7 @@ const (
 type rebalancerQuerier interface {
 	sourceQuerier
 	savedRoutesQuerier
+	comboQuerier
 	attemptLogQuerier
 	purgeQuerier
 	sourceMapsQuerier
@@ -190,7 +191,8 @@ func (e *engine) runRebalancer(
 			worker, rebalance.TargetAlias, rebalance.LastHopPubkey, rebalance.Value, rebalance.Duration, len(chanIDs)))
 
 		var savedRoutes []rankedRoute
-		if savedRoutesEnabled(ctx, q) {
+		useSaved := savedRoutesEnabled(ctx, q)
+		if useSaved {
 			purgeStaleRoutes(ctx, q, now())
 			routeLimit := getRouteLimit(ctx, q)
 			savedRoutes = getSavedRoutes(ctx, q, rebalance.LastHopPubkey, chanIDs, routeLimit, int64(rebalance.Value), now())
@@ -203,7 +205,42 @@ func (e *engine) runRebalancer(
 		savedSucceeded := false
 		triedSavedSources := make(map[string]struct{})
 
-		for _, rr := range savedRoutes {
+		// Try order: proven and explore routes, then routes combined from saved
+		// ones, then routes whose latest attempt failed.
+		var combined []rankedRoute
+		if useSaved {
+			feeLimitPpm := int(float64(feeLimitMsat) / float64(rebalance.Value) * 1000)
+			budget := func(chanID string) int {
+				if !oppCostEnabled || rebalance.Manual {
+					return feeLimitPpm
+				}
+				return min(int(float64(targetFeeRate)*(float64(arMaxCost)/100))-lookupSourceFee(sourceFeeMap, chanID), maxFeeRate, feeLimitPpm)
+			}
+			e.combos.refresh(ctx, q, now())
+			combined = e.combos.candidates(rebalance.LastHopPubkey, chanIDs, budget, combinedLimit)
+			if len(combined) > 0 {
+				rebalLog(fmt.Sprintf("Combined %d routes to try", len(combined)))
+			}
+		}
+		tryOrder := make([]rankedRoute, 0, len(savedRoutes)+len(combined))
+		failedFrom := len(savedRoutes)
+		for i, rr := range savedRoutes {
+			if rr.list == listFailed {
+				failedFrom = i
+				break
+			}
+		}
+		tryOrder = append(tryOrder, savedRoutes[:failedFrom]...)
+		for _, rr := range combined {
+			rr.position = len(tryOrder) + 1
+			tryOrder = append(tryOrder, rr)
+		}
+		for _, rr := range savedRoutes[failedFrom:] {
+			rr.position = len(tryOrder) + 1
+			tryOrder = append(tryOrder, rr)
+		}
+
+		for _, rr := range tryOrder {
 			value := int64(rebalance.Value)
 			res := e.trySavedRoute(ctx, stub, routerstub, q, rebalance, rr.row, invoiceResp, sourceFeeMap,
 				targetFeeRate, arMaxCost, maxFeeRate, oppCostEnabled, feeLimitMsat, timeout,
@@ -234,6 +271,7 @@ func (e *engine) runRebalancer(
 			// Stable sort by outbound fee ascending.
 			stableSortByFee(ordered, sourceFeeMap)
 			pruned := make([]string, 0, len(ordered))
+			braked := 0
 			for _, c := range ordered {
 				if _, tried := triedSavedSources[c]; tried {
 					continue
@@ -243,7 +281,14 @@ func (e *engine) runRebalancer(
 						continue
 					}
 				}
+				if e.brake.blocked(c, rebalance.LastHopPubkey) {
+					braked++
+					continue
+				}
 				pruned = append(pruned, c)
+			}
+			if braked > 0 {
+				rebalLog(fmt.Sprintf("Per-source: %d sources paused after recent misses, %d to try", braked, len(pruned)))
 			}
 			for _, sourceChan := range pruned {
 				res, err := e.trySingleSource(ctx, stub, routerstub, q, *rebalance, sourceChan, sourceFeeMap,
@@ -492,16 +537,22 @@ func (e *engine) sendPaymentV2(
 			b, _ := proto.Marshal(htlc0.GetRoute())
 			routeHex := hex.EncodeToString(b)
 			outChan := strconv.FormatUint(so, 10)
-			updateRoute(ctx, q, rebalance.LastHopPubkey, outChan, routeHex, true, false, now())
+			updateRoute(ctx, q, rebalance.LastHopPubkey, outChan, routeHex, true, false, -1, now())
 			updateNodeReputations(ctx, q, routeHex, true, 0, false, now())
+			e.routePaid(htlc0.GetRoute(), outChan, rebalance.LastHopPubkey)
 		case lnrpc.Payment_FAILED: // status == 3
 			if len(pay.GetHtlcs()) > 0 {
 				htlc0 := pay.GetHtlcs()[0]
 				b, _ := proto.Marshal(htlc0.GetRoute())
 				routeHex := hex.EncodeToString(b)
 				outChan := strconv.FormatUint(htlc0.GetRoute().GetHops()[0].GetChanId(), 10)
-				updateRoute(ctx, q, rebalance.LastHopPubkey, outChan, routeHex, false, false, now())
 				fsi := int(htlc0.GetFailure().GetFailureSourceIndex())
+				failHop := -1
+				if htlc0.GetFailure() != nil {
+					failHop = fsi
+				}
+				e.mc.recordRouteFailure(htlc0.GetRoute(), htlc0.GetFailure())
+				updateRoute(ctx, q, rebalance.LastHopPubkey, outChan, routeHex, false, false, failHop, now())
 				updateNodeReputations(ctx, q, routeHex, false, fsi, htlc0.GetFailure() != nil, now())
 			}
 			switch pay.GetFailureReason() {

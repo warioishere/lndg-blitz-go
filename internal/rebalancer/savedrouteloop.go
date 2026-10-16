@@ -58,8 +58,8 @@ func (e *engine) trySavedRoute(
 	handleErr := func(err error) {
 		rebalLog(fmt.Sprintf("BuildRoute failed via %s - %s", srLabel, err))
 		if rebuiltHex != nil {
-			updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, *rebuiltHex, false, false, now())
-		} else {
+			updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, *rebuiltHex, false, false, -1, now())
+		} else if sr.ID != 0 {
 			markRouteFailure(ctx, q, sr.ID, now())
 		}
 	}
@@ -95,17 +95,24 @@ func (e *engine) trySavedRoute(
 		}
 	}
 
-	// Cap by the smallest max_htlc_msat on the route, and validate against the failed-edge cache.
-	if hasHex {
-		capMsat := e.chanInfo.maxAmountOnRouteMsat(ctx, stub, parsedSr)
+	// Cap by the smallest max_htlc_msat on the route, and validate against the
+	// failed-edge cache: before BuildRoute for a stored route, after it otherwise.
+	checkRoute := func(r *lnrpc.Route) (savedRouteResult, bool) {
+		capMsat := e.chanInfo.maxAmountOnRouteMsat(ctx, stub, r)
 		if capMsat != 0 && int64(rebalance.Value)*1000 > capMsat {
 			rebalLog(fmt.Sprintf("Saved route via %s max_htlc cap is %d sats, less than rebalance value %d - skipping",
 				srLabel, capMsat/1000, rebalance.Value))
-			return savedRouteResult{outcome: "skip_max_htlc", code: -1, hop: -1}
+			return savedRouteResult{outcome: "skip_max_htlc", code: -1, hop: -1}, false
 		}
-		if !e.mc.validateRoute(parsedSr) {
+		if !e.mc.validateRoute(r) {
 			rebalLog(fmt.Sprintf("Saved route via %s skipped — reuses a cached failed edge", srLabel))
-			return savedRouteResult{outcome: "skip_failed_edge", code: -1, hop: -1}
+			return savedRouteResult{outcome: "skip_failed_edge", code: -1, hop: -1}, false
+		}
+		return savedRouteResult{}, true
+	}
+	if hasHex {
+		if res, ok := checkRoute(parsedSr); !ok {
+			return res
 		}
 	}
 
@@ -126,6 +133,11 @@ func (e *engine) trySavedRoute(
 		return savedRouteResult{outcome: "build_failed", code: -1, hop: -1}
 	}
 	rebalLog(fmt.Sprintf("BuildRoute succeeded via %s", srLabel))
+	if !hasHex {
+		if res, ok := checkRoute(build.GetRoute()); !ok {
+			return res
+		}
+	}
 
 	if oppCostEnabled && !rebalance.Manual {
 		allowed, totalPpm, budgetPpm := checkOpportunityCost(
@@ -185,8 +197,9 @@ func (e *engine) trySavedRoute(
 		} else {
 			*successfulOut, *successfulIn = nil, nil
 		}
-		updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, *rebuiltHex, true, false, now())
+		updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, *rebuiltHex, true, false, -1, now())
 		updateNodeReputations(ctx, q, *rebuiltHex, true, 0, false, now())
+		e.routePaid(routeMsg, sr.OutgoingChanID, rebalance.LastHopPubkey)
 		*savedSucceeded = true
 		return savedRouteResult{outcome: "success", code: -1, hop: -1}
 	}
@@ -204,7 +217,11 @@ func (e *engine) trySavedRoute(
 		rebalLog(fmt.Sprintf("Saved route failed via %s - code: no-details - failure_hop: None", srLabel))
 	}
 	e.mc.recordRouteFailure(routeMsg, failure)
-	updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, *rebuiltHex, false, false, now())
+	failHop := -1
+	if failureSet {
+		failHop = fsi
+	}
+	updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, *rebuiltHex, false, false, failHop, now())
 	updateNodeReputations(ctx, q, *rebuiltHex, false, fsi, failureSet, now())
 	failed := savedRouteResult{outcome: "failed", code: -1, hop: -1}
 	if failureSet {
@@ -268,8 +285,9 @@ func (e *engine) trySavedRoute(
 					*successfulOut, *successfulIn = &so, &si
 					pb, _ := proto.Marshal(probeBuild.GetRoute())
 					ph := hex.EncodeToString(pb)
-					updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, ph, true, true, now())
+					updateRoute(ctx, q, rebalance.LastHopPubkey, sr.OutgoingChanID, ph, true, true, -1, now())
 					updateNodeReputations(ctx, q, ph, true, 0, false, now())
+					e.routePaid(probeBuild.GetRoute(), sr.OutgoingChanID, rebalance.LastHopPubkey)
 					rebalLog(fmt.Sprintf("Probe payment succeeded: %d sats via %s", probed, srLabel))
 					*savedSucceeded = true
 					return savedRouteResult{outcome: "success_smaller", code: -1, hop: -1}

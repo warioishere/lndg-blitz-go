@@ -6,7 +6,7 @@
 -- get_or_create-Insert keine id zurueckgelesen werden muss.
 UPDATE gui_rebalanceroute
 SET final_cltv_delta = $4, route_hex = $5, success_count = $6, failure_count = $7,
-    last_success = $8, last_failure = $9, last_fee_ppm = $10
+    last_success = $8, last_failure = $9, last_fee_ppm = $10, last_failure_hop = $11
 WHERE target_pubkey = $1 AND outgoing_chan_id = $2 AND route = $3;
 
 -- name: UpdateRebalanceRouteFee :exec
@@ -181,3 +181,8 @@ INSERT INTO route_attempt_log
     (timestamp, rebalance_id, route_id, target_pubkey, outgoing_chan_id, list, position,
      evidence_age_s, fee_ppm, value_sat, outcome, failure_code, failure_hop)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
+
+-- name: ListCombinableRoutes :many
+-- Saved routes with a stored route, the material the rebalancer combines new
+-- routes from.
+SELECT * FROM gui_rebalanceroute WHERE route_hex IS NOT NULL AND route_hex <> '' ORDER BY id;

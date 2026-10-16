@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 )
@@ -67,37 +68,65 @@ func TestMissionControl_RecordAndValidate(t *testing.T) {
 	r := route(hop("A", 1_000_000), hop("B", 990_000), hop("C", 980_000))
 	mc.recordRouteFailure(r, &lnrpc.Failure{Code: 15, FailureSourceIndex: 1})
 
-	// A route reusing edge (A->B) at the same amount must be invalidated.
-	bad := route(hop("A", 1_000_000), hop("B", 990_000))
-	assert.False(t, mc.validateRoute(bad))
+	// A route reusing edge (A->B) at the same, a larger or a slightly smaller amount is invalidated.
+	assert.False(t, mc.validateRoute(route(hop("A", 1_000_000), hop("B", 990_000))))
+	assert.False(t, mc.validateRoute(route(hop("A", 5_000_000), hop("B", 4_990_000))))
+	assert.False(t, mc.validateRoute(route(hop("A", 960_000), hop("B", 950_000))))
 
-	// A route reusing (A->B) at a very different amount passes (diff_ppm > tolerance).
-	farAmt := route(hop("A", 100_000), hop("B", 99_000))
-	assert.True(t, mc.validateRoute(farAmt))
+	// A clearly smaller amount over (A->B) passes.
+	assert.True(t, mc.validateRoute(route(hop("A", 100_000), hop("B", 99_000))))
 
 	// A disjoint route passes.
-	other := route(hop("X", 1_000_000), hop("Y", 990_000))
-	assert.True(t, mc.validateRoute(other))
+	assert.True(t, mc.validateRoute(route(hop("X", 1_000_000), hop("Y", 990_000))))
 }
 
-func TestMissionControl_NonTempFailureIgnored(t *testing.T) {
+func TestMissionControl_NonEdgeFailureIgnored(t *testing.T) {
 	mc := newMissionControl()
 	r := route(hop("A", 1_000_000), hop("B", 990_000), hop("C", 980_000))
-	mc.recordRouteFailure(r, &lnrpc.Failure{Code: 12, FailureSourceIndex: 1}) // not 15
+	mc.recordRouteFailure(r, &lnrpc.Failure{Code: 12, FailureSourceIndex: 1}) // FEE_INSUFFICIENT
 	mc.recordRouteFailure(r, &lnrpc.Failure{Code: 15, FailureSourceIndex: 0}) // fsi<=0
+	assert.Empty(t, mc.edges)
+	mc.recordRouteFailure(r, &lnrpc.Failure{Code: 18, FailureSourceIndex: 2}) // UNKNOWN_NEXT_PEER
+	assert.Len(t, mc.edges, 1)
+}
+
+func TestMissionControl_BlockGrowsAndExpires(t *testing.T) {
+	mc := newMissionControl()
+	base := time.Unix(1_700_000_000, 0)
+	now := base
+	mc.now = func() time.Time { return now }
+	r := route(hop("A", 1_000_000), hop("B", 990_000), hop("C", 980_000))
+	ab := route(hop("A", 1_000_000), hop("B", 990_000))
+
+	mc.recordRouteFailure(r, &lnrpc.Failure{Code: 15, FailureSourceIndex: 1})
+	now = base.Add(failedEdgeExpiry + time.Second)
+	assert.True(t, mc.validateRoute(ab), "first block: failedEdgeExpiry")
+
+	// a second failure while remembered blocks twice as long
+	mc.recordRouteFailure(r, &lnrpc.Failure{Code: 15, FailureSourceIndex: 1})
+	now = now.Add(2*failedEdgeExpiry - time.Second)
+	assert.False(t, mc.validateRoute(ab))
+	now = now.Add(2 * time.Second)
+	assert.True(t, mc.validateRoute(ab))
+
+	// forgotten failedEdgeMaxBan after the block ended
+	now = now.Add(failedEdgeMaxBan + time.Second)
+	assert.True(t, mc.validateRoute(ab))
 	assert.Empty(t, mc.edges)
 }
 
-func TestMissionControl_Expiry(t *testing.T) {
+func TestEdgeBanCapped(t *testing.T) {
+	assert.Equal(t, failedEdgeExpiry, edgeBan(1))
+	assert.Equal(t, 4*failedEdgeExpiry, edgeBan(3))
+	assert.Equal(t, failedEdgeMaxBan, edgeBan(20))
+}
+
+func TestMissionControl_SuccessClearsEdges(t *testing.T) {
 	mc := newMissionControl()
-	base := time.Unix(1_700_000_000, 0)
-	mc.now = func() time.Time { return base }
 	r := route(hop("A", 1_000_000), hop("B", 990_000), hop("C", 980_000))
-	mc.recordRouteFailure(r, &lnrpc.Failure{Code: 15, FailureSourceIndex: 1})
-	assert.Len(t, mc.edges, 1)
-	// advance past expiry; validateRoute prunes.
-	mc.now = func() time.Time { return base.Add(failedEdgeExpiry + time.Second) }
-	assert.True(t, mc.validateRoute(route(hop("A", 1_000_000), hop("B", 990_000))))
+	mc.recordRouteFailure(r, &lnrpc.Failure{Code: 15, FailureSourceIndex: 2})
+	require.Len(t, mc.edges, 1)
+	mc.recordRouteSuccess(r)
 	assert.Empty(t, mc.edges)
 }
 

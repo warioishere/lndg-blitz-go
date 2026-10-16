@@ -402,6 +402,7 @@ type GuiRebalanceroute struct {
 	LastFeePpm      pgtype.Float8      `json:"last_fee_ppm"`
 	LastProbed      pgtype.Timestamptz `json:"last_probed"`
 	ProbedAmountSat pgtype.Int8        `json:"probed_amount_sat"`
+	LastFailureHop  pgtype.Int4        `json:"last_failure_hop"`
 }
 
 type GuiResolution struct {
@@ -431,7 +432,7 @@ type RouteAttemptLog struct {
 	ID             int64              `json:"id"`
 	Timestamp      pgtype.Timestamptz `json:"timestamp"`
 	RebalanceID    int64              `json:"rebalance_id"`
-	RouteID        int64              `json:"route_id"`
+	RouteID        pgtype.Int8        `json:"route_id"`
 	TargetPubkey   string             `json:"target_pubkey"`
 	OutgoingChanID string             `json:"outgoing_chan_id"`
 	List           string             `json:"list"`

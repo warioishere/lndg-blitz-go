@@ -58,8 +58,9 @@ type routeQuerier interface {
 }
 
 // updateRoute upserts the route record and updates success/failure bookkeeping.
+// failHop is the failure source index of a failed attempt (-1: unknown).
 // Errors are logged and swallowed.
-func updateRoute(ctx context.Context, q routeQuerier, pubkey, chanID, routeHex string, success, forgiveFailure bool, now time.Time) {
+func updateRoute(ctx context.Context, q routeQuerier, pubkey, chanID, routeHex string, success, forgiveFailure bool, failHop int, now time.Time) {
 	disabled, err := collectRoutesDisabled(ctx, q)
 	if err != nil {
 		rebalLog(fmt.Sprintf("Error updating route record: %s", err))
@@ -106,6 +107,7 @@ func updateRoute(ctx context.Context, q routeQuerier, pubkey, chanID, routeHex s
 		}
 		ro.LastSuccess = pgtype.Timestamptz{Time: now, Valid: true}
 		ro.LastFailure = pgtype.Timestamptz{}
+		ro.LastFailureHop = pgtype.Int4{}
 		if forgiveFailure && ro.FailureCount > 0 {
 			ro.FailureCount--
 		}
@@ -116,6 +118,7 @@ func updateRoute(ctx context.Context, q routeQuerier, pubkey, chanID, routeHex s
 	} else {
 		ro.FailureCount++
 		ro.LastFailure = pgtype.Timestamptz{Time: now, Valid: true}
+		ro.LastFailureHop = pgtype.Int4{Int32: int32(failHop), Valid: failHop >= 0}
 	}
 
 	if e := q.UpdateRebalanceRoute(ctx, db.UpdateRebalanceRouteParams{
@@ -123,6 +126,7 @@ func updateRoute(ctx context.Context, q routeQuerier, pubkey, chanID, routeHex s
 		FinalCltvDelta: ro.FinalCltvDelta, RouteHex: ro.RouteHex,
 		SuccessCount: ro.SuccessCount, FailureCount: ro.FailureCount,
 		LastSuccess: ro.LastSuccess, LastFailure: ro.LastFailure, LastFeePpm: ro.LastFeePpm,
+		LastFailureHop: ro.LastFailureHop,
 	}); e != nil {
 		rebalLog(fmt.Sprintf("Error updating route record: %s", e))
 	}

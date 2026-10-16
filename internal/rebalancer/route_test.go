@@ -120,7 +120,7 @@ func twoHopRoute() *lnrpc.Route {
 func TestUpdateRoute_NewSuccess(t *testing.T) {
 	q := newFakeRouteQ()
 	now := time.Unix(1_700_000_000, 0)
-	updateRoute(context.Background(), q, "target", "555", routeHexOf(twoHopRoute()), true, false, now)
+	updateRoute(context.Background(), q, "target", "555", routeHexOf(twoHopRoute()), true, false, -1, now)
 	require.Len(t, q.inserted, 1)
 	assert.Equal(t, "aa-bb", q.inserted[0].Route)
 	assert.Equal(t, int32(FinalCltvDelta), q.inserted[0].FinalCltvDelta)
@@ -140,7 +140,7 @@ func TestUpdateRoute_ExistingSuccessWithin5MinNoIncrement(t *testing.T) {
 		TargetPubkey: "target", OutgoingChanID: "555", Route: "aa-bb",
 		SuccessCount: 5, LastSuccess: pgtype.Timestamptz{Time: now.Add(-2 * time.Minute), Valid: true},
 	}
-	updateRoute(context.Background(), q, "target", "555", routeHexOf(twoHopRoute()), true, false, now)
+	updateRoute(context.Background(), q, "target", "555", routeHexOf(twoHopRoute()), true, false, -1, now)
 	require.Len(t, q.updated, 1)
 	assert.Equal(t, int32(5), q.updated[0].SuccessCount) // within 5 min -> not incremented
 }
@@ -152,28 +152,31 @@ func TestUpdateRoute_ExistingSuccessAfter5MinIncrements(t *testing.T) {
 		TargetPubkey: "target", OutgoingChanID: "555", Route: "aa-bb",
 		SuccessCount: 5, LastSuccess: pgtype.Timestamptz{Time: now.Add(-6 * time.Minute), Valid: true},
 	}
-	updateRoute(context.Background(), q, "target", "555", routeHexOf(twoHopRoute()), true, false, now)
+	updateRoute(context.Background(), q, "target", "555", routeHexOf(twoHopRoute()), true, false, -1, now)
 	assert.Equal(t, int32(6), q.updated[0].SuccessCount)
 }
 
 func TestUpdateRoute_FailureAndForgive(t *testing.T) {
 	q := newFakeRouteQ()
 	now := time.Unix(1_700_000_000, 0)
-	updateRoute(context.Background(), q, "t", "1", routeHexOf(twoHopRoute()), false, false, now)
+	updateRoute(context.Background(), q, "t", "1", routeHexOf(twoHopRoute()), false, false, 2, now)
 	require.Len(t, q.updated, 1)
 	assert.Equal(t, int32(1), q.updated[0].FailureCount)
 	assert.True(t, q.updated[0].LastFailure.Valid)
+	assert.Equal(t, pgtype.Int4{Int32: 2, Valid: true}, q.updated[0].LastFailureHop)
 
 	q2 := newFakeRouteQ()
-	q2.routes["t|1|aa-bb"] = db.GuiRebalanceroute{TargetPubkey: "t", OutgoingChanID: "1", Route: "aa-bb", FailureCount: 3}
-	updateRoute(context.Background(), q2, "t", "1", routeHexOf(twoHopRoute()), true, true, now)
+	q2.routes["t|1|aa-bb"] = db.GuiRebalanceroute{TargetPubkey: "t", OutgoingChanID: "1", Route: "aa-bb", FailureCount: 3,
+		LastFailureHop: pgtype.Int4{Int32: 2, Valid: true}}
+	updateRoute(context.Background(), q2, "t", "1", routeHexOf(twoHopRoute()), true, true, -1, now)
 	assert.Equal(t, int32(2), q2.updated[0].FailureCount) // forgive: 3 -> 2
+	assert.False(t, q2.updated[0].LastFailureHop.Valid, "a payment clears the failure hop")
 }
 
 func TestUpdateRoute_CollectDisabled(t *testing.T) {
 	q := newFakeRouteQ()
 	q.settings["RR-CollectRoutes"] = "0"
-	updateRoute(context.Background(), q, "t", "1", routeHexOf(twoHopRoute()), true, false, time.Now())
+	updateRoute(context.Background(), q, "t", "1", routeHexOf(twoHopRoute()), true, false, -1, time.Now())
 	assert.Empty(t, q.inserted)
 	assert.Empty(t, q.updated)
 }

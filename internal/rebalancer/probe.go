@@ -45,6 +45,8 @@ type sourceQuerier interface {
 // engine holds rebalancer-wide caches and is the receiver for probing and send methods.
 type engine struct {
 	mc       *missionControl
+	brake    *sourceBrake
+	combos   *comboIndex
 	alias    *aliasCache
 	selfPK   *selfPubkeyCache
 	chanInfo *chanInfoCache
@@ -53,10 +55,19 @@ type engine struct {
 func newEngine() *engine {
 	return &engine{
 		mc:       newMissionControl(),
+		brake:    newSourceBrake(),
+		combos:   newComboIndex(),
 		alias:    newAliasCache(),
 		selfPK:   newSelfPubkeyCache(),
 		chanInfo: newChanInfoCache(),
 	}
+}
+
+// routePaid clears what a paid route proves wrong: the failed edges it used
+// and the brakes of its source channel.
+func (e *engine) routePaid(route *lnrpc.Route, source, target string) {
+	e.mc.recordRouteSuccess(route)
+	e.brake.paid(source, target)
 }
 
 // rebalanceResult carries the outcome of a successful trySingleSource attempt.
@@ -155,7 +166,7 @@ func (e *engine) trySingleSource(
 	feeLimitMsat int64,
 	timeout time.Duration,
 	now time.Time,
-) (*rebalanceResult, error) {
+) (result *rebalanceResult, err error) {
 	srcFee := lookupSourceFee(sourceFeeMap, sourceChanID)
 	// Per-source budget: how many ppm of route fee are affordable.
 	perSourceRoutePpm := int(float64(targetFeeRate)*(float64(arMaxCost)/100)) - srcFee
@@ -170,6 +181,15 @@ func (e *engine) trySingleSource(
 		return nil, nil
 	}
 	srcLabel := e.alias.label(sourceChanID)
+
+	// A source that did not pay is paused for this target (for every target
+	// when its peer failed to forward onward); a payment lifts the pause.
+	onward := false
+	defer func() {
+		if err == nil && result == nil {
+			e.brake.miss(sourceChanID, rebalance.LastHopPubkey, onward)
+		}
+	}()
 
 	// QueryRoutes as a self-payment rebalance: destination is ourselves, last_hop is the target peer.
 	selfPubkey, err := e.selfPK.get(ctx, stub)
@@ -278,8 +298,9 @@ func (e *engine) trySingleSource(
 
 		if sendResp.GetStatus() == lnrpc.HTLCAttempt_SUCCEEDED { // status == 1
 			feesMsat := sendResp.GetRoute().GetTotalFeesMsat()
-			updateRoute(ctx, q, rebalance.LastHopPubkey, sourceChanID, rebuiltHex, true, false, now)
+			updateRoute(ctx, q, rebalance.LastHopPubkey, sourceChanID, rebuiltHex, true, false, -1, now)
 			updateNodeReputations(ctx, q, rebuiltHex, true, 0, false, now)
+			e.routePaid(routeMsg, sourceChanID, rebalance.LastHopPubkey)
 			feesPaid := 0.0
 			if feesMsat != 0 {
 				feesPaid = float64(feesMsat) / 1000
@@ -306,7 +327,12 @@ func (e *engine) trySingleSource(
 		reason, fsiStr := failureLogParts(failureSet, codeNum, fsi)
 		rebalLog(fmt.Sprintf("Route via %s failed: code=%s hop=%s", srcLabel, reason, fsiStr))
 		e.mc.recordRouteFailure(routeMsg, failure)
-		updateRoute(ctx, q, rebalance.LastHopPubkey, sourceChanID, rebuiltHex, false, false, now)
+		failHop := -1
+		if failureSet {
+			failHop = fsi
+			onward = onwardFailure(codeNum, fsi, len(routeMsg.GetHops()))
+		}
+		updateRoute(ctx, q, rebalance.LastHopPubkey, sourceChanID, rebuiltHex, false, false, failHop, now)
 		updateNodeReputations(ctx, q, rebuiltHex, false, fsi, failureSet, now)
 
 		// TEMPORARY_CHANNEL_FAILURE at the target channel — try a smaller amount via probe.
@@ -353,8 +379,9 @@ func (e *engine) trySingleSource(
 						return nil, pmerr
 					}
 					probeHex := hex.EncodeToString(pBytes)
-					updateRoute(ctx, q, rebalance.LastHopPubkey, sourceChanID, probeHex, true, true, now)
+					updateRoute(ctx, q, rebalance.LastHopPubkey, sourceChanID, probeHex, true, true, -1, now)
 					updateNodeReputations(ctx, q, probeHex, true, 0, false, now)
+					e.routePaid(probeBuild.GetRoute(), sourceChanID, rebalance.LastHopPubkey)
 					// Scale fee_limit so RapidFire children maintain the same ppm.
 					scaled := pyround.Round(rebalance.FeeLimit*(float64(probed)/float64(rebalance.Value)), 3)
 					feesPaid := 0.0

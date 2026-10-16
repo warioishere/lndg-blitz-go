@@ -175,6 +175,40 @@ func TestTrySingleSourceSuccess(t *testing.T) {
 	assert.Equal(t, int32(1), q.updated[0].SuccessCount)
 	assert.Equal(t, []string{"aa", "bb"}, q.repSuccess)
 	assert.Equal(t, []int32{FinalCltvDelta}, builtCltv) // not derived from the QueryRoutes expiries
+	assert.False(t, e.brake.blocked("555", sampleRebalance().LastHopPubkey))
+}
+
+func TestTrySingleSourceBrakes(t *testing.T) {
+	target := sampleRebalance().LastHopPubkey
+	inv := &lnrpc.AddInvoiceResponse{RHash: []byte{0x01}}
+	try := func(e *engine, ln *fakeLN, r *fakeRouter) {
+		res, err := e.trySingleSource(context.Background(), ln, r, newFakeRouteQ(), sampleRebalance(), "555",
+			map[string]int{}, 1000, 100, 2000, inv, 1_000_000_000, 30*time.Second, time.Unix(1, 0))
+		require.NoError(t, err)
+		require.Nil(t, res)
+	}
+
+	// no path: paused for this target only
+	e := newEngine()
+	try(e, &fakeLN{info: &lnrpc.GetInfoResponse{IdentityPubkey: "self"}, qrErr: errors.New("unable to find a path")}, &fakeRouter{})
+	assert.True(t, e.brake.blocked("555", target))
+	assert.False(t, e.brake.blocked("555", "other"))
+
+	// the source peer cannot forward onward: paused for every target
+	fourHops := &lnrpc.Route{TotalAmtMsat: 100_050_000, TotalFeesMsat: 50_000,
+		Hops: []*lnrpc.Hop{{PubKey: "aa"}, {PubKey: "xx"}, {PubKey: "bb"}, {PubKey: "self"}}}
+	r := &fakeRouter{
+		buildFn: func(req *routerrpc.BuildRouteRequest) (*routerrpc.BuildRouteResponse, error) {
+			return &routerrpc.BuildRouteResponse{Route: fourHops}, nil
+		},
+		sendFn: func(req *routerrpc.SendToRouteRequest) (*lnrpc.HTLCAttempt, error) {
+			return &lnrpc.HTLCAttempt{Status: lnrpc.HTLCAttempt_FAILED,
+				Failure: &lnrpc.Failure{Code: lnrpc.Failure_TEMPORARY_CHANNEL_FAILURE, FailureSourceIndex: 1}}, nil
+		},
+	}
+	e = newEngine()
+	try(e, &fakeLN{info: &lnrpc.GetInfoResponse{IdentityPubkey: "self"}, qr: sampleQR()}, r)
+	assert.True(t, e.brake.blocked("555", "other"))
 }
 
 func TestTrySingleSourceOppCostRejected(t *testing.T) {

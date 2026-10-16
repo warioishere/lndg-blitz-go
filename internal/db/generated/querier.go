@@ -152,6 +152,9 @@ type Querier interface {
 	ListChannelAliases(ctx context.Context) ([]ListChannelAliasesRow, error)
 	// get_source_fee_map + get_source_diff_map (chan_id__in). Beide Maps aus einer Query.
 	ListChannelFeeAndDiffByIDs(ctx context.Context, dollar_1 []string) ([]ListChannelFeeAndDiffByIDsRow, error)
+	// Saved routes with a stored route, the material the rebalancer combines new
+	// routes from.
+	ListCombinableRoutes(ctx context.Context) ([]GuiRebalanceroute, error)
 	// Queries fuer die [Data]-Jobs (jobs.py).
 	ListEpEnabledChannels(ctx context.Context) ([]GuiChannel, error)
 	ListEpEnabledChannelsByIDs(ctx context.Context, dollar_1 []string) ([]GuiChannel, error)

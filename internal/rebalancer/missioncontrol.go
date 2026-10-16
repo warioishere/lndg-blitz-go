@@ -10,12 +10,24 @@ import (
 	"github.com/warioishere/lndg-blitz-go/internal/lnd/lnrpc"
 )
 
-// Mission control constants.
+// Mission control constants. A failed edge is blocked for failedEdgeExpiry;
+// each further failure while it is still remembered doubles the block, up to
+// failedEdgeMaxBan. An edge is forgotten failedEdgeMaxBan after its block ends.
 const (
 	failedEdgeExpiry       = 600 * time.Second // _FAILED_EDGE_EXPIRY = 600
-	failedEdgeTolerancePpm = 50_000            // _FAILED_EDGE_TOLERANCE_PPM (5%)
+	failedEdgeMaxBan       = 2 * time.Hour
+	failedEdgeTolerancePpm = 50_000            // amounts up to 5% below the failed one are blocked too
 	chanInfoTTL            = 300 * time.Second // _CHAN_INFO_TTL
 )
+
+// edgeFailureCodes are the failure codes that report a missing or unusable
+// channel between the failing node and the next hop.
+var edgeFailureCodes = map[int]bool{
+	14: true, // CHANNEL_DISABLED
+	15: true, // TEMPORARY_CHANNEL_FAILURE
+	18: true, // UNKNOWN_NEXT_PEER
+	21: true, // PERMANENT_CHANNEL_FAILURE
+}
 
 // edgeKey identifies a directed (prev -> hop) edge in the failed-edge cache.
 type edgeKey struct {
@@ -23,9 +35,12 @@ type edgeKey struct {
 	hop  string
 }
 
+// edgeEntry is a failed edge: blocked until `until` for amounts from
+// amountMsat (less the tolerance) upwards; fails counts the failures in a row.
 type edgeEntry struct {
-	ts         time.Time
+	until      time.Time
 	amountMsat int64
+	fails      int
 }
 
 // missionControl tracks recently failed edges so that routes reusing them can be
@@ -41,35 +56,54 @@ func newMissionControl() *missionControl {
 	return &missionControl{edges: map[edgeKey]edgeEntry{}, now: time.Now}
 }
 
-// pruneFailedEdges removes expired entries from the failed-edge cache.
+// edgeBan is the block after the n-th failure in a row: failedEdgeExpiry
+// doubled per further failure, capped at failedEdgeMaxBan.
+func edgeBan(n int) time.Duration {
+	d := failedEdgeExpiry
+	for i := 1; i < n && d < failedEdgeMaxBan; i++ {
+		d *= 2
+	}
+	return min(d, failedEdgeMaxBan)
+}
+
+// pruneFailedEdges forgets edges whose block ended more than failedEdgeMaxBan ago.
 func (mc *missionControl) pruneFailedEdges() {
 	now := mc.now()
 	for k, e := range mc.edges {
-		if now.Sub(e.ts) > failedEdgeExpiry {
+		if now.Sub(e.until) > failedEdgeMaxBan {
 			delete(mc.edges, k)
 		}
 	}
 }
 
 // markEdgeFailed records a (prev -> hop) edge as failed for the given amount.
+// While the edge is still blocked, the smaller of the failed amounts counts.
 func (mc *missionControl) markEdgeFailed(prevPubkey, hopPubkey string, amountMsat int64) {
 	if prevPubkey == "" || hopPubkey == "" {
 		return
 	}
-	mc.edges[edgeKey{prevPubkey, hopPubkey}] = edgeEntry{ts: mc.now(), amountMsat: amountMsat}
+	now := mc.now()
+	key := edgeKey{prevPubkey, hopPubkey}
+	e, ok := mc.edges[key]
+	if ok && now.Before(e.until) && e.amountMsat < amountMsat {
+		amountMsat = e.amountMsat
+	}
+	e.fails++
+	e.amountMsat = amountMsat
+	e.until = now.Add(edgeBan(e.fails))
+	mc.edges[key] = e
 }
 
 // recordRouteFailure caches the (prev -> failure-source) edge when a route
-// fails with TEMPORARY_CHANNEL_FAILURE (code 15).
+// fails with an edge failure code at a remote node.
 func (mc *missionControl) recordRouteFailure(route *lnrpc.Route, failure *lnrpc.Failure) {
 	if route == nil || failure == nil {
 		return
 	}
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
-	code := int(failure.GetCode())
 	fsi := int(failure.GetFailureSourceIndex())
-	if code != 15 || fsi <= 0 {
+	if !edgeFailureCodes[int(failure.GetCode())] || fsi <= 0 {
 		return
 	}
 	hops := route.GetHops()
@@ -81,8 +115,21 @@ func (mc *missionControl) recordRouteFailure(route *lnrpc.Route, failure *lnrpc.
 	mc.markEdgeFailed(prev.GetPubKey(), failed.GetPubKey(), prev.GetAmtToForwardMsat())
 }
 
+// recordRouteSuccess forgets the failures of every edge a successful route used.
+func (mc *missionControl) recordRouteSuccess(route *lnrpc.Route) {
+	if route == nil {
+		return
+	}
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	hops := route.GetHops()
+	for i := 0; i+1 < len(hops); i++ {
+		delete(mc.edges, edgeKey{hops[i].GetPubKey(), hops[i+1].GetPubKey()})
+	}
+}
+
 // validateRoute returns true if no consecutive hop pair in the route matches a
-// cached failed edge at a similar amount.
+// blocked edge at its failed amount or more (less the tolerance).
 func (mc *missionControl) validateRoute(route *lnrpc.Route) bool {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
@@ -90,28 +137,18 @@ func (mc *missionControl) validateRoute(route *lnrpc.Route) bool {
 	if route == nil || len(route.GetHops()) < 2 {
 		return true
 	}
+	now := mc.now()
 	hops := route.GetHops()
 	for i := 0; i < len(hops)-1; i++ {
-		key := edgeKey{hops[i].GetPubKey(), hops[i+1].GetPubKey()}
-		cached, ok := mc.edges[key]
-		if !ok {
+		cached, ok := mc.edges[edgeKey{hops[i].GetPubKey(), hops[i+1].GetPubKey()}]
+		if !ok || !now.Before(cached.until) {
 			continue
 		}
-		failedAmtMsat := cached.amountMsat
 		curAmtMsat := hops[i].GetAmtToForwardMsat()
-		if curAmtMsat <= 0 || failedAmtMsat <= 0 {
+		if curAmtMsat <= 0 || cached.amountMsat <= 0 {
 			return false
 		}
-		denom := failedAmtMsat
-		if curAmtMsat > denom {
-			denom = curAmtMsat
-		}
-		diff := failedAmtMsat - curAmtMsat
-		if diff < 0 {
-			diff = -diff
-		}
-		diffPpm := diff * 1_000_000 / denom // integer floor division; always positive
-		if diffPpm <= failedEdgeTolerancePpm {
+		if curAmtMsat*1_000_000 >= cached.amountMsat*(1_000_000-failedEdgeTolerancePpm) {
 			return false
 		}
 	}

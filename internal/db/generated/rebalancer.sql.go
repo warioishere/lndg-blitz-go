@@ -312,7 +312,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 type InsertRouteAttemptParams struct {
 	Timestamp      pgtype.Timestamptz `json:"timestamp"`
 	RebalanceID    int64              `json:"rebalance_id"`
-	RouteID        int64              `json:"route_id"`
+	RouteID        pgtype.Int8        `json:"route_id"`
 	TargetPubkey   string             `json:"target_pubkey"`
 	OutgoingChanID string             `json:"outgoing_chan_id"`
 	List           string             `json:"list"`
@@ -586,6 +586,47 @@ func (q *Queries) ListChannelFeeAndDiffByIDs(ctx context.Context, dollar_1 []str
 	return items, nil
 }
 
+const listCombinableRoutes = `-- name: ListCombinableRoutes :many
+SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count, failure_count, last_success, last_failure, route_hex, last_fee_ppm, last_probed, probed_amount_sat, last_failure_hop FROM gui_rebalanceroute WHERE route_hex IS NOT NULL AND route_hex <> '' ORDER BY id
+`
+
+// Saved routes with a stored route, the material the rebalancer combines new
+// routes from.
+func (q *Queries) ListCombinableRoutes(ctx context.Context) ([]GuiRebalanceroute, error) {
+	rows, err := q.db.Query(ctx, listCombinableRoutes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GuiRebalanceroute{}
+	for rows.Next() {
+		var i GuiRebalanceroute
+		if err := rows.Scan(
+			&i.ID,
+			&i.TargetPubkey,
+			&i.OutgoingChanID,
+			&i.Route,
+			&i.FinalCltvDelta,
+			&i.SuccessCount,
+			&i.FailureCount,
+			&i.LastSuccess,
+			&i.LastFailure,
+			&i.RouteHex,
+			&i.LastFeePpm,
+			&i.LastProbed,
+			&i.ProbedAmountSat,
+			&i.LastFailureHop,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNodeReputations = `-- name: ListNodeReputations :many
 SELECT pubkey, success_count, failure_count FROM gui_nodereputation
 WHERE pubkey = ANY($1::varchar[])
@@ -720,7 +761,7 @@ func (q *Queries) ListRemainingDrainChannels(ctx context.Context, remotePubkey s
 }
 
 const listRoutesForTarget = `-- name: ListRoutesForTarget :many
-SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count, failure_count, last_success, last_failure, route_hex, last_fee_ppm, last_probed, probed_amount_sat FROM gui_rebalanceroute
+SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count, failure_count, last_success, last_failure, route_hex, last_fee_ppm, last_probed, probed_amount_sat, last_failure_hop FROM gui_rebalanceroute
 WHERE target_pubkey = $1
   AND outgoing_chan_id = ANY($2::varchar[])
   AND (last_failure < $3 OR last_failure IS NULL)
@@ -758,6 +799,7 @@ func (q *Queries) ListRoutesForTarget(ctx context.Context, arg ListRoutesForTarg
 			&i.LastFeePpm,
 			&i.LastProbed,
 			&i.ProbedAmountSat,
+			&i.LastFailureHop,
 		); err != nil {
 			return nil, err
 		}
@@ -829,7 +871,7 @@ const updateRebalanceRoute = `-- name: UpdateRebalanceRoute :exec
 
 UPDATE gui_rebalanceroute
 SET final_cltv_delta = $4, route_hex = $5, success_count = $6, failure_count = $7,
-    last_success = $8, last_failure = $9, last_fee_ppm = $10
+    last_success = $8, last_failure = $9, last_fee_ppm = $10, last_failure_hop = $11
 WHERE target_pubkey = $1 AND outgoing_chan_id = $2 AND route = $3
 `
 
@@ -844,6 +886,7 @@ type UpdateRebalanceRouteParams struct {
 	LastSuccess    pgtype.Timestamptz `json:"last_success"`
 	LastFailure    pgtype.Timestamptz `json:"last_failure"`
 	LastFeePpm     pgtype.Float8      `json:"last_fee_ppm"`
+	LastFailureHop pgtype.Int4        `json:"last_failure_hop"`
 }
 
 // rebalancer.py — Route-Record-, NodeReputation- und Purge-Queries.
@@ -862,6 +905,7 @@ func (q *Queries) UpdateRebalanceRoute(ctx context.Context, arg UpdateRebalanceR
 		arg.LastSuccess,
 		arg.LastFailure,
 		arg.LastFeePpm,
+		arg.LastFailureHop,
 	)
 	return err
 }

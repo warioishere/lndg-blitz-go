@@ -21,6 +21,7 @@ import (
 // --- fakeRebalQ: complete rebalancerQuerier implementation --------------------------
 
 type fakeRebalQ struct {
+	combinable  []db.GuiRebalanceroute
 	settings    map[string]string
 	activeChans []db.GuiChannel
 	// activeChansAfter, when set, is returned from the second channel listing on:
@@ -117,6 +118,9 @@ func (f *fakeRebalQ) IncrNodeReputationFailure(ctx context.Context, arg db.IncrN
 // savedRoutesQuerier
 func (f *fakeRebalQ) ListRoutesForTarget(ctx context.Context, arg db.ListRoutesForTargetParams) ([]db.GuiRebalanceroute, error) {
 	return f.savedRoutes, nil
+}
+func (f *fakeRebalQ) ListCombinableRoutes(ctx context.Context) ([]db.GuiRebalanceroute, error) {
+	return f.combinable, nil
 }
 func (f *fakeRebalQ) InsertRouteAttempt(ctx context.Context, arg db.InsertRouteAttemptParams) error {
 	f.attempts = append(f.attempts, arg)
@@ -357,4 +361,33 @@ func TestRunRebalancer406NoDecrease(t *testing.T) {
 	assert.Equal(t, int32(406), rb.Status)
 	assert.Nil(t, next)
 	assert.Empty(t, q.inserted)
+}
+
+// A route combined from two saved routes is tried with its own list name and
+// no route id.
+func TestRunRebalancerTriesCombinedRoutes(t *testing.T) {
+	q := newFakeRebalQ()
+	q.targetErr = pgx.ErrNoRows // opp_cost disabled: the fee limit is the budget
+	q.activeChans = []db.GuiChannel{chanOut(), chanIn()}
+	paid := func(r db.GuiRebalanceroute) db.GuiRebalanceroute {
+		r.SuccessCount = 1
+		r.LastSuccess = pgtype.Timestamptz{Time: fixedNow()().Add(-time.Hour), Valid: true}
+		return r
+	}
+	q.combinable = []db.GuiRebalanceroute{
+		paid(savedRoute(1, "02aabbccddeeff", "999", []string{"a9", "cc", "02aabbccddeeff", "ee"}, []int64{1, 1, 1})),
+		paid(savedRoute(2, "bb22", "777", []string{"a7", "cc", "bb22", "ee"}, []int64{1, 1, 1})),
+	}
+	ln := &fakeLN{invoice: &lnrpc.AddInvoiceResponse{RHash: []byte{0xaa}, PaymentRequest: "lnbc1"}}
+	e := newEngine()
+	rb := &db.GuiRebalancer{ID: 1, Value: 100000, LastHopPubkey: "02aabbccddeeff", Duration: 1, FeeLimit: 1000}
+	e.runRebalancer(context.Background(), ln, &fakeRebalRouter{}, q, rb, "Worker0", fixedNow())
+
+	require.Len(t, q.attempts, 1)
+	a := q.attempts[0]
+	assert.Equal(t, "combined", a.List)
+	assert.Equal(t, "777", a.OutgoingChanID)
+	assert.False(t, a.RouteID.Valid)
+	assert.Equal(t, int32(1), a.Position)
+	assert.Equal(t, "failed", a.Outcome)
 }

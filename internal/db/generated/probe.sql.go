@@ -25,7 +25,7 @@ func (q *Queries) DeleteOldProbeLogs(ctx context.Context) error {
 
 const getRebalanceRoute = `-- name: GetRebalanceRoute :one
 
-SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count, failure_count, last_success, last_failure, route_hex, last_fee_ppm, last_probed, probed_amount_sat FROM gui_rebalanceroute
+SELECT id, target_pubkey, outgoing_chan_id, route, final_cltv_delta, success_count, failure_count, last_success, last_failure, route_hex, last_fee_ppm, last_probed, probed_amount_sat, last_failure_hop FROM gui_rebalanceroute
 WHERE target_pubkey = $1 AND outgoing_chan_id = $2 AND route = $3
 `
 
@@ -54,6 +54,7 @@ func (q *Queries) GetRebalanceRoute(ctx context.Context, arg GetRebalanceRoutePa
 		&i.LastFeePpm,
 		&i.LastProbed,
 		&i.ProbedAmountSat,
+		&i.LastFailureHop,
 	)
 	return i, err
 }
