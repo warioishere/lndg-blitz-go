@@ -23,8 +23,11 @@ import (
 // learns the success chance of many node pairs (route_attempt_log, list scout)
 // and gets parts to combine refill routes from (scout_path).
 //
-// A target is done while QR-ScoutPaths of its verified paths (last
-// scoutWindow) have a success chance of at least scoutSureProb. Otherwise a
+// A probe reached its target when the target itself returned the failure:
+// only a node that received the HTLC can, so every channel on the way carried
+// the amount, whatever the failure code. A target is done while QR-ScoutPaths
+// of its verified paths (last scoutWindow) have a success chance of at least
+// scoutSureProb. Otherwise a
 // pass sends up to QR-ScoutTries probes to it: after a probe that reached the
 // target the next path search leaves out a node pair in the middle of that
 // path, after a failure the failing pair; slow pairs the statistics ban are
@@ -212,8 +215,9 @@ func (p *scoutPass) scoutTarget(ctx context.Context, target string, known []stri
 			}, p.now())
 			p.stats.Observe(path, "failed", o.hop, o.durationMs, p.now())
 		}
+		reached := o.status != "error" && o.hop == len(hops)
 		switch {
-		case o.status == "verified":
+		case reached:
 			p.verified++
 			if b, merr := proto.Marshal(route); merr == nil {
 				if e := p.q.UpsertScoutPath(ctx, db.UpsertScoutPathParams{

@@ -174,3 +174,23 @@ func TestScoutRunDisabled(t *testing.T) {
 	require.NoError(t, scoutRun(context.Background(), q, ln, &scoutRouter{}, func(time.Duration) {}, time.Now))
 	assert.Empty(t, ln.reqs)
 }
+
+// A failure the target itself returns (here invalid_onion_payload) means the probe reached it.
+type payloadRouter struct{ scoutRouter }
+
+func (r *payloadRouter) SendToRouteV2(ctx context.Context, in *routerrpc.SendToRouteRequest, opts ...grpc.CallOption) (*lnrpc.HTLCAttempt, error) {
+	return &lnrpc.HTLCAttempt{Status: lnrpc.HTLCAttempt_FAILED,
+		Failure: &lnrpc.Failure{Code: lnrpc.Failure_INVALID_ONION_PAYLOAD, FailureSourceIndex: uint32(len(in.Route.GetHops()))}}, nil
+}
+
+func TestScoutTargetReachedOnAnyTargetFailure(t *testing.T) {
+	q := &fakeScoutQ{}
+	ln := &scoutLN{}
+	p := newScoutPass(q, ln, &scoutRouter{}, scoutSettings{perHour: 600, tries: 1, paths: 1, maxFeeRate: 500})
+	p.router = &payloadRouter{}
+	require.True(t, p.scoutTarget(context.Background(), hopPubkey(0xcc), nil, []db.GuiChannel{scoutChannel()}))
+	require.Len(t, q.upserts, 1)
+	assert.Equal(t, 1, p.verified)
+	require.Len(t, q.attempts, 1)
+	assert.Equal(t, int32(24), q.attempts[0].FailureCode.Int32)
+}
