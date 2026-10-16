@@ -75,7 +75,7 @@ func TestNkFeesAppliesNkChannels(t *testing.T) {
 		nkChannel("2", "a", "nk", 900, 1_000_000),  // same peer: decided together
 	}}
 	q.channels[0].InboundOffset = -1
-	q.fwd = []db.NkForwardFlowsRow{{ChanID: "1", Amt6h: 1_000_000, Fee6h: 800, Amt24h: 1_000_000, Fee24h: 800, Amt72h: 1_000_000, Fee72h: 800}}
+	q.fwd = []db.NkForwardFlowsRow{{ChanID: "1", Amt6h: 1_000_000, Fee6h: 1000, Amt24h: 1_000_000, Fee24h: 1000, Amt72h: 1_000_000, Fee72h: 1000}}
 	client := &fakePolicyClient{version: "0.18.3-beta"}
 	n := &nkRunner{shadow: map[string]*nkShadow{}, reason: map[string]string{}}
 	now := time.Unix(1_700_000_000, 0)
@@ -83,12 +83,13 @@ func TestNkFeesAppliesNkChannels(t *testing.T) {
 
 	require.Len(t, client.policyReqs, 2)
 	for _, r := range client.policyReqs {
-		assert.InDelta(t, 1030.0/1e6, r.FeeRate, 1e-12, "the peer's highest fee + 3 %")
+		assert.InDelta(t, 1030.0/1e6, r.FeeRate, 1e-12, "the peer's highest fee + 3 %, below the target fee 1200")
 		assert.Equal(t, int64(1), r.BaseFeeMsat)
-		assert.Equal(t, int32(-767), r.InboundFee.FeeRatePpm, "sold at 800 less the margin at 15 % local: 10 + (160 - 10) x 0.15")
+		assert.Equal(t, int32(-961), r.InboundFee.FeeRatePpm, "sold at 1000 less the margin at 15 % local: 10 + (200 - 10) x 0.15")
 		assert.Equal(t, int32(-1), r.InboundFee.BaseFeeMsat)
 	}
-	assert.Equal(t, uint64(1_237_500_000), client.policyReqs[0].MaxHtlcMsat, "9.9M halved into 0.95M-1.9M available")
+	mh := float64(client.policyReqs[0].MaxHtlcMsat)
+	assert.True(t, mh <= 1.9e9 && mh*1.2 > 1.9e9, "the highest 1.2 step below the 1.9M available")
 	require.Len(t, q.updates, 2)
 	assert.Equal(t, int32(1030), q.updates[0].LocalFeeRate)
 	assert.True(t, q.updates[0].NkLastChange.Valid)
@@ -114,9 +115,9 @@ func TestNkFeesShadow(t *testing.T) {
 	assert.Equal(t, int32(1000), q.logs[0].FeeOld)
 	assert.Equal(t, int32(990), q.logs[0].FeeNew)
 
-	// the shadow fee carries on: 5 minutes later it waits, 11 minutes later it steps again
-	require.NoError(t, n.run(context.Background(), q, client, now.Add(5*time.Minute)))
-	require.NoError(t, n.run(context.Background(), q, client, now.Add(11*time.Minute)))
+	// the shadow fee carries on: 3 minutes later it waits, 6 minutes later it steps again
+	require.NoError(t, n.run(context.Background(), q, client, now.Add(3*time.Minute)))
+	require.NoError(t, n.run(context.Background(), q, client, now.Add(6*time.Minute)))
 	last := q.logs[len(q.logs)-1]
 	assert.Equal(t, int32(990), last.FeeOld)
 	assert.Equal(t, int32(980), last.FeeNew)
@@ -135,7 +136,7 @@ func TestNkGroupInputKeeps30Days(t *testing.T) {
 		"1": {All30dAmt: 1_000_000, All30dFee: 3800},
 		"2": {All30dAmt: 1_000_000, All30dFee: 3900},
 	}
-	in := nkGroupInput(chs, flows)
+	in := af.NkGroupInput(chs, flows)
 	ref, ok := in.Flow.RefPrice()
 	require.True(t, ok)
 	assert.Equal(t, 3850, ref, "the 30-day price of both channels")

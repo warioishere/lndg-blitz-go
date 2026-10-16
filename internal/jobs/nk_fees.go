@@ -3,7 +3,6 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"math"
 	"sort"
 	"time"
 
@@ -113,7 +112,7 @@ func (n *nkRunner) run(ctx context.Context, q nkQuerier, client policyClient, no
 	sort.Strings(keys)
 	for _, k := range keys {
 		g := groups[k]
-		in := nkGroupInput(g.channels, flows)
+		in := af.NkGroupInput(g.channels, flows)
 		if g.nk {
 			d := af.NkDecide(in, p, now)
 			n.apply(ctx, q, client, g, in, d, p, inboundOK, now)
@@ -135,7 +134,7 @@ func (n *nkRunner) run(ctx context.Context, q nkQuerier, client policyClient, no
 		}
 		for _, ch := range g.channels {
 			if changed || n.reason[ch.ChanID] != d.Reason {
-				n.log(ctx, q, ch, false, in, d, s.fee, s.inbound, nkMaxHtlcFor(ch, d), now)
+				n.log(ctx, q, ch, false, in, d, s.fee, s.inbound, nkMaxHtlcFor(ch, d, p.MaxHtlcStep), now)
 			}
 		}
 		s.fee, s.inbound = d.Fee, d.Inbound
@@ -149,47 +148,17 @@ func (n *nkRunner) run(ctx context.Context, q nkQuerier, client policyClient, no
 	return nil
 }
 
-// nkGroupInput combines a peer's channels: fill over their total capacity,
-// their flows summed, the highest fee, the latest change and publish times and
-// the capacity-weighted target. The inbound rate and the dynamic flag are those
-// of the first channel.
-func nkGroupInput(chs []db.GuiChannel, flows map[string]af.NkFlow) af.NkInput {
-	var local, capacity int64
-	var targetW float64
-	in := af.NkInput{Inbound: int(chs[0].LocalInboundFeeRate), InboundDynamic: chs[0].InboundOffset != 0}
-	var f af.NkFlow
-	for _, ch := range chs {
-		local += ch.LocalBalance + ch.PendingOutbound
-		capacity += ch.Capacity
-		targetW += float64(af.NkTargetPct(ch.NkTarget, ch.ArInTarget)) * float64(ch.Capacity)
-		in.Fee = max(in.Fee, int(ch.LocalFeeRate))
-		if ch.NkLastChange.Valid && ch.NkLastChange.Time.After(in.LastChange) {
-			in.LastChange = ch.NkLastChange.Time
-		}
-		if ch.NkLastPublish.Valid && ch.NkLastPublish.Time.After(in.LastPublish) {
-			in.LastPublish = ch.NkLastPublish.Time
-		}
-		f.Add(flows[ch.ChanID])
-	}
-	in.Flow = f
-	if capacity > 0 {
-		in.LocalPct = float64(local) * 100 / float64(capacity)
-		in.TargetPct = int(math.Round(targetW / float64(capacity)))
-	}
-	return in
-}
-
 // nkMaxHtlcFor is the max_htlc the NK rules give a channel.
-func nkMaxHtlcFor(ch db.GuiChannel, d af.NkDecision) int64 {
+func nkMaxHtlcFor(ch db.GuiChannel, d af.NkDecision, step float64) int64 {
 	avail := ch.LocalBalance - int64(ch.LocalChanReserve)
-	return af.NkMaxHtlc(ch.LocalMaxHtlcMsat, avail, ch.Capacity, ch.LocalMinHtlcMsat, d.Empty)
+	return af.NkMaxHtlc(avail, ch.Capacity, ch.LocalMinHtlcMsat, step, d.Empty)
 }
 
 // apply sends a decision for the channels of an NK group to LND and records it.
 // A channel that fails is logged and skipped.
 func (n *nkRunner) apply(ctx context.Context, q nkQuerier, client policyClient, g *nkGroup, in af.NkInput, d af.NkDecision, p af.NkParams, inboundOK bool, now time.Time) {
 	for _, ch := range g.channels {
-		maxHtlc := nkMaxHtlcFor(ch, d)
+		maxHtlc := nkMaxHtlcFor(ch, d, p.MaxHtlcStep)
 		if !d.Publish {
 			if n.reason[ch.ChanID] != d.Reason {
 				n.log(ctx, q, ch, true, in, d, int(ch.LocalFeeRate), int(ch.LocalInboundFeeRate), ch.LocalMaxHtlcMsat, now)

@@ -17,9 +17,9 @@ var nkNow = time.Unix(1_700_000_000, 0)
 
 func nkTestParams() NkParams {
 	return NkParams{
-		StepUpPct: 3, StepDownPct: 1, BelowFlowPct: 10, LockMin: 12 * time.Minute, LockMax: 360 * time.Minute,
-		LockFlowPct: 2, LockFeeRef: 2000, AnchorPct: 110, CapFactor: 2, CapMin: 1000, MaxRate: 7000,
-		MinRate: 1, EmptyPct: 2, MinInterval: 10 * time.Minute, Republish: 30 * time.Minute,
+		StepUpPct: 3, StepDownPct: 1, TargetUp: 1.2, TargetDown: 0.8, BelowFlowPct: 10, LockMin: 12 * time.Minute,
+		LockMax: 360 * time.Minute, LockFlowPct: 2, LockFeeRef: 2000, AnchorPct: 110, CapFactor: 2, CapMin: 1000,
+		MaxRate: 7000, MinRate: 1, EmptyPct: 2, MaxHtlcStep: 1.2, MinInterval: 5 * time.Minute, Republish: 30 * time.Minute,
 		BaseMsat: 1, BudgetMarginMin: 10, BudgetMarginMaxPct: 20,
 	}
 }
@@ -134,19 +134,40 @@ func TestNkDecideAnchor(t *testing.T) {
 	assert.Equal(t, 699, d.Fee)
 	assert.Equal(t, "above target, below flow", d.Reason)
 	// a step under half a ppm keeps the fee
-	in.Fee = 400
+	in.Fee, in.Flow = 99, sold24(100, 1_000_000)
 	d = NkDecide(in, p, nkNow)
-	assert.Equal(t, 400, d.Fee)
+	assert.Equal(t, 99, d.Fee)
 	assert.Equal(t, "above target, below flow", d.Reason)
+}
+
+func TestNkDecideTargetFee(t *testing.T) {
+	p := nkTestParams()
+	// sold at 800, below target: up 3 %, never past 1.2 x 800 = 960
+	in := idle(NkInput{Fee: 900, LocalPct: 20, TargetPct: 50, Flow: sold24(800, 1_000_000)})
+	assert.Equal(t, 927, NkDecide(in, p, nkNow).Fee)
+	in.Fee = 950
+	d := NkDecide(in, p, nkNow)
+	assert.Equal(t, 960, d.Fee)
+	assert.Equal(t, "below target, target fee", d.Reason)
+	// above the target fee it holds
+	in.Fee = 1000
+	assert.Equal(t, 1000, NkDecide(in, p, nkNow).Fee)
+	// above target: down to 0.8 x 800 = 640 at most, there it holds
+	in.LocalPct, in.Fee = 80, 641
+	assert.Equal(t, 640, NkDecide(in, p, nkNow).Fee)
+	in.Fee = 640
+	d = NkDecide(in, p, nkNow)
+	assert.Equal(t, 640, d.Fee)
+	assert.Equal(t, "above target, target fee", d.Reason)
 }
 
 func TestNkDecideCapAndEmpty(t *testing.T) {
 	p := nkTestParams()
-	// cap: 2 x 800 = 1600
-	in := idle(NkInput{Fee: 1590, LocalPct: 10, TargetPct: 50, Flow: sold24(800, 1_000_000)})
+	// no sale in 72 h: no target fee, the cap is 2 x the 30-day price
+	in := idle(NkInput{Fee: 2990, LocalPct: 10, TargetPct: 50, Flow: sold30(1500)})
 	d := NkDecide(in, p, nkNow)
-	assert.Equal(t, 1600, d.Fee)
-	assert.Equal(t, 1600, d.Cap)
+	assert.Equal(t, 3000, d.Fee)
+	assert.Equal(t, 3000, d.Cap)
 	assert.Equal(t, "below target, cap", d.Reason)
 	// cap at least NK-CapMin
 	assert.Equal(t, 1000, NkCap(sold24(100, 1_000_000), p))
@@ -154,17 +175,21 @@ func TestNkDecideCapAndEmpty(t *testing.T) {
 	assert.Equal(t, 1200, NkCap(NkFlow{All30dAmt: 1_000_000, All30dFee: 600}, p))
 	// no sale in 30 days: NK-CapMin
 	assert.Equal(t, 1000, NkCap(NkFlow{}, p))
-	// empty: straight to the cap
-	in.Fee, in.LocalPct = 500, 1
+	// empty: the rules below the target, no jump to the cap
+	in = idle(NkInput{Fee: 500, LocalPct: 1, TargetPct: 50, Flow: sold24(800, 1_000_000)})
 	d = NkDecide(in, p, nkNow)
 	assert.True(t, d.Empty)
-	assert.Equal(t, 1600, d.Fee)
+	assert.Equal(t, 515, d.Fee)
 	assert.Equal(t, "empty", d.Reason)
+	in.Fee = 955
+	d = NkDecide(in, p, nkNow)
+	assert.Equal(t, 960, d.Fee)
+	assert.Equal(t, "empty, target fee", d.Reason)
 }
 
 func TestNkDecidePacing(t *testing.T) {
 	p := nkTestParams()
-	in := NkInput{Fee: 1000, LocalPct: 20, TargetPct: 50, Flow: sold30(1500), LastChange: nkNow.Add(-5 * time.Minute), LastPublish: nkNow.Add(-5 * time.Minute)}
+	in := NkInput{Fee: 1000, LocalPct: 20, TargetPct: 50, Flow: sold30(1500), LastChange: nkNow.Add(-3 * time.Minute), LastPublish: nkNow.Add(-3 * time.Minute)}
 	d := NkDecide(in, p, nkNow)
 	assert.Equal(t, 1000, d.Fee, "a change waits for NK-MinInterval")
 	assert.Equal(t, "below target, wait", d.Reason)
@@ -187,11 +212,11 @@ func TestNkDecideInbound(t *testing.T) {
 	in.LocalPct, in.Inbound = 50, -754
 	assert.Equal(t, 0, NkDecide(in, p, nkNow).Inbound)
 	in.LocalPct = 20
-	// never more than the own outbound fee
+	// the rebalance budget: min(fee 100, sold 5000) less 10 + (20 - 10) x 0.2
 	in.Flow = sold24(5000, 1_000_000)
 	in.Fee, in.LocalPct = 100, 20
 	d = NkDecide(in, p, nkNow)
-	assert.Equal(t, -d.Fee, d.Inbound)
+	assert.Equal(t, -88, d.Inbound)
 	// without dynamic inbound a discount goes back to 0, a manual positive rate stays
 	in.InboundDynamic, in.Inbound = false, -300
 	assert.Equal(t, 0, NkDecide(in, p, nkNow).Inbound)
@@ -203,15 +228,17 @@ func TestNkDecideInbound(t *testing.T) {
 }
 
 func TestNkMaxHtlc(t *testing.T) {
-	// 10M channel, max_htlc at capacity, 3M available: halved to 2.5M (inside 1.5M-3M)
-	assert.Equal(t, int64(2_500_000_000), NkMaxHtlc(10_000_000_000, 3_000_000, 10_000_000, 1000, false))
-	// inside the band: unchanged
-	assert.Equal(t, int64(2_500_000_000), NkMaxHtlc(2_500_000_000, 4_000_000, 10_000_000, 1000, false))
-	// below half: doubled
-	assert.Equal(t, int64(5_000_000_000), NkMaxHtlc(2_500_000_000, 6_000_000, 10_000_000, 1000, false))
+	// 10M channel, 3M available, steps of 2: 10M, 5M, 2.5M
+	assert.Equal(t, int64(2_500_000_000), NkMaxHtlc(3_000_000, 10_000_000, 1000, 2, false))
+	// steps of 1.2: the highest step at or below 3M
+	m := NkMaxHtlc(3_000_000, 10_000_000, 1000, 1.2, false)
+	assert.LessOrEqual(t, m, int64(3_000_000_000))
+	assert.Greater(t, float64(m)*1.2, 3e9)
+	// all available: the capacity
+	assert.Equal(t, int64(10_000_000_000), NkMaxHtlc(10_000_000, 10_000_000, 1000, 1.2, false))
 	// empty or nearly empty: minimum (1000 sats or min_htlc)
-	assert.Equal(t, int64(1_000_000), NkMaxHtlc(2_500_000_000, 6_000_000, 10_000_000, 1000, true))
-	assert.Equal(t, int64(2_000_000), NkMaxHtlc(2_500_000_000, 500, 10_000_000, 2_000_000, false))
+	assert.Equal(t, int64(1_000_000), NkMaxHtlc(6_000_000, 10_000_000, 1000, 1.2, true))
+	assert.Equal(t, int64(2_000_000), NkMaxHtlc(500, 10_000_000, 2_000_000, 1.2, false))
 }
 
 func TestNkBudgetPpm(t *testing.T) {
@@ -235,6 +262,11 @@ func TestNkBudgetPpm(t *testing.T) {
 type fakeNkQ struct {
 	settings map[string]string
 	fwd      []db.NkForwardFlowsRow
+	peer     []db.GuiChannel
+}
+
+func (f *fakeNkQ) ListNkPeerChannels(ctx context.Context, remotePubkey string) ([]db.GuiChannel, error) {
+	return f.peer, nil
 }
 
 func (f *fakeNkQ) GetOrCreateLocalSetting(ctx context.Context, arg db.GetOrCreateLocalSettingParams) (db.GuiLocalsetting, error) {
@@ -271,11 +303,22 @@ func TestTargetBudget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []int{3000, 90}, []int{fee, cost})
 
-	// NK: min(3000, 1000 sold) - 10 at an empty channel, at 100 %
+	// NK, the NK job runs no channel to the peer: the target alone,
+	// min(3000, 1000 sold) - 10 at an empty channel, at 100 %
 	tc.AfMode = "nk"
 	fee, cost, err = TargetBudget(context.Background(), q, tc, nkNow)
 	require.NoError(t, err)
 	assert.Equal(t, []int{990, 100}, []int{fee, cost})
+
+	// the peer's NK channels together: a full second channel makes the peer
+	// 50 % local, margin 10 + (200 - 10) x 0.5 = 105
+	q.peer = []db.GuiChannel{
+		{ChanID: "1", LocalFeeRate: 3000, Capacity: 10_000_000},
+		{ChanID: "2", LocalFeeRate: 3000, Capacity: 10_000_000, LocalBalance: 10_000_000},
+	}
+	fee, _, err = TargetBudget(context.Background(), q, tc, nkNow)
+	require.NoError(t, err)
+	assert.Equal(t, 895, fee)
 }
 
 func TestLoadNkParamsDefaults(t *testing.T) {

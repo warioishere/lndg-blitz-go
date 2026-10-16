@@ -13,8 +13,9 @@ import (
 	gen "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 )
 
-// Emergency fees leave NK channels alone: both EP channel lists skip them.
-func TestEpListsSkipNkChannels(t *testing.T) {
+// The periodic EP job leaves NK channels alone, the live trigger after a
+// forward keeps them.
+func TestEpPeriodicSkipsNkChannels(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping container-based test in -short mode")
 	}
@@ -43,6 +44,5 @@ func TestEpListsSkipNkChannels(t *testing.T) {
 	assert.Equal(t, "1", all[0].ChanID)
 	byID, err := q.ListEpEnabledChannelsByIDs(ctx, []string{"1", "2"})
 	require.NoError(t, err)
-	require.Len(t, byID, 1)
-	assert.Equal(t, "1", byID[0].ChanID)
+	require.Len(t, byID, 2)
 }

@@ -165,7 +165,8 @@ type Querier interface {
 	// Queries fuer die [Data]-Jobs (jobs.py).
 	// NK channels are left out: the NK job sets their fees.
 	ListEpEnabledChannels(ctx context.Context) ([]GuiChannel, error)
-	// NK channels are left out: the NK job sets their fees.
+	// NK channels stay in: the live trigger after a forward is part of the NK
+	// rules, only the periodic EP job (ListEpEnabledChannels) leaves them out.
 	ListEpEnabledChannelsByIDs(ctx context.Context, dollar_1 []string) ([]GuiChannel, error)
 	ListInactivePeerPubkeys(ctx context.Context) ([]string, error)
 	// inbound_offsets: is_open=true, inbound_offset != 0 (jobs.py:780); NK channels
@@ -176,6 +177,9 @@ type Querier interface {
 	// Channels the NK job evaluates: the auto-fee channels of every mode (NK ones
 	// are applied, the others get shadow decisions).
 	ListNkJobChannels(ctx context.Context) ([]GuiChannel, error)
+	// The NK channels to one peer that the NK job decides together (the NK ones of
+	// ListNkJobChannels).
+	ListNkPeerChannels(ctx context.Context, remotePubkey string) ([]GuiChannel, error)
 	ListNodeReputations(ctx context.Context, dollar_1 []string) ([]ListNodeReputationsRow, error)
 	// _trigger_probe targets: offene AR-Channels zu remote_pubkey. ORDER BY chan_id wie
 	// Djangos targets.first() (Primaerschluessel); targets[0] bestimmt Fee und Budget.

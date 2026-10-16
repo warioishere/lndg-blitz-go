@@ -267,6 +267,9 @@ func TestSettingsFlags(t *testing.T) {
 	assert.Equal(t, 7, getRouteLimit(context.Background(), q))
 }
 
+func (f *fakeOrchQ) ListNkPeerChannels(ctx context.Context, remotePubkey string) ([]db.GuiChannel, error) {
+	return nil, nil
+}
 func (f *fakeOrchQ) NkForwardFlows(ctx context.Context, arg db.NkForwardFlowsParams) ([]db.NkForwardFlowsRow, error) {
 	return nil, nil
 }

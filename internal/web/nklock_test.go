@@ -7,6 +7,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	af "github.com/warioishere/lndg-blitz-go/internal/af"
+	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 )
 
 func TestNkLockDisablesInputsOfNkChannels(t *testing.T) {
@@ -20,4 +23,10 @@ func TestNkLockDisablesInputsOfNkChannels(t *testing.T) {
 	assert.Contains(t, nk, `disabled title="Set by the NK fee mode (/nk/)"`)
 	assert.NotContains(t, render(map[string]any{"af_mode": "lndg", "local_fee_rate": 500}), "disabled")
 	assert.NotContains(t, render(map[string]any{"local_fee_rate": 500}), "disabled", "a row without af_mode stays editable")
+}
+
+// The fee rates table locks the rate input of an NK channel: its rows carry af_mode.
+func TestFeeRecordCarriesAfMode(t *testing.T) {
+	rec := feeRecord(&af.ChannelFeeRow{ChanID: "1"}, db.GuiChannel{ChanID: "1", AfMode: "nk"})
+	assert.Equal(t, nkLockAttr, nkLock(rec))
 }

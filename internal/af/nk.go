@@ -17,38 +17,45 @@ import (
 //   - each channel has a local liquidity target; below it the fee goes up,
 //     above it the fee goes down, in percent of the current fee (up faster than
 //     down);
+//   - the price the channel actually sold at (24 h, else 72 h) sets a target
+//     fee: NK-TargetUp x that price below the liquidity target, NK-TargetDown x
+//     that price above it; a step never passes the target fee, and at the target
+//     fee the fee holds; without a sale in 72 h there is no target fee;
 //   - no decrease while a large outbound flow (forward or balance-out of at
 //     least NK-LockFlowPct % of capacity) is recent; the lock lasts longer the
 //     higher the fee and the emptier the channel;
-//   - the price the channel actually sold at (24 h, else 72 h) anchors the fee:
-//     above NK-AnchorPct % of it a decrease jumps straight there, below it the
-//     fee holds or falls by NK-BelowFlowPct % of the normal step (whole ppm
-//     only, so a small fee stays put);
+//   - above NK-AnchorPct % of the sold price a decrease jumps straight there,
+//     below the sold price it falls by NK-BelowFlowPct % of the normal step
+//     (whole ppm only, so a small fee stays put);
 //   - the cap is NK-CapFactor x the reference price (the sold price of 24 h,
 //     72 h, else 30 days), at least NK-CapMin; NK-CapMin without a sale in 30
 //     days;
-//   - an empty channel goes to the cap with max_htlc at its minimum;
-//   - max_htlc stays between half and all of the available liquidity, halved or
-//     doubled when it leaves that band, and only goes out with a fee update;
+//   - an empty channel gets max_htlc at its minimum, its fee follows the rules
+//     below the target;
+//   - max_htlc is the highest step of a ladder down from the capacity (each step
+//     NK-MaxHtlcStep times smaller) that fits into the available liquidity, and
+//     only goes out with a fee update;
 //   - the inbound discount of a channel with dynamic inbound fees, while it is
-//     below its target, equals what the rebalancer would pay: the price it sold
-//     at (6 h, else 24 h, else 72 h) less the fill margin, never more than its
-//     own outbound fee; none at or above the target;
+//     below its target, is its rebalance budget with the price it sold at
+//     (forwards of 6 h, else 24 h, else 72 h) as the reference, never more than
+//     its own outbound fee; none at or above the target;
 //   - changes go out at most every NK-MinInterval, the policy is resent every
 //     NK-Republish even when unchanged.
 //
 // The rebalancer pays for an NK channel at most min(fee, reference price) less
-// the fill margin, instead of fee x ar_max_cost. The fill margin grows with the
-// channel's local share from NK-BudgetMarginMin ppm (empty) to
-// NK-BudgetMarginMax % of the price (full); without a sale in 30 days
-// min(fee, NK-CapMin) takes the place of the reference price. A raised fee (the
-// wall of an empty channel) never raises the budget.
+// the fill margin, instead of fee x ar_max_cost, over all NK channels to the
+// peer like the fee decision. The fill margin grows with the local share from
+// NK-BudgetMarginMin ppm (empty) to NK-BudgetMarginMax % of the price (full);
+// without a sale in 30 days min(fee, NK-CapMin) takes the place of the
+// reference price. A raised fee never raises the budget.
 
 // NkParams are the NK-* settings.
 type NkParams struct {
 	Shadow             bool
 	StepUpPct          float64
 	StepDownPct        float64
+	TargetUp           float64
+	TargetDown         float64
 	BelowFlowPct       float64
 	LockMin, LockMax   time.Duration
 	LockFlowPct        float64
@@ -59,6 +66,7 @@ type NkParams struct {
 	MaxRate            int
 	MinRate            int
 	EmptyPct           float64
+	MaxHtlcStep        float64
 	MinInterval        time.Duration
 	Republish          time.Duration
 	BaseMsat           int // -1 keeps the channel's base fee
@@ -92,6 +100,8 @@ func LoadNkParams(ctx context.Context, q nkSettingsQuerier) (NkParams, error) {
 	p.Shadow = num("NK-Shadow", "1") == 1
 	p.StepUpPct = num("NK-StepUp", "3")
 	p.StepDownPct = num("NK-StepDown", "1")
+	p.TargetUp = num("NK-TargetUp", "1.2")
+	p.TargetDown = num("NK-TargetDown", "0.8")
 	p.BelowFlowPct = num("NK-BelowFlowPct", "10")
 	p.LockMin = minutes("NK-LockMin", "12")
 	p.LockMax = minutes("NK-LockMax", "360")
@@ -103,7 +113,8 @@ func LoadNkParams(ctx context.Context, q nkSettingsQuerier) (NkParams, error) {
 	p.MaxRate = int(num("NK-MaxRate", "7000"))
 	p.MinRate = int(num("NK-MinRate", "1"))
 	p.EmptyPct = num("NK-EmptyPct", "2")
-	p.MinInterval = minutes("NK-MinInterval", "10")
+	p.MaxHtlcStep = num("NK-MaxHtlcStep", "1.2")
+	p.MinInterval = minutes("NK-MinInterval", "5")
 	p.Republish = minutes("NK-Republish", "30")
 	p.BaseMsat = int(num("NK-BaseMsat", "1"))
 	p.BudgetMarginMin = int(num("NK-BudgetMarginMin", "10"))
@@ -282,26 +293,35 @@ func NkCap(flow NkFlow, p NkParams) int {
 
 // NkDecide applies the NK fee rules to one channel.
 func NkDecide(in NkInput, p NkParams, now time.Time) NkDecision {
-	d := NkDecision{Fee: in.Fee, Inbound: in.Inbound, Cap: NkCap(in.Flow, p)}
+	d := NkDecision{Fee: in.Fee, Inbound: in.Inbound, Cap: NkCap(in.Flow, p), Empty: in.LocalPct < p.EmptyPct}
 	anchor, hasAnchor := in.Flow.Anchor()
 	fee := in.Fee
-	switch {
-	case in.LocalPct < p.EmptyPct:
-		d.Empty, d.Fee, d.Reason = true, d.Cap, "empty"
-	case in.LocalPct < float64(in.TargetPct):
+	if in.LocalPct < float64(in.TargetPct) {
 		d.Fee, d.Reason = max(int(math.Ceil(float64(fee)*(1+p.StepUpPct/100))), fee+1), "below target"
-	default:
+		if d.Empty {
+			d.Reason = "empty"
+		}
+		if target := int(math.Round(float64(anchor) * p.TargetUp)); hasAnchor && d.Fee > target {
+			d.Fee, d.Reason = max(fee, target), d.Reason+", target fee"
+		}
+	} else {
 		lock := NkLockUntil(in.Flow, fee, in.LocalPct, p)
 		top := int(math.Round(float64(anchor) * p.AnchorPct / 100))
+		floor := int(math.Round(float64(anchor) * p.TargetDown))
 		switch {
 		case now.Before(lock):
 			d.LockUntil, d.Reason = lock, "lock"
 		case hasAnchor && fee > top:
 			d.Fee, d.Reason = top, "to anchor"
+		case hasAnchor && fee <= floor:
+			d.Reason = "above target, target fee"
 		case hasAnchor && fee < anchor:
-			d.Fee, d.Reason = int(math.Round(float64(fee)*(1-p.StepDownPct*p.BelowFlowPct/1e4))), "above target, below flow"
+			d.Fee, d.Reason = max(int(math.Round(float64(fee)*(1-p.StepDownPct*p.BelowFlowPct/1e4))), floor), "above target, below flow"
 		default:
 			d.Fee, d.Reason = min(int(math.Floor(float64(fee)*(1-p.StepDownPct/100))), fee-1), "above target"
+			if hasAnchor {
+				d.Fee = max(d.Fee, floor)
+			}
 		}
 	}
 	if d.Fee > d.Cap {
@@ -312,7 +332,7 @@ func NkDecide(in NkInput, p NkParams, now time.Time) NkDecision {
 	switch {
 	case in.InboundDynamic && in.LocalPct < float64(in.TargetPct):
 		if sold, ok := in.Flow.SoldPpm(); ok {
-			d.Inbound = -min(max(sold-nkMargin(sold, in.LocalPct, p), 0), d.Fee)
+			d.Inbound = -min(max(nkBudget(in.Fee, sold, in.LocalPct, p), 0), d.Fee)
 		}
 	case in.Inbound < 0:
 		d.Inbound = 0
@@ -328,26 +348,22 @@ func NkDecide(in NkInput, p NkParams, now time.Time) NkDecision {
 	return d
 }
 
-// NkMaxHtlc keeps max_htlc between half and all of the available liquidity:
-// halved while above it, doubled while below half, never under minMsat (or
-// 1000 sats) and never over the capacity; minimum for an empty channel.
-func NkMaxHtlc(curMsat, availSat, capacitySat, minMsat int64, empty bool) int64 {
+// NkMaxHtlc is the highest step of a ladder down from the capacity, each step
+// step times smaller than the one above, that fits into the available
+// liquidity; never under minMsat (or 1000 sats); minimum for an empty channel.
+// A step of 1 or less is taken as 1.01, so the ladder always descends.
+func NkMaxHtlc(availSat, capacitySat, minMsat int64, step float64, empty bool) int64 {
 	floor := max(minMsat, 1_000_000)
-	if empty || availSat*1000 <= floor {
+	avail := float64(availSat * 1000)
+	if empty || avail <= float64(floor) {
 		return floor
 	}
-	avail := availSat * 1000
-	m := curMsat
-	if m <= 0 || m > capacitySat*1000 {
-		m = capacitySat * 1000
+	step = max(step, 1.01)
+	m := float64(capacitySat * 1000)
+	for m > avail {
+		m /= step
 	}
-	for m > avail && m/2 >= floor {
-		m /= 2
-	}
-	for m*2 <= avail {
-		m *= 2
-	}
-	return m
+	return max(int64(m), floor)
 }
 
 // NkTargetPct is the channel's NK local liquidity target in percent.
@@ -367,20 +383,57 @@ func nkMargin(price int, localPct float64, p NkParams) int {
 	return int(math.Round(minM + (p.BudgetMarginMaxPct/100*float64(price)-minM)*fill))
 }
 
-// NkBudgetPpm is what the rebalancer may pay at most to refill an NK channel,
-// before the source fee: min(fee, reference price) less the fill margin;
-// min(fee, NK-CapMin) without a sale in 30 days.
-func NkBudgetPpm(fee int, flow NkFlow, localPct float64, p NkParams) int {
-	base := min(fee, p.CapMin)
-	if ref, ok := flow.RefPrice(); ok {
-		base = min(fee, ref)
-	}
+// nkBudget is min(fee, price) less the fill margin: the rebalance budget and
+// the inbound discount of an NK channel, each with its own price.
+func nkBudget(fee, price int, localPct float64, p NkParams) int {
+	base := min(fee, price)
 	return base - nkMargin(base, localPct, p)
+}
+
+// NkBudgetPpm is what the rebalancer may pay at most to refill an NK channel,
+// before the source fee: nkBudget with the reference price; with NK-CapMin
+// without a sale in 30 days.
+func NkBudgetPpm(fee int, flow NkFlow, localPct float64, p NkParams) int {
+	ref, ok := flow.RefPrice()
+	if !ok {
+		ref = p.CapMin
+	}
+	return nkBudget(fee, ref, localPct, p)
+}
+
+// NkGroupInput combines a peer's channels: fill over their total capacity,
+// their flows summed, the highest fee, the latest change and publish times and
+// the capacity-weighted target. The inbound rate and the dynamic flag are those
+// of the first channel.
+func NkGroupInput(chs []db.GuiChannel, flows map[string]NkFlow) NkInput {
+	var local, capacity int64
+	var targetW float64
+	in := NkInput{Inbound: int(chs[0].LocalInboundFeeRate), InboundDynamic: chs[0].InboundOffset != 0}
+	var f NkFlow
+	for _, ch := range chs {
+		local += ch.LocalBalance + ch.PendingOutbound
+		capacity += ch.Capacity
+		targetW += float64(NkTargetPct(ch.NkTarget, ch.ArInTarget)) * float64(ch.Capacity)
+		in.Fee = max(in.Fee, int(ch.LocalFeeRate))
+		if ch.NkLastChange.Valid && ch.NkLastChange.Time.After(in.LastChange) {
+			in.LastChange = ch.NkLastChange.Time
+		}
+		if ch.NkLastPublish.Valid && ch.NkLastPublish.Time.After(in.LastPublish) {
+			in.LastPublish = ch.NkLastPublish.Time
+		}
+		f.Add(flows[ch.ChanID])
+	}
+	in.Flow = f
+	if capacity > 0 {
+		in.LocalPct = float64(local) * 100 / float64(capacity)
+		in.TargetPct = int(math.Round(targetW / float64(capacity)))
+	}
+	return in
 }
 
 // TargetChannel is the part of a refill target the rebalancer budget depends on.
 type TargetChannel struct {
-	ChanID                          string
+	ChanID, RemotePubkey            string
 	LocalFeeRate, ArMaxCost         int32
 	ArInTarget                      int32
 	Capacity, LocalBalance, PendOut int64
@@ -391,8 +444,8 @@ type TargetChannel struct {
 // TargetOf returns the TargetChannel of a channel row.
 func TargetOf(ch db.GuiChannel) TargetChannel {
 	return TargetChannel{
-		ChanID: ch.ChanID, LocalFeeRate: ch.LocalFeeRate, ArMaxCost: ch.ArMaxCost, ArInTarget: ch.ArInTarget,
-		Capacity: ch.Capacity, LocalBalance: ch.LocalBalance, PendOut: ch.PendingOutbound,
+		ChanID: ch.ChanID, RemotePubkey: ch.RemotePubkey, LocalFeeRate: ch.LocalFeeRate, ArMaxCost: ch.ArMaxCost,
+		ArInTarget: ch.ArInTarget, Capacity: ch.Capacity, LocalBalance: ch.LocalBalance, PendOut: ch.PendingOutbound,
 		AfMode: ch.AfMode, NkTarget: ch.NkTarget,
 	}
 }
@@ -401,11 +454,14 @@ func TargetOf(ch db.GuiChannel) TargetChannel {
 type NkBudgetQuerier interface {
 	nkSettingsQuerier
 	nkFlowQuerier
+	ListNkPeerChannels(ctx context.Context, remotePubkey string) ([]db.GuiChannel, error)
 }
 
 // TargetBudget returns the fee rate and the max-cost percent the rebalancer
 // multiplies into its budget for a refill target: the channel's fee and
-// ar_max_cost, or for an NK channel the NK budget at 100 %.
+// ar_max_cost, or for an NK channel the NK budget at 100 %, taken over the NK
+// channels to the peer (NkGroupInput) or, when the NK job runs none of them,
+// over the target alone.
 func TargetBudget(ctx context.Context, q NkBudgetQuerier, t TargetChannel, now time.Time) (feeRate, maxCostPct int, err error) {
 	if t.AfMode != "nk" {
 		return int(t.LocalFeeRate), int(t.ArMaxCost), nil
@@ -414,15 +470,24 @@ func TargetBudget(ctx context.Context, q NkBudgetQuerier, t TargetChannel, now t
 	if err != nil {
 		return 0, 0, err
 	}
-	flows, err := LoadNkFlows(ctx, q, []string{t.ChanID}, p.LockFlowPct, now)
+	chs, err := q.ListNkPeerChannels(ctx, t.RemotePubkey)
 	if err != nil {
 		return 0, 0, err
 	}
-	localPct := 0.0
-	if t.Capacity > 0 {
-		localPct = float64(t.LocalBalance+t.PendOut) * 100 / float64(t.Capacity)
+	if len(chs) == 0 {
+		chs = []db.GuiChannel{{ChanID: t.ChanID, LocalFeeRate: t.LocalFeeRate, ArInTarget: t.ArInTarget,
+			Capacity: t.Capacity, LocalBalance: t.LocalBalance, PendingOutbound: t.PendOut, NkTarget: t.NkTarget}}
 	}
-	return NkBudgetPpm(int(t.LocalFeeRate), flows[t.ChanID], localPct, p), 100, nil
+	ids := make([]string, len(chs))
+	for i, ch := range chs {
+		ids[i] = ch.ChanID
+	}
+	flows, err := LoadNkFlows(ctx, q, ids, p.LockFlowPct, now)
+	if err != nil {
+		return 0, 0, err
+	}
+	in := NkGroupInput(chs, flows)
+	return NkBudgetPpm(in.Fee, in.Flow, in.LocalPct, p), 100, nil
 }
 
 // TargetBudgetPpm is fee x max cost % of a refill target (TargetBudget), the

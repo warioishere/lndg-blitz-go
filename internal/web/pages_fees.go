@@ -61,6 +61,7 @@ func feeRecord(row *af.ChannelFeeRow, ch db.GuiChannel) map[string]any {
 		"alias":                   ch.Alias,
 		"private":                 ch.Private,
 		"auto_fees":               ch.AutoFees,
+		"af_mode":                 ch.AfMode,
 		"chan_id":                 row.ChanID,
 		"remote_pubkey":           row.RemotePubkey,
 		"local_balance":           row.LocalBalance,

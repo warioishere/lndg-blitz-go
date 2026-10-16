@@ -6,14 +6,15 @@
     <p>NK channels get their outbound fee, inbound discount and max_htlc from the NK job instead of auto-fees, the FLP floor, dynamic inbound, auto max_htlc and the HTLC boost. Every minute, per peer:</p>
     <ul>
       <li><b>Below its target</b> (local %) the fee goes up NK-StepUp %, <b>above</b> it goes down NK-StepDown %.</li>
+      <li><b>Target fee:</b> below the target the fee rises to at most NK-TargetUp x the sold price (24 h, else 72 h), above it falls to at least NK-TargetDown x the sold price; at the target fee it holds. Without a sale in 72 h there is no target fee.</li>
       <li><b>Lock:</b> no decrease after a forward or balance-out of at least NK-LockFlowPct % of capacity, for NK-LockMin up to NK-LockMax minutes (longer for a higher fee and an emptier channel).</li>
       <li><b>Sold price:</b> the ppm the channel's outbound flow paid (forwards and balance-outs, 24 h, else 72 h). Above NK-AnchorPct % of it a decrease jumps there; below it the fee holds or falls by NK-BelowFlowPct % of the normal step.</li>
-      <li><b>Cap:</b> NK-CapFactor x the sold price (24 h, 72 h, else 30 days), at least NK-CapMin; NK-CapMin without a sale in 30 days. Under NK-EmptyPct % local the fee goes to the cap and max_htlc to its minimum.</li>
-      <li><b>max_htlc</b> stays between half and all of the available liquidity (halved or doubled).</li>
-      <li><b>Inbound discount</b> (channels with dynamic inbound checked), while the channel is below its target: what the rebalancer would pay, the price it sold at (6 h, else 24 h, else 72 h) less the fill margin, never more than its own fee. None at or above the target.</li>
+      <li><b>Cap:</b> NK-CapFactor x the sold price (24 h, 72 h, else 30 days), at least NK-CapMin; NK-CapMin without a sale in 30 days. Under NK-EmptyPct % local max_htlc goes to its minimum; the fee follows the rules below the target.</li>
+      <li><b>max_htlc</b> is the highest step of a ladder down from the capacity (each step NK-MaxHtlcStep times smaller) that fits into the available liquidity.</li>
+      <li><b>Inbound discount</b> (channels with dynamic inbound checked), while the channel is below its target: the rebalance budget with the price it sold at (forwards of 6 h, else 24 h, else 72 h) as the reference, min(fee, that price) less the fill margin, never more than its own fee. None at or above the target.</li>
       <li>A change goes out at most every NK-MinInterval minutes; the policy is resent every NK-Republish minutes.</li>
-      <li><b>Other settings:</b> on an NK channel the outbound and base fee, Max Cost, max_htlc, FLP, auto max HTLC and emergency fee fields on the other pages are locked, and auto-fees, FLP, auto max HTLC, failed-HTLC boost and emergency fees leave the channel alone. The Auto-Fees switch of the channel stays on: NK only runs on channels with auto-fees enabled. Dynamic inbound is the on/off switch of the NK inbound discount.</li>
-      <li><b>Rebalance budget</b> of an NK channel: at most min(fee, sold price of 24 h, 72 h, else 30 days) less the fill margin, from NK-BudgetMarginMin ppm (empty) to NK-BudgetMarginMax % of the price (full), instead of fee x max cost; min(fee, NK-CapMin) without a sale in 30 days. The raised fee of an empty channel never raises the budget.</li>
+      <li><b>Other settings:</b> on an NK channel the outbound and base fee, Max Cost, max_htlc, FLP, auto max HTLC and periodic emergency fee fields on the other pages are locked, and auto-fees, FLP, auto max HTLC, failed-HTLC boost and the periodic emergency fee job leave the channel alone. The live emergency trigger after a forward (Live Threshold, Live Increase %) also runs on NK channels; the NK rules continue from the raised fee. The Auto-Fees switch of the channel stays on: NK only runs on channels with auto-fees enabled. Dynamic inbound is the on/off switch of the NK inbound discount.</li>
+      <li><b>Rebalance budget</b> of an NK channel, over the NK channels to the peer: at most min(fee, sold price of 24 h, 72 h, else 30 days) less the fill margin, from NK-BudgetMarginMin ppm (empty) to NK-BudgetMarginMax % of the price (full), instead of fee x max cost; min(fee, NK-CapMin) without a sale in 30 days. The raised fee of an empty channel never raises the budget.</li>
     </ul>
     <p>With NK-Shadow on, the other channels get shadow decisions: what NK would set, logged and never applied. <a href="/nk/log/" target="_blank">NK decision log</a></p>
   </div>
@@ -37,9 +38,9 @@
           <th onclick="sortTable(event.target, 7, 'int')">max_htlc</th>
           <th onclick="sortTable(event.target, 8, 'int')" title="ppm the outbound flow paid in 24 h">Sold 24h</th>
           <th onclick="sortTable(event.target, 9, 'int')" title="ppm the outbound flow paid in 72 h">Sold 72h</th>
-          <th onclick="sortTable(event.target, 10, 'int')">Cap</th>
-          <th title="no decrease until (UTC)">Lock until</th>
-          <th onclick="sortTable(event.target, 12, 'int')" title="NK rebalance budget before the source fee">Budget ppm</th>
+          <th onclick="sortTable(event.target, 10, 'int')" title="cap of the peer's channels in this mode">Cap</th>
+          <th title="no decrease of the peer's fee until (UTC)">Lock until</th>
+          <th onclick="sortTable(event.target, 12, 'int')" title="NK rebalance budget of the peer before the source fee">Budget ppm</th>
           <th>Last decision (UTC)</th>
         </tr>
         {{range $c := .channels}}

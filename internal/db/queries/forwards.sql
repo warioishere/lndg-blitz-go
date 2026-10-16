@@ -10,8 +10,9 @@ SELECT count(*) FROM gui_forwards WHERE forward_date = $1;
 SELECT * FROM gui_channels WHERE chan_id = ANY($1::varchar[]);
 
 -- name: ListEpEnabledChannelsByIDs :many
--- NK channels are left out: the NK job sets their fees.
-SELECT * FROM gui_channels WHERE chan_id = ANY($1::varchar[]) AND ep_enabled = true AND af_mode <> 'nk';
+-- NK channels stay in: the live trigger after a forward is part of the NK
+-- rules, only the periodic EP job (ListEpEnabledChannels) leaves them out.
+SELECT * FROM gui_channels WHERE chan_id = ANY($1::varchar[]) AND ep_enabled = true;
 
 -- name: InsertForward :exec
 INSERT INTO gui_forwards (forward_date, chan_id_in, chan_id_out, chan_in_alias, chan_out_alias, amt_in_msat, amt_out_msat, fee, inbound_fee)

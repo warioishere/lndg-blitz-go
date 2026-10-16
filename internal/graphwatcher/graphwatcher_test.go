@@ -436,6 +436,9 @@ func TestHandleChannelUpdateGatesOnBuyPrice(t *testing.T) {
 	assert.True(t, clock.get(pk(0xbb)+"|"+pk(0xcc)).IsZero()) // a skipped event does not start the cooldown
 }
 
+func (f *fakeQ) ListNkPeerChannels(ctx context.Context, remotePubkey string) ([]db.GuiChannel, error) {
+	return nil, nil
+}
 func (f *fakeQ) NkForwardFlows(ctx context.Context, arg db.NkForwardFlowsParams) ([]db.NkForwardFlowsRow, error) {
 	return nil, nil
 }

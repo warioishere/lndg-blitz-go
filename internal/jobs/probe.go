@@ -48,6 +48,7 @@ type probeQuerier interface {
 	GetPeerAlias(ctx context.Context, pubkey string) (pgtype.Text, error)
 	NkForwardFlows(ctx context.Context, arg db.NkForwardFlowsParams) ([]db.NkForwardFlowsRow, error)
 	NkBalanceOutFlows(ctx context.Context, arg db.NkBalanceOutFlowsParams) ([]db.NkBalanceOutFlowsRow, error)
+	ListNkPeerChannels(ctx context.Context, remotePubkey string) ([]db.GuiChannel, error)
 }
 
 // probeTargetDetail holds per-target probe statistics written to the ProbeLog

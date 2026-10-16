@@ -5,6 +5,14 @@ SELECT * FROM gui_channels
 WHERE is_open = true AND is_active = true AND private = false AND auto_fees = true
 ORDER BY chan_id;
 
+-- name: ListNkPeerChannels :many
+-- The NK channels to one peer that the NK job decides together (the NK ones of
+-- ListNkJobChannels).
+SELECT * FROM gui_channels
+WHERE is_open = true AND is_active = true AND private = false AND auto_fees = true
+    AND af_mode = 'nk' AND remote_pubkey = $1
+ORDER BY chan_id;
+
 -- name: NkForwardFlows :many
 -- Forwards out of the given channels since @since (30 days) with their gross
 -- fee (the inbound discount the incoming channel gave included), per window;

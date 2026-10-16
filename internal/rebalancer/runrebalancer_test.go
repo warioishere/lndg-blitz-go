@@ -392,6 +392,9 @@ func TestRunRebalancerTriesCombinedRoutes(t *testing.T) {
 	assert.Equal(t, "failed", a.Outcome)
 }
 
+func (f *fakeRebalQ) ListNkPeerChannels(ctx context.Context, remotePubkey string) ([]db.GuiChannel, error) {
+	return nil, nil
+}
 func (f *fakeRebalQ) NkForwardFlows(ctx context.Context, arg db.NkForwardFlowsParams) ([]db.NkForwardFlowsRow, error) {
 	return nil, nil
 }

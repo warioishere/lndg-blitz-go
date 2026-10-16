@@ -399,7 +399,7 @@ func getTargetInfo(ctx context.Context, q targetInfoQuerier, lastHopPubkey strin
 		return 0, 0, false, err
 	}
 	fee, cost, berr := af.TargetBudget(ctx, q, af.TargetChannel{
-		ChanID: row.ChanID, LocalFeeRate: row.LocalFeeRate, ArMaxCost: row.ArMaxCost, ArInTarget: row.ArInTarget,
+		ChanID: row.ChanID, RemotePubkey: lastHopPubkey, LocalFeeRate: row.LocalFeeRate, ArMaxCost: row.ArMaxCost, ArInTarget: row.ArInTarget,
 		Capacity: row.Capacity, LocalBalance: row.LocalBalance, PendOut: row.PendingOutbound,
 		AfMode: row.AfMode, NkTarget: row.NkTarget,
 	}, now)

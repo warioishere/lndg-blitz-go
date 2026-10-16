@@ -364,7 +364,6 @@ func numEq(a, b any) bool {
 	return aok && bok && af == bf
 }
 
-// str converts a value to its string representation; nil is rendered as "".
 // nkLockAttr disables an input whose value the NK fee mode sets.
 const nkLockAttr = template.HTMLAttr(` disabled title="Set by the NK fee mode (/nk/)"`)
 
@@ -376,6 +375,7 @@ func nkLock(ch any) template.HTMLAttr {
 	return ""
 }
 
+// str converts a value to its string representation; nil is rendered as "".
 func str(v any) string {
 	if v == nil {
 		return ""

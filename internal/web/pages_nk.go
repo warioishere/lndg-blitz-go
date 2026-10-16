@@ -9,6 +9,7 @@ import (
 	"time"
 
 	af "github.com/warioishere/lndg-blitz-go/internal/af"
+	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 )
 
 // nkTime formats a time for the NK pages ("" for the zero time).
@@ -63,10 +64,22 @@ func (s *Server) handleNk(w http.ResponseWriter, r *http.Request) {
 		lastBy[fmt.Sprint(l["chan_id"])] = l
 	}
 
+	// cap, lock and budget are those of the peer's channels in the same mode,
+	// as the NK job and the rebalancer judge them
+	groups := map[string][]db.GuiChannel{}
+	for _, ch := range channels {
+		groups[ch.RemotePubkey+"|"+ch.AfMode] = append(groups[ch.RemotePubkey+"|"+ch.AfMode], ch)
+	}
+	groupIn := make(map[string]af.NkInput, len(groups))
+	for k, chs := range groups {
+		groupIn[k] = af.NkGroupInput(chs, flows)
+	}
+
 	rows := make([]map[string]any, 0, len(channels))
 	nkCount := 0
 	for _, ch := range channels {
 		f := flows[ch.ChanID]
+		g := groupIn[ch.RemotePubkey+"|"+ch.AfMode]
 		localPct := 0.0
 		if ch.Capacity > 0 {
 			localPct = float64(ch.LocalBalance+ch.PendingOutbound) * 100 / float64(ch.Capacity)
@@ -81,15 +94,15 @@ func (s *Server) handleNk(w http.ResponseWriter, r *http.Request) {
 			"nk": nk, "target": target, "target_set": ch.NkTarget.Valid,
 			"local_pct": int(math.Round(localPct)), "fee": ch.LocalFeeRate, "inbound": ch.LocalInboundFeeRate,
 			"dynamic_inbound": ch.InboundOffset != 0, "max_htlc": ch.LocalMaxHtlcMsat / 1000,
-			"cap": af.NkCap(f, p),
+			"cap": af.NkCap(g.Flow, p),
 		}
 		row["sold24"] = nkPpm(f.Flow24())
 		row["sold72"] = nkPpm(f.Flow72())
-		if lock := af.NkLockUntil(f, int(ch.LocalFeeRate), localPct, p); now.Before(lock) {
+		if lock := af.NkLockUntil(g.Flow, g.Fee, g.LocalPct, p); now.Before(lock) {
 			row["lock_until"] = nkTime(lock)
 		}
 		if nk {
-			row["budget_ppm"] = af.NkBudgetPpm(int(ch.LocalFeeRate), f, localPct, p)
+			row["budget_ppm"] = af.NkBudgetPpm(g.Fee, g.Flow, g.LocalPct, p)
 		}
 		if l, ok := lastBy[ch.ChanID]; ok {
 			t, _ := l["timestamp"].(time.Time)

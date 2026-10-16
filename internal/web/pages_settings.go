@@ -137,7 +137,7 @@ func (s *Server) handleFeeLimitProtection(w http.ResponseWriter, r *http.Request
 	ctx := r.Context()
 	lookback := s.getLocalSettingInt(ctx, "FLP-Lookback", 10)
 	channels, err := s.queryMaps(ctx,
-		`SELECT chan_id, alias, flp_enabled, flp_safety FROM gui_channels `+
+		`SELECT chan_id, alias, flp_enabled, flp_safety, af_mode FROM gui_channels `+
 			`WHERE is_open = true AND auto_rebalance = true`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -165,6 +165,7 @@ func (s *Server) handleFeeLimitProtection(w http.ResponseWriter, r *http.Request
 			"avg_ppm":     avgPpm,
 			"flp_enabled": ch["flp_enabled"],
 			"flp_safety":  ch["flp_safety"],
+			"af_mode":     ch["af_mode"],
 		})
 	}
 	s.renderTemplate(w, r, "af_fee_limit.html", map[string]any{
@@ -317,6 +318,8 @@ func buildSettingsForm(prefixes []string) []map[string]any {
 			lsf("unit", "", "form_id", "nk_shadow", "value", 1, "label", "Shadow", "id", "NK-Shadow", "title", "Shadow decisions for the channels that run LNDg auto-fees (logged, never applied)", "min", 0, "max", 1),
 			lsf("unit", "%", "form_id", "nk_step_up", "value", 3, "label", "Step Up", "id", "NK-StepUp", "title", "Fee increase per change while the channel is below its target", "min", 0.1),
 			lsf("unit", "%", "form_id", "nk_step_down", "value", 1, "label", "Step Down", "id", "NK-StepDown", "title", "Fee decrease per change while the channel is above its target", "min", 0.1),
+			lsf("unit", "x", "form_id", "nk_target_up", "value", 1.2, "label", "Target Up", "id", "NK-TargetUp", "title", "Below the liquidity target the fee rises to at most this multiple of the sold price", "min", 1),
+			lsf("unit", "x", "form_id", "nk_target_down", "value", 0.8, "label", "Target Down", "id", "NK-TargetDown", "title", "Above the liquidity target the fee falls to at least this multiple of the sold price", "min", 0),
 			lsf("unit", "%", "form_id", "nk_below_flow", "value", 10, "label", "Below Flow", "id", "NK-BelowFlowPct", "title", "Below the sold price a decrease is this share of the normal step", "min", 0),
 			lsf("unit", "min", "form_id", "nk_lock_min", "value", 12, "label", "Lock Min", "id", "NK-LockMin", "title", "Shortest decrease lock after a large outbound flow", "min", 1),
 			lsf("unit", "min", "form_id", "nk_lock_max", "value", 360, "label", "Lock Max", "id", "NK-LockMax", "title", "Longest decrease lock (high fee, empty channel)", "min", 1),
@@ -327,8 +330,9 @@ func buildSettingsForm(prefixes []string) []map[string]any {
 			lsf("unit", "ppm", "form_id", "nk_cap_min", "value", 1000, "label", "Cap Min", "id", "NK-CapMin", "title", "Lowest cap", "min", 1),
 			lsf("unit", "ppm", "form_id", "nk_max_rate", "value", 7000, "label", "Max Rate", "id", "NK-MaxRate", "title", "Cap without sales, and the cap's ceiling", "min", 1),
 			lsf("unit", "ppm", "form_id", "nk_min_rate", "value", 1, "label", "Min Rate", "id", "NK-MinRate", "title", "Lowest fee", "min", 0),
-			lsf("unit", "%", "form_id", "nk_empty", "value", 2, "label", "Empty", "id", "NK-EmptyPct", "title", "Below this local share the fee goes to the cap and max_htlc to its minimum", "min", 0.1),
-			lsf("unit", "min", "form_id", "nk_min_interval", "value", 10, "label", "Min Interval", "id", "NK-MinInterval", "title", "Least time between two changes", "min", 1),
+			lsf("unit", "%", "form_id", "nk_empty", "value", 2, "label", "Empty", "id", "NK-EmptyPct", "title", "Below this local share max_htlc goes to its minimum", "min", 0.1),
+			lsf("unit", "x", "form_id", "nk_maxhtlc_step", "value", 1.2, "label", "max_htlc Step", "id", "NK-MaxHtlcStep", "title", "max_htlc is the highest step of a ladder down from the capacity, each step this many times smaller, that fits into the available liquidity", "min", 1.01),
+			lsf("unit", "min", "form_id", "nk_min_interval", "value", 5, "label", "Min Interval", "id", "NK-MinInterval", "title", "Least time between two changes", "min", 1),
 			lsf("unit", "min", "form_id", "nk_republish", "value", 30, "label", "Republish", "id", "NK-Republish", "title", "The policy is resent this often even when unchanged", "min", 1),
 			lsf("unit", "msat", "form_id", "nk_base_msat", "value", 1, "label", "Base Fee", "id", "NK-BaseMsat", "title", "Base fee on NK channels, -1 keeps the channel's base fee"),
 			lsf("unit", "ppm", "form_id", "nk_budget_min", "value", 10, "label", "Budget Margin Min", "id", "NK-BudgetMarginMin", "title", "Fill margin of an empty channel (rebalance budget and inbound discount)", "min", 0),

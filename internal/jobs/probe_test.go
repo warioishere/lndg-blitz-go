@@ -461,6 +461,9 @@ func nowISOForTest() string {
 	return "2099-01-01T00:00:00.000000"
 }
 
+func (f *fakeProbeQ) ListNkPeerChannels(ctx context.Context, remotePubkey string) ([]db.GuiChannel, error) {
+	return nil, nil
+}
 func (f *fakeProbeQ) NkForwardFlows(ctx context.Context, arg db.NkForwardFlowsParams) ([]db.NkForwardFlowsRow, error) {
 	return nil, nil
 }
