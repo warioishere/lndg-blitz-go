@@ -18,10 +18,10 @@
   </div>
   {{if .channels}}
   <form method="post" action="/nk/">
-    <div class="w3-bar w3-border" style="margin-bottom:8px;display:flex;align-items:center;justify-content:center;">
-      <button class="w3-bar-item w3-button w3-green" type="submit">Save</button>
-      <a href="#" class="w3-bar-item w3-button w3-blue" onclick="nkAll('.nkbox', false);return false;">All to LNDg auto-fees</a>
-      <span class="w3-bar-item">{{.nk_count}} channel(s) in NK mode</span>
+    <div class="w3-border w3-padding" style="margin-bottom:8px;display:flex;flex-wrap:wrap;align-items:center;gap:12px;">
+      <button class="w3-button w3-green w3-border w3-round" type="submit">Save</button>
+      <button class="w3-button w3-blue w3-border w3-round" type="button" title="Unchecks NK on every channel; Save applies it" onclick="nkAll('.nkbox', false)">Uncheck all NK</button>
+      <span>{{.nk_count}} channel(s) in NK mode</span>
     </div>
     <div style="overflow-x:auto;max-height:900px">
       <table class="w3-table-all w3-centered w3-hoverable w3-small">
