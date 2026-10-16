@@ -76,7 +76,7 @@ func TestProbeViaForcesRouteThroughNewPeer(t *testing.T) {
 	ln := &viaLN{routable: map[uint64]bool{100: true, 200: true, 300: true}}
 	r := &viaRouter{liquid: map[uint64]bool{300: true}, feeMsat: 20000}
 
-	got, err := ProbeVia(context.Background(), ln, r, self, target, budgetOf(target), via, channels, 7000, 10, nil)
+	got, err := ProbeVia(context.Background(), ln, r, self, target, budgetOf(target), via, channels, 7000, 10, 2500, nil)
 	require.NoError(t, err)
 
 	// cheapest source first (200 @ 0, then 300 @ 50); the target's own channel 900 is never a source
@@ -108,7 +108,7 @@ func TestProbeViaCountsOnlySourcesWithRoute(t *testing.T) {
 	ln := &viaLN{routable: map[uint64]bool{100: true}}
 	r := &viaRouter{liquid: map[uint64]bool{}}
 
-	got, err := ProbeVia(context.Background(), ln, r, hopPubkey(0x03), target, budgetOf(target), hopPubkey(0xcc), channels, 7000, 1, nil)
+	got, err := ProbeVia(context.Background(), ln, r, hopPubkey(0x03), target, budgetOf(target), hopPubkey(0xcc), channels, 7000, 1, 2500, nil)
 	require.NoError(t, err)
 	// 200 and 300 have no route to the new peer and do not use up maxPerTarget
 	require.Len(t, got, 1)
@@ -119,7 +119,7 @@ func TestProbeViaCountsOnlySourcesWithRoute(t *testing.T) {
 
 func TestProbeViaNoRoute(t *testing.T) {
 	target, channels := viaSetup()
-	got, err := ProbeVia(context.Background(), &viaLN{}, &viaRouter{}, hopPubkey(0x03), target, budgetOf(target), hopPubkey(0xcc), channels, 7000, 10, nil)
+	got, err := ProbeVia(context.Background(), &viaLN{}, &viaRouter{}, hopPubkey(0x03), target, budgetOf(target), hopPubkey(0xcc), channels, 7000, 10, 2500, nil)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }

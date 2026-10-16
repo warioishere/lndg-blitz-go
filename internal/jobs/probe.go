@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -146,18 +147,30 @@ func probeRouteSync(ctx context.Context, routerstub probeRouterClient, route *ln
 	return o
 }
 
-// probeWithBinarySearch finds the maximum amount that can flow over the route
-// (source_chan_id, hop_pubkeys) using binary search. Returns (route_hex|nil,
-// max_amount_sat, fee_ppm|nil). Search parameters: max_steps=8, gap threshold
-// max(good/20, 1000), fee budget scaled proportionally to amount. rec records
-// every probe HTLC (nil: none).
-func probeWithBinarySearch(ctx context.Context, routerstub probeRouterClient, sourceChanID string, hopPubkeys [][]byte, cltvDelta int32, targetAmountSat, feeLimitSat int64, rec probeRecorder) (*string, int64, *float64) {
+// probeSearch is the result of probeWithBinarySearch: the verified route
+// (routeHex nil: none) with its largest verified amount and fee ppm, and the
+// node pair a probe failed at before the target peer (failFrom empty: none),
+// which a search for another path leaves out.
+type probeSearch struct {
+	routeHex         *string
+	amountSat        int64
+	feePpm           *float64
+	failFrom, failTo string
+}
+
+// probeWithBinarySearch probes the route (source_chan_id, hop_pubkeys) from
+// targetAmountSat on. A liquidity failure at the target peer halves towards
+// the last verified amount, never below minAmountSat; a failure before the
+// target peer ends the search with the failing node pair, since a smaller
+// amount over the same path rarely helps there. Search parameters:
+// max_steps=8, gap threshold max(good/20, 1000), fee budget scaled
+// proportionally to the amount. rec records every probe HTLC (nil: none).
+func probeWithBinarySearch(ctx context.Context, routerstub probeRouterClient, sourceChanID string, hopPubkeys [][]byte, cltvDelta int32, targetAmountSat, feeLimitSat, minAmountSat int64, rec probeRecorder) probeSearch {
 	const maxSteps = 8
+	var res probeSearch
 	var good int64 = 0
 	bad := targetAmountSat + 1
 	amount := targetAmountSat
-	var bestHex *string
-	var bestFeePpm *float64
 	feeRetried := false
 
 search:
@@ -181,7 +194,8 @@ search:
 			break
 		}
 		routeMsg := built.GetRoute()
-		if len(routeMsg.GetHops()) == 0 {
+		hops := routeMsg.GetHops()
+		if len(hops) == 0 {
 			break
 		}
 		// Scale the fee budget proportionally to the current probe amount; if the
@@ -205,24 +219,24 @@ search:
 		if rec != nil {
 			rec(routeMsg, amount, o)
 		}
-		switch o.status {
-		case "verified":
+		atTarget := o.hop == len(hops)-1 // the target peer is the last hop before our node
+		switch {
+		case o.status == "verified":
 			b, _ := proto.Marshal(routeMsg)
 			h := hex.EncodeToString(b)
-			bestHex = &h
-			bestFeePpm = routeFeePpm
+			res.routeHex, res.feePpm = &h, routeFeePpm
 			good = amount
 			if bad-good <= maxInt64(good/20, 1000) {
 				break search
 			}
 			amount = (good + bad) / 2
-		case "liquidity":
+		case o.status == "liquidity" && atTarget:
 			bad = amount
-			if bad-good <= maxInt64(good/20, 1000) {
+			amount = (good + bad) / 2
+			if bad-good <= maxInt64(good/20, 1000) || amount < minAmountSat {
 				break search
 			}
-			amount = (good + bad) / 2
-		case "fee":
+		case o.status == "fee":
 			// Retry the same amount once; if the fee failure persists, abort.
 			if feeRetried {
 				break search
@@ -230,10 +244,14 @@ search:
 			feeRetried = true
 			continue
 		default:
+			if o.status != "error" && o.hop >= 1 && o.hop < len(hops)-1 {
+				res.failFrom, res.failTo = hops[o.hop-1].GetPubKey(), hops[o.hop].GetPubKey()
+			}
 			break search
 		}
 	}
-	return bestHex, good, bestFeePpm
+	res.amountSat = good
+	return res
 }
 
 // Exported type aliases so the graph_watcher can reuse the probe interfaces.
@@ -275,12 +293,17 @@ func probeSources(channels []db.GuiChannel, target db.GuiChannel, targetBudgetPp
 	return sources, noBudget
 }
 
+// noPath reports whether a QueryRoutes error means LND found no route.
+func noPath(err error) bool { return strings.Contains(err.Error(), "unable to find a path") }
+
 // probeTargets probes the channels the rebalancer would refill now
 // (rebalancer.NeedsRefill) using random-preimage HTLCs and stores only verified
 // routes. Per target it probes up to maxPerTarget sources from probeSources that
-// have a route. channels is the rebalancer's channel set (active, open, public),
-// sorted by chan_id. Returns new/existing/error counts and per-target details.
-func probeTargets(ctx context.Context, stub probeLightningClient, routerstub probeRouterClient, q probeQuerier, selfPubkey string, channels []db.GuiChannel, maxFeeRate, maxPerTarget int) (int, int, int, []probeTargetDetail, error) {
+// have a route; per source up to pathsPerSource paths: when a probe fails
+// before the target peer, QueryRoutes is asked again without the failing node
+// pair. channels is the rebalancer's channel set (active, open, public), sorted
+// by chan_id. Returns new/existing/error counts and per-target details.
+func probeTargets(ctx context.Context, stub probeLightningClient, routerstub probeRouterClient, q probeQuerier, selfPubkey string, channels []db.GuiChannel, maxFeeRate, maxPerTarget, pathsPerSource int, minAmountSat int64) (int, int, int, []probeTargetDetail, error) {
 	probedPubkeys := map[string]bool{}
 	totalNew, totalExisting, totalErrors := 0, 0, 0
 	targetDetails := []probeTargetDetail{}
@@ -309,77 +332,101 @@ func probeTargets(ctx context.Context, stub probeLightningClient, routerstub pro
 			if perr != nil {
 				return 0, 0, 0, nil, perr
 			}
-			response, qerr := stub.QueryRoutes(ctx, &lnrpc.QueryRoutesRequest{
-				PubKey:            selfPubkey,
-				Amt:               chn.ArAmtTarget,
-				OutgoingChanIds:   []uint64{outChanU},
-				LastHopPubkey:     lastHop,
-				FeeLimit:          &lnrpc.FeeLimit{Limit: &lnrpc.FeeLimit_Fixed{Fixed: src.feeLimitSat}},
-				UseMissionControl: true,
-			})
-			if qerr != nil {
-				d.RPCErrors++
-				d.OutChansTried++
-				continue
-			}
-			if len(response.GetRoutes()) == 0 || len(response.GetRoutes()[0].GetHops()) == 0 {
-				d.NoRoute++
-				continue
-			}
-			d.OutChansTried++
-			hops := response.GetRoutes()[0].GetHops()
-			hopPubkeys := make([][]byte, 0, len(hops))
-			for _, h := range hops {
-				b, e := hex.DecodeString(h.GetPubKey())
-				if e != nil {
-					return 0, 0, 0, nil, e
+			var ignored []*lnrpc.NodePair
+			tried := false
+			for attempt := 0; attempt < max(pathsPerSource, 1); attempt++ {
+				response, qerr := stub.QueryRoutes(ctx, &lnrpc.QueryRoutesRequest{
+					PubKey:            selfPubkey,
+					Amt:               chn.ArAmtTarget,
+					OutgoingChanIds:   []uint64{outChanU},
+					LastHopPubkey:     lastHop,
+					FeeLimit:          &lnrpc.FeeLimit{Limit: &lnrpc.FeeLimit_Fixed{Fixed: src.feeLimitSat}},
+					IgnoredPairs:      ignored,
+					UseMissionControl: true,
+				})
+				noRoute := qerr == nil && (len(response.GetRoutes()) == 0 || len(response.GetRoutes()[0].GetHops()) == 0)
+				if qerr != nil && !noPath(qerr) {
+					d.RPCErrors++
+					if !tried {
+						d.OutChansTried++
+						tried = true
+					}
+					break
 				}
-				hopPubkeys = append(hopPubkeys, b)
-			}
-			verifiedHex, maxAmountSat, verifiedFeePpm := probeWithBinarySearch(ctx, routerstub, src.chanID, hopPubkeys, rebalancer.FinalCltvDelta, chn.ArAmtTarget, src.feeLimitSat,
-				attemptRecorder(ctx, q, chn.RemotePubkey, src.chanID))
-			if verifiedHex == nil || maxAmountSat <= 0 {
-				d.ProbeFailed++
-				continue
-			}
-			path := rebalancer.RoutePath(response.GetRoutes()[0])
-			routeOutChan := formatChanID(hops[0].GetChanId())
+				if qerr != nil || noRoute {
+					if attempt == 0 {
+						d.NoRoute++
+					}
+					break
+				}
+				if !tried {
+					d.OutChansTried++
+					tried = true
+				}
+				hops := response.GetRoutes()[0].GetHops()
+				hopPubkeys := make([][]byte, 0, len(hops))
+				for _, h := range hops {
+					b, e := hex.DecodeString(h.GetPubKey())
+					if e != nil {
+						return 0, 0, 0, nil, e
+					}
+					hopPubkeys = append(hopPubkeys, b)
+				}
+				found := probeWithBinarySearch(ctx, routerstub, src.chanID, hopPubkeys, rebalancer.FinalCltvDelta, chn.ArAmtTarget, src.feeLimitSat, minAmountSat,
+					attemptRecorder(ctx, q, chn.RemotePubkey, src.chanID))
+				if found.routeHex == nil || found.amountSat <= 0 {
+					d.ProbeFailed++
+					if found.failFrom == "" {
+						break
+					}
+					from, ferr := hex.DecodeString(found.failFrom)
+					to, terr := hex.DecodeString(found.failTo)
+					if ferr != nil || terr != nil {
+						break
+					}
+					ignored = append(ignored, &lnrpc.NodePair{From: from, To: to})
+					continue
+				}
+				path := rebalancer.RoutePath(response.GetRoutes()[0])
+				routeOutChan := formatChanID(hops[0].GetChanId())
 
-			// A verified route without a fee ppm from the probe charged no fees.
-			feePpm := pgtype.Float8{Float64: 0, Valid: true}
-			if verifiedFeePpm != nil {
-				feePpm.Float64 = *verifiedFeePpm
-			}
-			probedAt := pgtype.Timestamptz{Time: time.Now(), Valid: true}
-			probedAmount := pgtype.Int8{Int64: maxAmountSat, Valid: true}
-			existing, gerr := q.GetRebalanceRoute(ctx, db.GetRebalanceRouteParams{
-				TargetPubkey: chn.RemotePubkey, OutgoingChanID: routeOutChan, Route: path,
-			})
-			switch {
-			case isNoRows(gerr):
-				if e := q.InsertRebalanceRoute(ctx, db.InsertRebalanceRouteParams{
+				// A verified route without a fee ppm from the probe charged no fees.
+				feePpm := pgtype.Float8{Float64: 0, Valid: true}
+				if found.feePpm != nil {
+					feePpm.Float64 = *found.feePpm
+				}
+				probedAt := pgtype.Timestamptz{Time: time.Now(), Valid: true}
+				probedAmount := pgtype.Int8{Int64: found.amountSat, Valid: true}
+				existing, gerr := q.GetRebalanceRoute(ctx, db.GetRebalanceRouteParams{
 					TargetPubkey: chn.RemotePubkey, OutgoingChanID: routeOutChan, Route: path,
-					FinalCltvDelta:  rebalancer.FinalCltvDelta,
-					RouteHex:        pgtype.Text{String: *verifiedHex, Valid: true},
-					LastFeePpm:      feePpm,
-					LastProbed:      probedAt,
-					ProbedAmountSat: probedAmount,
-				}); e != nil {
-					return 0, 0, 0, nil, e
+				})
+				switch {
+				case isNoRows(gerr):
+					if e := q.InsertRebalanceRoute(ctx, db.InsertRebalanceRouteParams{
+						TargetPubkey: chn.RemotePubkey, OutgoingChanID: routeOutChan, Route: path,
+						FinalCltvDelta:  rebalancer.FinalCltvDelta,
+						RouteHex:        pgtype.Text{String: *found.routeHex, Valid: true},
+						LastFeePpm:      feePpm,
+						LastProbed:      probedAt,
+						ProbedAmountSat: probedAmount,
+					}); e != nil {
+						return 0, 0, 0, nil, e
+					}
+					d.New++
+				case gerr != nil:
+					return 0, 0, 0, nil, gerr
+				default:
+					if e := q.UpdateRebalanceRouteProbe(ctx, db.UpdateRebalanceRouteProbeParams{
+						ID: existing.ID, RouteHex: pgtype.Text{String: *found.routeHex, Valid: true}, LastFeePpm: feePpm,
+						LastProbed: probedAt, ProbedAmountSat: probedAmount,
+					}); e != nil {
+						return 0, 0, 0, nil, e
+					}
+					d.Existing++
 				}
-				d.New++
-			case gerr != nil:
-				return 0, 0, 0, nil, gerr
-			default:
-				if e := q.UpdateRebalanceRouteProbe(ctx, db.UpdateRebalanceRouteProbeParams{
-					ID: existing.ID, RouteHex: pgtype.Text{String: *verifiedHex, Valid: true}, LastFeePpm: feePpm,
-					LastProbed: probedAt, ProbedAmountSat: probedAmount,
-				}); e != nil {
-					return 0, 0, 0, nil, e
-				}
-				d.Existing++
+				d.Verified++
+				break
 			}
-			d.Verified++
 		}
 
 		d.Errors = d.ProbeFailed + d.RPCErrors
@@ -434,6 +481,14 @@ func ProbeRoutesJob(ctx context.Context, q probeQuerier, stub probeLightningClie
 	if err != nil {
 		return err
 	}
+	pathsPerSource, err := getOrCreateInt(ctx, q, "QR-PathsPerSource", "3")
+	if err != nil {
+		return err
+	}
+	minAmountSat, err := getOrCreateInt(ctx, q, "AR-MinAmount", "2500")
+	if err != nil {
+		return err
+	}
 
 	// Check whether enough time has passed since the last probe run.
 	lastProbe := time.Time{}
@@ -475,7 +530,7 @@ func ProbeRoutesJob(ctx context.Context, q probeQuerier, stub probeLightningClie
 	}
 	selfPubkey := selfInfo.GetIdentityPubkey()
 
-	totalNew, totalExisting, totalErrors, details, err := probeTargets(ctx, stub, routerstub, q, selfPubkey, channels, maxFeeRate, maxPerTarget)
+	totalNew, totalExisting, totalErrors, details, err := probeTargets(ctx, stub, routerstub, q, selfPubkey, channels, maxFeeRate, maxPerTarget, pathsPerSource, int64(minAmountSat))
 	if err != nil {
 		return err
 	}

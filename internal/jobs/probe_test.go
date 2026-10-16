@@ -105,9 +105,10 @@ func (f *fakeProbeQ) GetPeerAlias(ctx context.Context, pubkey string) (pgtype.Te
 // ---- Fake router client ----
 
 type fakeProbeRouter struct {
-	liquiditySat int64 // amounts (sat) <= this -> verified; else liquidity
-	feeMsat      int64 // total_fees_msat of built routes
-	feeFailures  int   // the next N sends fail with FEE_INSUFFICIENT (code 12)
+	liquiditySat int64  // amounts (sat) <= this -> verified; else liquidity
+	failHop      uint32 // failure source index of a liquidity failure; 0: the target peer
+	feeMsat      int64  // total_fees_msat of built routes
+	feeFailures  int    // the next N sends fail with FEE_INSUFFICIENT (code 12)
 	buildCalls   int
 	sendCalls    int
 }
@@ -135,7 +136,11 @@ func (r *fakeProbeRouter) SendToRouteV2(ctx context.Context, in *routerrpc.SendT
 	if amtSat <= r.liquiditySat {
 		return &lnrpc.HTLCAttempt{Status: lnrpc.HTLCAttempt_FAILED, Failure: &lnrpc.Failure{Code: 1, FailureSourceIndex: nHops}}, nil
 	}
-	return &lnrpc.HTLCAttempt{Status: lnrpc.HTLCAttempt_FAILED, Failure: &lnrpc.Failure{Code: 15}}, nil
+	hop := r.failHop
+	if hop == 0 {
+		hop = nHops - 1
+	}
+	return &lnrpc.HTLCAttempt{Status: lnrpc.HTLCAttempt_FAILED, Failure: &lnrpc.Failure{Code: 15, FailureSourceIndex: hop}}, nil
 }
 
 // ---- Fake lightning client ----
@@ -219,11 +224,32 @@ func TestProbeRouteSync_Classification(t *testing.T) {
 func TestProbeWithBinarySearch_Converges(t *testing.T) {
 	r := &fakeProbeRouter{liquiditySat: 60000, feeMsat: 1000}
 	hopPubkeys := [][]byte{{0x01}, {0x02}}
-	bestHex, good, feePpm := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000, nil)
-	require.NotNil(t, bestHex)
-	assert.Equal(t, int64(59375), good)
-	require.NotNil(t, feePpm)
-	assert.NotEmpty(t, *bestHex)
+	got := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000, 2500, nil)
+	require.NotNil(t, got.routeHex)
+	assert.Equal(t, int64(59375), got.amountSat)
+	require.NotNil(t, got.feePpm)
+	assert.NotEmpty(t, *got.routeHex)
+	assert.Empty(t, got.failFrom)
+}
+
+// A liquidity failure before the target peer ends the search with the failing
+// node pair instead of halving over the same path.
+func TestProbeWithBinarySearch_FailureBeforeTargetReturnsPair(t *testing.T) {
+	r := &fakeProbeRouter{liquiditySat: 0, failHop: 1, feeMsat: 1000} // the source peer cannot forward to 0x02
+	got := probeWithBinarySearch(context.Background(), r, "12345", [][]byte{{0x01}, {0x02}, {0x03}}, 40, 100000, 1000, 2500, nil)
+	assert.Nil(t, got.routeHex)
+	assert.Equal(t, 1, r.sendCalls)
+	assert.Equal(t, "01", got.failFrom)
+	assert.Equal(t, "02", got.failTo)
+}
+
+// Halving at the target peer stops below the minimum amount.
+func TestProbeWithBinarySearch_MinAmount(t *testing.T) {
+	r := &fakeProbeRouter{liquiditySat: 0, feeMsat: 1000}
+	got := probeWithBinarySearch(context.Background(), r, "12345", [][]byte{{0x01}, {0x02}}, 40, 100000, 1000, 30000, nil)
+	assert.Nil(t, got.routeHex)
+	assert.Equal(t, 2, r.sendCalls, "100k and 50k; 25k is below the minimum")
+	assert.Empty(t, got.failFrom, "the target peer is never left out")
 }
 
 // Every probe HTLC goes to the recorder with its result.
@@ -235,7 +261,7 @@ func TestProbeWithBinarySearch_Records(t *testing.T) {
 		got = append(got, o)
 		amounts = append(amounts, amountSat)
 	}
-	probeWithBinarySearch(context.Background(), r, "12345", [][]byte{{0x01}, {0x02}}, 40, 100000, 1000, rec)
+	probeWithBinarySearch(context.Background(), r, "12345", [][]byte{{0x01}, {0x02}}, 40, 100000, 1000, 2500, rec)
 	require.Equal(t, r.sendCalls, len(got))
 	assert.Equal(t, int64(100000), amounts[0])
 	assert.Equal(t, "liquidity", got[0].status)
@@ -245,18 +271,18 @@ func TestProbeWithBinarySearch_Records(t *testing.T) {
 func TestProbeWithBinarySearch_NoLiquidity(t *testing.T) {
 	r := &fakeProbeRouter{liquiditySat: 0, feeMsat: 1000} // nothing verifies
 	hopPubkeys := [][]byte{{0x01}, {0x02}}
-	bestHex, good, _ := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000, nil)
-	assert.Nil(t, bestHex)
-	assert.Equal(t, int64(0), good)
+	got := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000, 2500, nil)
+	assert.Nil(t, got.routeHex)
+	assert.Equal(t, int64(0), got.amountSat)
 }
 
 func TestProbeWithBinarySearch_FeeBudgetAbort(t *testing.T) {
 	// total_fees 100000 msat = 100 sat; fee_limit 1 sat -> amount_fee_limit 1 -> abort immediately.
 	r := &fakeProbeRouter{liquiditySat: 100000, feeMsat: 100000}
 	hopPubkeys := [][]byte{{0x01}, {0x02}}
-	bestHex, good, _ := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1, nil)
-	assert.Nil(t, bestHex)
-	assert.Equal(t, int64(0), good)
+	got := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1, 2500, nil)
+	assert.Nil(t, got.routeHex)
+	assert.Equal(t, int64(0), got.amountSat)
 	assert.Equal(t, 1, r.buildCalls) // built once, aborted on fee check
 	assert.Equal(t, 0, r.sendCalls)
 }
@@ -266,14 +292,14 @@ func TestProbeWithBinarySearch_FeeFailureRetriedOnce(t *testing.T) {
 
 	// one fee failure, then the same amount verifies
 	r := &fakeProbeRouter{liquiditySat: 100000, feeMsat: 1000, feeFailures: 1}
-	bestHex, good, _ := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000, nil)
-	require.NotNil(t, bestHex)
-	assert.Equal(t, int64(100000), good)
+	got := probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000, 2500, nil)
+	require.NotNil(t, got.routeHex)
+	assert.Equal(t, int64(100000), got.amountSat)
 
 	// a persisting fee failure aborts after one retry
 	r = &fakeProbeRouter{liquiditySat: 100000, feeMsat: 1000, feeFailures: 100}
-	bestHex, _, _ = probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000, nil)
-	assert.Nil(t, bestHex)
+	got = probeWithBinarySearch(context.Background(), r, "12345", hopPubkeys, 40, 100000, 1000, 2500, nil)
+	assert.Nil(t, got.routeHex)
 	assert.Equal(t, 2, r.sendCalls)
 }
 
@@ -358,7 +384,7 @@ func TestProbeTargetsZeroFeeRouteStoresZero(t *testing.T) {
 		{PubKey: hopPubkey(0xaa), ChanId: 111}, {PubKey: hopPubkey(0xbb), ChanId: 222},
 	}}}}
 	r := &fakeProbeRouter{liquiditySat: 100000} // no fees
-	_, _, _, _, err := probeTargets(context.Background(), ln, r, q, hopPubkey(0x03), channels, 7000, 10)
+	_, _, _, _, err := probeTargets(context.Background(), ln, r, q, hopPubkey(0x03), channels, 7000, 10, 3, 2500)
 	require.NoError(t, err)
 	require.Len(t, q.insertedRR, 1)
 	assert.True(t, q.insertedRR[0].LastFeePpm.Valid) // 0, not unknown
@@ -441,7 +467,7 @@ func TestProbeTargetsOnlyChannelsThatNeedRefill(t *testing.T) {
 	remoteDisabled.RemoteDisabled = true
 	channels := []db.GuiChannel{refillTarget("555", peerPub), full, remoteDisabled, sourceChan("111", 50)}
 	ln := &fakeProbeLN{selfPubkey: "03self"}
-	_, _, _, details, err := probeTargets(context.Background(), ln, &fakeProbeRouter{}, newFakeProbeQ(), hopPubkey(0x03), channels, 7000, 10)
+	_, _, _, details, err := probeTargets(context.Background(), ln, &fakeProbeRouter{}, newFakeProbeQ(), hopPubkey(0x03), channels, 7000, 10, 3, 2500)
 	require.NoError(t, err)
 	require.Len(t, details, 1)
 	assert.Equal(t, peerPub, details[0].Pubkey)
@@ -454,7 +480,7 @@ func TestProbeTargetsNoRouteDoesNotUseSlot(t *testing.T) {
 	channels := []db.GuiChannel{refillTarget("555", peerPub), sourceChan("111", 10), sourceChan("222", 20), sourceChan("333", 30)}
 	ln := &viaLN{routable: map[uint64]bool{222: true, 333: true}}
 	r := &viaRouter{liquid: map[uint64]bool{333: true}}
-	_, _, _, details, err := probeTargets(context.Background(), ln, r, newFakeProbeQ(), hopPubkey(0x03), channels, 7000, 2)
+	_, _, _, details, err := probeTargets(context.Background(), ln, r, newFakeProbeQ(), hopPubkey(0x03), channels, 7000, 2, 3, 2500)
 	require.NoError(t, err)
 	require.Len(t, details, 1)
 	d := details[0]
@@ -467,13 +493,88 @@ func TestProbeTargetsNoRouteDoesNotUseSlot(t *testing.T) {
 	assert.Len(t, ln.reqs, 3)
 }
 
-type fakeProbeLNErr struct{ selfPubkey string }
+type fakeProbeLNErr struct {
+	selfPubkey string
+	err        error
+}
 
 func (c *fakeProbeLNErr) GetInfo(ctx context.Context, in *lnrpc.GetInfoRequest, opts ...grpc.CallOption) (*lnrpc.GetInfoResponse, error) {
 	return &lnrpc.GetInfoResponse{IdentityPubkey: c.selfPubkey}, nil
 }
 func (c *fakeProbeLNErr) QueryRoutes(ctx context.Context, in *lnrpc.QueryRoutesRequest, opts ...grpc.CallOption) (*lnrpc.QueryRoutesResponse, error) {
-	return nil, fmt.Errorf("no route")
+	if c.err != nil {
+		return nil, c.err
+	}
+	return nil, fmt.Errorf("connection reset")
+}
+
+// LND reports a missing route as an error: it counts as no route, not as an error.
+func TestProbeTargetsNoPathIsNoRoute(t *testing.T) {
+	ln := &fakeProbeLNErr{selfPubkey: "03self", err: fmt.Errorf("rpc error: code = Unknown desc = unable to find a path to destination")}
+	channels := []db.GuiChannel{refillTarget("555", peerPub), sourceChan("111", 50)}
+	_, _, errs, details, err := probeTargets(context.Background(), ln, &fakeProbeRouter{}, newFakeProbeQ(), hopPubkey(0x03), channels, 7000, 10, 3, 2500)
+	require.NoError(t, err)
+	assert.Zero(t, errs)
+	require.Len(t, details, 1)
+	assert.Equal(t, 1, details[0].NoRoute)
+	assert.Zero(t, details[0].RPCErrors)
+	assert.Zero(t, details[0].OutChansTried)
+}
+
+// pathLN offers a path over 0xbb until that pair is left out, then one over 0xdd.
+type pathLN struct{ reqs []*lnrpc.QueryRoutesRequest }
+
+func (c *pathLN) GetInfo(ctx context.Context, in *lnrpc.GetInfoRequest, opts ...grpc.CallOption) (*lnrpc.GetInfoResponse, error) {
+	return &lnrpc.GetInfoResponse{}, nil
+}
+func (c *pathLN) QueryRoutes(ctx context.Context, in *lnrpc.QueryRoutesRequest, opts ...grpc.CallOption) (*lnrpc.QueryRoutesResponse, error) {
+	c.reqs = append(c.reqs, in)
+	mid := hopPubkey(0xbb)
+	if len(in.IgnoredPairs) > 0 {
+		mid = hopPubkey(0xdd)
+	}
+	return &lnrpc.QueryRoutesResponse{Routes: []*lnrpc.Route{{Hops: []*lnrpc.Hop{
+		{PubKey: hopPubkey(0xaa), ChanId: 111}, {PubKey: mid}, {PubKey: peerPub}, {PubKey: hopPubkey(0x03)},
+	}}}}, nil
+}
+
+// pathRouter fails every probe over 0xbb at the source peer (0xaa -> 0xbb) and verifies the others.
+type pathRouter struct{ fakeProbeRouter }
+
+func (r *pathRouter) SendToRouteV2(ctx context.Context, in *routerrpc.SendToRouteRequest, opts ...grpc.CallOption) (*lnrpc.HTLCAttempt, error) {
+	r.sendCalls++
+	hops := in.Route.GetHops()
+	if hops[1].GetPubKey() == hopPubkey(0xbb) {
+		return &lnrpc.HTLCAttempt{Status: lnrpc.HTLCAttempt_FAILED, Failure: &lnrpc.Failure{Code: 15, FailureSourceIndex: 1}}, nil
+	}
+	return &lnrpc.HTLCAttempt{Status: lnrpc.HTLCAttempt_FAILED, Failure: &lnrpc.Failure{Code: 1, FailureSourceIndex: uint32(len(hops))}}, nil
+}
+
+// A probe that fails before the target peer is followed by another path without the failing pair.
+func TestProbeTargetsTriesAnotherPath(t *testing.T) {
+	ln := &pathLN{}
+	r := &pathRouter{}
+	q := newFakeProbeQ()
+	channels := []db.GuiChannel{refillTarget("555", peerPub), sourceChan("111", 50)}
+	_, _, _, details, err := probeTargets(context.Background(), ln, r, q, hopPubkey(0x03), channels, 7000, 10, 3, 2500)
+	require.NoError(t, err)
+	require.Len(t, ln.reqs, 2)
+	require.Len(t, ln.reqs[1].IgnoredPairs, 1)
+	assert.Equal(t, hopPubkey(0xaa), hex.EncodeToString(ln.reqs[1].IgnoredPairs[0].From))
+	assert.Equal(t, hopPubkey(0xbb), hex.EncodeToString(ln.reqs[1].IgnoredPairs[0].To))
+	require.Len(t, q.insertedRR, 1)
+	assert.Contains(t, q.insertedRR[0].Route, hopPubkey(0xdd))
+	d := details[0]
+	assert.Equal(t, 1, d.ProbeFailed)
+	assert.Equal(t, 1, d.Verified)
+	assert.Equal(t, 1, d.OutChansTried, "one source, two paths")
+	assert.Len(t, q.attempts, 2, "both probe HTLCs are recorded")
+
+	// one path per source: no second QueryRoutes
+	ln = &pathLN{}
+	_, _, _, _, err = probeTargets(context.Background(), ln, &pathRouter{}, newFakeProbeQ(), hopPubkey(0x03), channels, 7000, 10, 1, 2500)
+	require.NoError(t, err)
+	assert.Len(t, ln.reqs, 1)
 }
 
 func nowISOForTest() string {

@@ -213,7 +213,8 @@ func (d Deps) triggerProbe(ctx context.Context, selfPubkey string, plan *probePl
 	gwLog(fmt.Sprintf("Probing %s via %s (fee=%d ppm, buy price %d ppm, budget %d ppm) triggered by new channel %s",
 		ch.Alias, otherAlias, otherFeePpm, plan.buyPpm, plan.budgetPpm, chanID))
 
-	attempts, err := jobs.ProbeVia(ctx, d.LN, d.Router, selfPubkey, ch, plan.budgetPpm, otherPubkey, channels, maxFeeRate, maxPerTarget, d.Q)
+	minAmount := int64(atoiOr(getSetting(ctx, d.Q, "AR-MinAmount", "2500"), 2500))
+	attempts, err := jobs.ProbeVia(ctx, d.LN, d.Router, selfPubkey, ch, plan.budgetPpm, otherPubkey, channels, maxFeeRate, maxPerTarget, minAmount, d.Q)
 	if err != nil {
 		return 0, err
 	}

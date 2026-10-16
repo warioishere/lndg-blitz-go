@@ -204,6 +204,12 @@
             <input type="hidden" name="key" value="QR-MaxPerTarget">
             <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
           </form>
+          <form class="w3-margin-top" action="/update_setting/" method="post">
+            <label for="qr_paths_per_src" title="When a probe fails before the target peer, the prober asks LND for another path without the failing node pair"><b>Paths per source</b> (1-10):</label>
+            <input class="w3-input w3-border" id="qr_paths_per_src" name="value" type="number" min="1" max="10" value="{{.qr_paths_per_src}}">
+            <input type="hidden" name="key" value="QR-PathsPerSource">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
         </div>
       </div>
     </div>

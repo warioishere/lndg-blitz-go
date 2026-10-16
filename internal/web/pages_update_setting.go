@@ -348,6 +348,15 @@ func (s *Server) handleUpdateSetting(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.add("Max probes per target updated to: " + strconv.Itoa(target))
+	case "QR-PathsPerSource":
+		target, ok := intVal()
+		if !ok {
+			return
+		}
+		if !setLS("QR-PathsPerSource", strconv.Itoa(target)) {
+			return
+		}
+		f.add("Probe paths per source updated to: " + strconv.Itoa(target))
 	case "QR-LastProbe":
 		if !setLS("QR-LastProbe", value) {
 			return

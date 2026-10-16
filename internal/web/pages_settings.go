@@ -88,6 +88,7 @@ func (s *Server) handleRebalanceRoutes(w http.ResponseWriter, r *http.Request) {
 		"qr_enabled":        setting("QR-Enabled", "0") != "0",
 		"qr_update_hours":   setting("QR-UpdateHours", "6"),
 		"qr_max_per_target": setting("QR-MaxPerTarget", "5"),
+		"qr_paths_per_src":  setting("QR-PathsPerSource", "3"),
 	})
 }
 
