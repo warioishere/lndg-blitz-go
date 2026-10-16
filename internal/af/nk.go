@@ -121,6 +121,26 @@ type NkFlow struct {
 	LastBig                                                          time.Time
 }
 
+// Add sums o into f, every window and the latest large flow, so several
+// channels to one peer can be judged as one.
+func (f *NkFlow) Add(o NkFlow) {
+	f.Fwd6hAmt += o.Fwd6hAmt
+	f.Fwd6hFee += o.Fwd6hFee
+	f.Fwd24hAmt += o.Fwd24hAmt
+	f.Fwd24hFee += o.Fwd24hFee
+	f.Fwd72hAmt += o.Fwd72hAmt
+	f.Fwd72hFee += o.Fwd72hFee
+	f.All24hAmt += o.All24hAmt
+	f.All24hFee += o.All24hFee
+	f.All72hAmt += o.All72hAmt
+	f.All72hFee += o.All72hFee
+	f.All30dAmt += o.All30dAmt
+	f.All30dFee += o.All30dFee
+	if o.LastBig.After(f.LastBig) {
+		f.LastBig = o.LastBig
+	}
+}
+
 func ppm(fee, amt float64) (int, bool) {
 	if amt <= 0 {
 		return 0, false

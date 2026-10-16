@@ -126,14 +126,14 @@
         </td>
         <td {{if $channel.local_disabled}}style="background-color: rgba(248,81,73,0.15);"{{else}}{{if $channel.private}}style="background-color: rgba(110,118,129,0.4)"{{end}}{{end}}>
           <form action="/update_channel/" method="post">
-            <input style="text-align:center" id="target" type="number" min="0" max="100000" name="target" value="{{$channel.local_fee_rate}}">
+            <input style="text-align:center" id="target" type="number" min="0" max="100000" name="target" value="{{$channel.local_fee_rate}}" {{nkLock $channel}}>
             <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
             <input type="hidden" name="update_target" value="1">
           </form>
         </td>
         <td {{if $channel.local_disabled}}style="background-color: rgba(248,81,73,0.15);"{{else}}{{if $channel.private}}style="background-color: rgba(110,118,129,0.4)"{{end}}{{end}}>
           <form action="/update_channel/" method="post">
-            <input style="text-align:center" id="target" type="number" min="0" max="100000000" name="target" value="{{$channel.local_base_fee}}">
+            <input style="text-align:center" id="target" type="number" min="0" max="100000000" name="target" value="{{$channel.local_base_fee}}" {{nkLock $channel}}>
             <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
             <input type="hidden" name="update_target" value="0">
           </form>
@@ -168,7 +168,7 @@
         </td>
         <td {{if $channel.local_disabled}}style="background-color: rgba(248,81,73,0.15);"{{else}}{{if $channel.private}}style="background-color: rgba(110,118,129,0.4)"{{end}}{{end}}>
           <form action="/update_channel/" method="post">
-            <input style="text-align:center;width:150px" id="target" type="number" step="0.001" min="1" name="target" value="{{str $channel.local_max_htlc}}">
+            <input style="text-align:center;width:150px" id="target" type="number" step="0.001" min="1" name="target" value="{{str $channel.local_max_htlc}}" {{nkLock $channel}}>
             <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
             <input type="hidden" name="update_target" value="11">
           </form>
@@ -186,7 +186,7 @@
         </td>
         <td>
           <form action="/update_channel/" method="post">
-            <input style="text-align:center" id="target" type="number" min="1" max="100" name="target" value="{{$channel.ar_max_cost}}">
+            <input style="text-align:center" id="target" type="number" min="1" max="100" name="target" value="{{$channel.ar_max_cost}}" {{nkLock $channel}}>
             <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
             <input type="hidden" name="update_target" value="6">
           </form>

@@ -20,7 +20,7 @@
         </tr>
         {{range $ch := .channels}}
         <tr>
-          <td><input type="checkbox" class="chanbox" name="channels" value="{{$ch.chan_id}}"></td>
+          <td><input type="checkbox" class="chanbox" name="channels" value="{{$ch.chan_id}}"{{nkLock $ch}}></td>
           <td title="{{$ch.funding_txid}}:{{$ch.output_index}}"><a href="/channel?={{$ch.chan_id}}" target="_blank">{{$ch.short_chan_id}}</a></td>
           <td>{{$ch.alias}}</td>
           <td>{{$ch.local_fee_rate}}</td>

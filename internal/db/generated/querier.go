@@ -163,7 +163,9 @@ type Querier interface {
 	// routes from.
 	ListCombinableRoutes(ctx context.Context) ([]GuiRebalanceroute, error)
 	// Queries fuer die [Data]-Jobs (jobs.py).
+	// NK channels are left out: the NK job sets their fees.
 	ListEpEnabledChannels(ctx context.Context) ([]GuiChannel, error)
+	// NK channels are left out: the NK job sets their fees.
 	ListEpEnabledChannelsByIDs(ctx context.Context, dollar_1 []string) ([]GuiChannel, error)
 	ListInactivePeerPubkeys(ctx context.Context) ([]string, error)
 	// inbound_offsets: is_open=true, inbound_offset != 0 (jobs.py:780); NK channels

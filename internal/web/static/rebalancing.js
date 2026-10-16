@@ -23,7 +23,7 @@
         updateCols(['rebalance'], this, new_value)
       }
     }),
-    "ar_max_cost": ch => ({innerHTML: `<span class="input" style="min-width:100px;width:100%" data-unit="%"><input style="text-align:center;width:100%" name="AR max cost %" id="target" type="number" min="0" max="100" value="${ch.ar_max_cost}" onkeydown="update('ar_max_cost')"/></span>`, 
+    "ar_max_cost": ch => ({innerHTML: `<span class="input" style="min-width:100px;width:100%" data-unit="%"><input style="text-align:center;width:100%" name="AR max cost %" id="target" type="number" min="0" max="100" value="${ch.ar_max_cost}" onkeydown="update('ar_max_cost')"${nkLock(ch)}/></span>`, 
       changed: function(new_value){
         updateCols(['ar_max_cost', 'fee_ratio'], this, new_value)
       }

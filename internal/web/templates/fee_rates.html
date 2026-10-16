@@ -54,7 +54,7 @@
         <td>{{$channel.new_inbound_rate | intcomma}}</td>
         <td>
           <form action="/update_channel/" method="post">
-            <input style="text-align:center" id="target" type="number" min="0" max="100000" name="target" value="{{$channel.local_fee_rate}}">
+            <input style="text-align:center" id="target" type="number" min="0" max="100000" name="target" value="{{$channel.local_fee_rate}}" {{nkLock $channel}}>
             <input type="hidden" name="chan_id" value="{{$channel.chan_id}}">
             <input type="hidden" name="update_target" value="1">
           </form>

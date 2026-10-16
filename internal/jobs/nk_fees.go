@@ -169,20 +169,7 @@ func nkGroupInput(chs []db.GuiChannel, flows map[string]af.NkFlow) af.NkInput {
 		if ch.NkLastPublish.Valid && ch.NkLastPublish.Time.After(in.LastPublish) {
 			in.LastPublish = ch.NkLastPublish.Time
 		}
-		cf := flows[ch.ChanID]
-		f.Fwd6hAmt += cf.Fwd6hAmt
-		f.Fwd6hFee += cf.Fwd6hFee
-		f.Fwd24hAmt += cf.Fwd24hAmt
-		f.Fwd24hFee += cf.Fwd24hFee
-		f.Fwd72hAmt += cf.Fwd72hAmt
-		f.Fwd72hFee += cf.Fwd72hFee
-		f.All24hAmt += cf.All24hAmt
-		f.All24hFee += cf.All24hFee
-		f.All72hAmt += cf.All72hAmt
-		f.All72hFee += cf.All72hFee
-		if cf.LastBig.After(f.LastBig) {
-			f.LastBig = cf.LastBig
-		}
+		f.Add(flows[ch.ChanID])
 	}
 	in.Flow = f
 	if capacity > 0 {

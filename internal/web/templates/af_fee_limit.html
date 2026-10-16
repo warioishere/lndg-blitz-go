@@ -21,14 +21,14 @@
           <td>{{if notNone $ch.avg_ppm}}{{$ch.avg_ppm | intcomma}}{{else}}N/A{{end}}</td>
           <td>
             <form action="/update_channel/" method="post" style="margin:0">
-              <input type="number" style="width:70px;text-align:center" name="target" value="{{$ch.flp_safety}}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+              <input type="number" style="width:70px;text-align:center" name="target" value="{{$ch.flp_safety}}" onkeydown="if(event.key==='Enter'){this.form.submit();}" {{nkLock $ch}}>
               <input type="hidden" name="chan_id" value="{{$ch.chan_id}}">
               <input type="hidden" name="update_target" value="23">
             </form>
           </td>
           <td>
             <form action="/update_channel/" method="post" style="margin:0">
-              <input class="w3-check" type="checkbox" onchange="this.form.submit()" {{if $ch.flp_enabled}}checked{{end}}>
+              <input class="w3-check" type="checkbox" onchange="this.form.submit()" {{if $ch.flp_enabled}}checked{{end}} {{nkLock $ch}}>
               <input type="hidden" name="chan_id" value="{{$ch.chan_id}}">
               <input type="hidden" name="update_target" value="22">
               <input type="hidden" name="target" value="0">

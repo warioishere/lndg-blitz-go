@@ -2,6 +2,9 @@
 // server-gerenderten Django-Vars graph_links/network/darkmode kommen jetzt aus
 // window.GRAPH_LINKS / window.NETWORK / window.DARKMODE (in base.html gesetzt) —
 // noetig, weil Go html/template die JS-Template-Literals nicht inline escapen kann.
+// Attributes that disable an input whose value the NK fee mode sets on a channel.
+const nkLock = ch => ch.af_mode == 'nk' ? ' disabled title="Set by the NK fee mode (/nk/)"' : ''
+
 const base_ch_template = {
   "remote_pubkey": ch => ({innerHTML: `<a href="/channel?=${ch.chan_id}" target="_blank">${ch.short_chan_id}</a>`, title: `${ch.funding_txid}:${ch.output_index}`}),
   "chan_id": ch => ({innerHTML: `<a href="${window.GRAPH_LINKS}/${window.NETWORK}node/${ch.remote_pubkey}" target="_blank">${ch.alias == '' ? ch.remote_pubkey.slice(12) : ch.alias}</a>${ch.notes.length > 0 ? ` <sup href class="w3-round w3-border-small w3-border-grey" title="${ch.notes}">i</sup>` : ''}`, title: ch.remote_pubkey}),

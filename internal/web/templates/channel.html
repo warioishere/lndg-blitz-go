@@ -182,14 +182,14 @@
       </td>
       <td style="background-color: {{if .channel.local_disabled}}rgba(248,81,73,0.15){{else}}rgba(56,139,253,0.15){{end}}">
         <form action="/update_channel/" method="post">
-          <input style="text-align:center" id="target" type="number" min="0" size="6" max="100000" name="target" value="{{.channel.local_fee_rate}}">
+          <input style="text-align:center" id="target" type="number" min="0" size="6" max="100000" name="target" value="{{.channel.local_fee_rate}}" {{nkLock .channel}}>
           <input type="hidden" name="chan_id" value="{{.channel.chan_id}}">
           <input type="hidden" name="update_target" value="1">
         </form>
       </td>
       <td style="background-color: {{if .channel.local_disabled}}rgba(248,81,73,0.15){{else}}rgba(56,139,253,0.15){{end}}">
         <form action="/update_channel/" method="post">
-          <input style="text-align:center" id="target" type="number" min="0" size="6" max="100000" name="target" value="{{.channel.local_base_fee}}">
+          <input style="text-align:center" id="target" type="number" min="0" size="6" max="100000" name="target" value="{{.channel.local_base_fee}}" {{nkLock .channel}}>
           <input type="hidden" name="chan_id" value="{{.channel.chan_id}}">
           <input type="hidden" name="update_target" value="0">
         </form>
@@ -205,7 +205,7 @@
       </td>
       <td>
         <form action="/update_channel/" method="post">
-          <input style="text-align:center" id="target" type="number" min="0" size="3" max="100" name="target" value="{{.channel.ar_max_cost}}">
+          <input style="text-align:center" id="target" type="number" min="0" size="3" max="100" name="target" value="{{.channel.ar_max_cost}}" {{nkLock .channel}}>
           <input type="hidden" name="chan_id" value="{{.channel.chan_id}}">
           <input type="hidden" name="update_target" value="6">
         </form>

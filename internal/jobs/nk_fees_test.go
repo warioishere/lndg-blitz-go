@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/warioishere/lndg-blitz-go/internal/af"
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 )
 
@@ -125,4 +126,20 @@ func TestNkFeesShadow(t *testing.T) {
 	n2 := &nkRunner{shadow: map[string]*nkShadow{}, reason: map[string]string{}}
 	require.NoError(t, n2.run(context.Background(), q2, client, now))
 	assert.Empty(t, q2.logs)
+}
+
+func TestNkGroupInputKeeps30Days(t *testing.T) {
+	// two channels to one peer that sold only further back than 72 hours
+	chs := []db.GuiChannel{nkChannel("1", "a", "nk", 4000, 100_000), nkChannel("2", "a", "nk", 4000, 100_000)}
+	flows := map[string]af.NkFlow{
+		"1": {All30dAmt: 1_000_000, All30dFee: 3800},
+		"2": {All30dAmt: 1_000_000, All30dFee: 3900},
+	}
+	in := nkGroupInput(chs, flows)
+	ref, ok := in.Flow.RefPrice()
+	require.True(t, ok)
+	assert.Equal(t, 3850, ref, "the 30-day price of both channels")
+	p, err := af.LoadNkParams(context.Background(), &fakeNkJobQ{settings: map[string]string{}})
+	require.NoError(t, err)
+	assert.Equal(t, 7000, af.NkCap(in.Flow, p), "2 x 3850, bounded by NK-MaxRate")
 }

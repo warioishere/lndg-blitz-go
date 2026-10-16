@@ -1,7 +1,8 @@
 -- Queries fuer die [Data]-Jobs (jobs.py).
 
 -- name: ListEpEnabledChannels :many
-SELECT * FROM gui_channels WHERE is_open = true AND ep_enabled = true ORDER BY chan_id;
+-- NK channels are left out: the NK job sets their fees.
+SELECT * FROM gui_channels WHERE is_open = true AND ep_enabled = true AND af_mode <> 'nk' ORDER BY chan_id;
 
 -- name: InsertAutofee :exec
 -- Autofees(chan_id, peer_alias, setting, old_value, new_value). timestamp = auto_now_add.

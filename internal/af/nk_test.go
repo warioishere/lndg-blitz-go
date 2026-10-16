@@ -2,6 +2,7 @@ package af
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -40,6 +41,25 @@ func sold30(feePpm float64) NkFlow {
 func idle(in NkInput) NkInput {
 	in.LastChange, in.LastPublish = nkNow.Add(-time.Hour), nkNow.Add(-time.Hour)
 	return in
+}
+
+func TestNkFlowAdd(t *testing.T) {
+	var a, b NkFlow
+	va, vb := reflect.ValueOf(&a).Elem(), reflect.ValueOf(&b).Elem()
+	for i := 0; i < va.NumField(); i++ {
+		if va.Field(i).Kind() == reflect.Float64 {
+			va.Field(i).SetFloat(1)
+			vb.Field(i).SetFloat(2)
+		}
+	}
+	a.LastBig, b.LastBig = nkNow.Add(-time.Hour), nkNow
+	a.Add(b)
+	for i := 0; i < va.NumField(); i++ {
+		if va.Field(i).Kind() == reflect.Float64 {
+			assert.Equal(t, 3.0, va.Field(i).Float(), va.Type().Field(i).Name)
+		}
+	}
+	assert.Equal(t, nkNow, a.LastBig, "the latest large flow")
 }
 
 func TestNkFlowWindows(t *testing.T) {

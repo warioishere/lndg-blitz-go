@@ -23,7 +23,7 @@
         <td>{{$channel.outbound | intcomma}}</td>
         <td>
           <form action="/auto-maxhtlc/" method="post">
-            <input style="text-align:center" type="number" min="0" max="100" name="percent" value="{{if $channel.maxhtlc_percent}}{{$channel.maxhtlc_percent}}{{else}}{{$.mx_percent}}{{end}}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input style="text-align:center" type="number" min="0" max="100" name="percent" value="{{if $channel.maxhtlc_percent}}{{$channel.maxhtlc_percent}}{{else}}{{$.mx_percent}}{{end}}" onkeydown="if(event.key==='Enter'){this.form.submit();}" {{nkLock $channel}}>
             <input type="hidden" name="mx_liq_threshold" value="{{default 0 $channel.mx_liq_threshold}}">
             <input type="hidden" name="mx_liq_value" value="{{default 0 $channel.mx_liq_value}}">
             <input type="hidden" name="mx_liq_upper" value="{{default 0 $channel.mx_liq_upper}}">
@@ -32,7 +32,7 @@
         </td>
         <td>
           <form action="/auto-maxhtlc/" method="post">
-            <input style="text-align:center" type="number" min="0" name="mx_liq_threshold" value="{{default 0 $channel.mx_liq_threshold}}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input style="text-align:center" type="number" min="0" name="mx_liq_threshold" value="{{default 0 $channel.mx_liq_threshold}}" onkeydown="if(event.key==='Enter'){this.form.submit();}" {{nkLock $channel}}>
             <input type="hidden" name="percent" value="{{if $channel.maxhtlc_percent}}{{$channel.maxhtlc_percent}}{{else}}{{$.mx_percent}}{{end}}">
             <input type="hidden" name="mx_liq_value" value="{{default 0 $channel.mx_liq_value}}">
             <input type="hidden" name="mx_liq_upper" value="{{default 0 $channel.mx_liq_upper}}">
@@ -41,7 +41,7 @@
         </td>
         <td>
           <form action="/auto-maxhtlc/" method="post">
-            <input style="text-align:center" type="number" min="0" name="mx_liq_upper" value="{{default 0 $channel.mx_liq_upper}}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input style="text-align:center" type="number" min="0" name="mx_liq_upper" value="{{default 0 $channel.mx_liq_upper}}" onkeydown="if(event.key==='Enter'){this.form.submit();}" {{nkLock $channel}}>
             <input type="hidden" name="percent" value="{{if $channel.maxhtlc_percent}}{{$channel.maxhtlc_percent}}{{else}}{{$.mx_percent}}{{end}}">
             <input type="hidden" name="mx_liq_threshold" value="{{default 0 $channel.mx_liq_threshold}}">
             <input type="hidden" name="mx_liq_value" value="{{default 0 $channel.mx_liq_value}}">
@@ -50,7 +50,7 @@
         </td>
         <td>
           <form action="/auto-maxhtlc/" method="post">
-            <input style="text-align:center" type="number" min="0" name="mx_liq_value" value="{{default 0 $channel.mx_liq_value}}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input style="text-align:center" type="number" min="0" name="mx_liq_value" value="{{default 0 $channel.mx_liq_value}}" onkeydown="if(event.key==='Enter'){this.form.submit();}" {{nkLock $channel}}>
             <input type="hidden" name="percent" value="{{if $channel.maxhtlc_percent}}{{$channel.maxhtlc_percent}}{{else}}{{$.mx_percent}}{{end}}">
             <input type="hidden" name="mx_liq_threshold" value="{{default 0 $channel.mx_liq_threshold}}">
             <input type="hidden" name="mx_liq_upper" value="{{default 0 $channel.mx_liq_upper}}">

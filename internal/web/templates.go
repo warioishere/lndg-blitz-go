@@ -175,6 +175,7 @@ func templateFuncs() template.FuncMap {
 		"pyEq":           pyEq,
 		"numEq":          numEq,
 		"reversed":       reversed,
+		"nkLock":         nkLock,
 		// a string literal written in a Django template is already safe
 		"safe": func(s string) template.HTML { return template.HTML(s) },
 	}
@@ -364,6 +365,17 @@ func numEq(a, b any) bool {
 }
 
 // str converts a value to its string representation; nil is rendered as "".
+// nkLockAttr disables an input whose value the NK fee mode sets.
+const nkLockAttr = template.HTMLAttr(` disabled title="Set by the NK fee mode (/nk/)"`)
+
+// nkLock returns nkLockAttr for a channel row in NK mode, else nothing.
+func nkLock(ch any) template.HTMLAttr {
+	if m, ok := ch.(map[string]any); ok && m["af_mode"] == "nk" {
+		return nkLockAttr
+	}
+	return ""
+}
+
 func str(v any) string {
 	if v == nil {
 		return ""

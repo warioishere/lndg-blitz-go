@@ -8,7 +8,7 @@
 
   const home_ch_base = Object.assign({}, base_ch_template, {
     "unsettled": ch => (ch.unsettled_balance > 0 ? {innerHTML: `${ch.unsettled_balance.intcomma()} <small class="w3-round w3-border-small w3-border-grey">${ch.htlc_count}</small>`} : {innerHTML: `${ch.unsettled_balance.intcomma()}`, style: {color: 'gray'} }),
-    "oRate": ch => ({innerHTML: `<span class="input" style="min-width:100px;max-width:120px;width:100%" data-unit="ₚₚₘ"><input style="text-align:left;width:100%" type="number" min="0" size="6" max="100000" value="${ch.local_fee_rate}" onkeydown="event.keyCode != 13? null : (Sync.POST('chanpolicy/', {body: {chan_id:'${ch.chan_id}', fee_rate: this.value}}, r => {flash(this, r.fee_rate);showBannerMsg('Out Fee Rate', r.fee_rate)}));"/></span>`, style: {backgroundColor: ch.local_disabled ? red : null} }),
+    "oRate": ch => ({innerHTML: `<span class="input" style="min-width:100px;max-width:120px;width:100%" data-unit="ₚₚₘ"><input style="text-align:left;width:100%" type="number" min="0" size="6" max="100000" value="${ch.local_fee_rate}" onkeydown="event.keyCode != 13? null : (Sync.POST('chanpolicy/', {body: {chan_id:'${ch.chan_id}', fee_rate: this.value}}, r => {flash(this, r.fee_rate);showBannerMsg('Out Fee Rate', r.fee_rate)}));"${nkLock(ch)}/></span>`, style: {backgroundColor: ch.local_disabled ? red : null} }),
     "oBase": ch => ({innerHTML: ch.local_base_fee.intcomma(), style: {backgroundColor: ch.local_disabled ? red : null} }),
   })
   const detailed_ch_template = Object.assign({}, home_ch_base, {

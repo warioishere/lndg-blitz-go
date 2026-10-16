@@ -12,6 +12,7 @@
       <li><b>max_htlc</b> stays between half and all of the available liquidity (halved or doubled).</li>
       <li><b>Inbound discount</b> (channels with dynamic inbound checked), while the channel is below its target: what the rebalancer would pay, the price it sold at (6 h, else 24 h, else 72 h) less the fill margin, never more than its own fee. None at or above the target.</li>
       <li>A change goes out at most every NK-MinInterval minutes; the policy is resent every NK-Republish minutes.</li>
+      <li><b>Other settings:</b> on an NK channel the outbound and base fee, Max Cost, max_htlc, FLP, auto max HTLC and emergency fee fields on the other pages are locked, and auto-fees, FLP, auto max HTLC, failed-HTLC boost and emergency fees leave the channel alone. The Auto-Fees switch of the channel stays on: NK only runs on channels with auto-fees enabled. Dynamic inbound is the on/off switch of the NK inbound discount.</li>
       <li><b>Rebalance budget</b> of an NK channel: at most min(fee, sold price of 24 h, 72 h, else 30 days) less the fill margin, from NK-BudgetMarginMin ppm (empty) to NK-BudgetMarginMax % of the price (full), instead of fee x max cost; min(fee, NK-CapMin) without a sale in 30 days. The raised fee of an empty channel never raises the budget.</li>
     </ul>
     <p>With NK-Shadow on, the other channels get shadow decisions: what NK would set, logged and never applied. <a href="/nk/log/" target="_blank">NK decision log</a></p>
