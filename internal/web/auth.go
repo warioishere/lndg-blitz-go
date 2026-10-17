@@ -18,7 +18,7 @@ import (
 // With LOGIN_REQUIRED the web server takes logins from the Django app's
 // auth_user table in the shared database, so the LNDg login keeps working and
 // no password sits in the config. Browsers log in on a form and get a session
-// cookie; API clients may send HTTP Basic Auth instead. Without an active
+// cookie; API clients may send HTTP Basic Auth to /api/ instead. Without an active
 // Django user (or without the table) every request is refused.
 
 // djangoLogins remembers verified logins: a Django hash takes hundreds of
@@ -36,8 +36,10 @@ const (
 	sessionAge    = 14 * 24 * time.Hour // Django's SESSION_COOKIE_AGE default
 )
 
-// djangoAuth lets a request through with a valid session cookie or Basic Auth
-// login. Otherwise a browser GET goes to the login form, everything else gets 401.
+// djangoAuth lets a request through with a valid session cookie; the API also
+// takes a Basic Auth login. Pages ignore Basic Auth, so a browser that still
+// sends a remembered one is logged out by /logout/. Otherwise a page GET goes
+// to the login form, everything else gets 401.
 func (s *Server) djangoAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		p := req.URL.Path
@@ -49,11 +51,12 @@ func (s *Server) djangoAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, req)
 			return
 		}
-		if user, pass, ok := req.BasicAuth(); ok && s.djangoLoginOK(req.Context(), user, pass) {
+		api := strings.HasPrefix(p, "/api/")
+		if user, pass, ok := req.BasicAuth(); ok && api && s.djangoLoginOK(req.Context(), user, pass) {
 			next.ServeHTTP(w, req)
 			return
 		}
-		if req.Method == http.MethodGet && !strings.HasPrefix(p, "/api/") {
+		if req.Method == http.MethodGet && !api {
 			http.Redirect(w, req, loginPath+"?next="+url.QueryEscape(req.URL.RequestURI()), http.StatusFound)
 			return
 		}

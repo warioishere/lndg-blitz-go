@@ -119,6 +119,13 @@ func TestDjangoAuthIntegration(t *testing.T) {
 	expired := &http.Cookie{Name: sessionCookie, Value: sessionValue("lndg-admin", 1, testDjangoHash)}
 	assert.Equal(t, 401, get("/api/channels/", expired).StatusCode)
 
+	basicPage, _ := http.NewRequest(http.MethodGet, ts.URL+"/channels", nil)
+	basicPage.SetBasicAuth("lndg-admin", "correct horse")
+	resp, err = noRedirect.Do(basicPage)
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusFound, resp.StatusCode, "pages ignore Basic Auth")
+
 	resp = get("/logout/", c)
 	assert.Equal(t, http.StatusFound, resp.StatusCode)
 	assert.Equal(t, -1, session(resp).MaxAge)
