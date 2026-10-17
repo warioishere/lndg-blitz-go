@@ -112,6 +112,15 @@ func TestDjangoAuthIntegration(t *testing.T) {
 	assert.Equal(t, http.SameSiteLaxMode, c.SameSite)
 	assert.Equal(t, 200, get("/api/channels/", c).StatusCode)
 	assert.Equal(t, "/", login("lndg-admin", "correct horse", "//evil.example").Header.Get("Location"), "next stays on site")
+	assert.False(t, c.Secure, "plain HTTP")
+	proxied, _ := http.NewRequest(http.MethodPost, ts.URL+loginPath, strings.NewReader(url.Values{"username": {"lndg-admin"}, "password": {"correct horse"}}.Encode()))
+	proxied.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	proxied.Header.Set("X-Forwarded-Proto", "https")
+	resp, err = noRedirect.Do(proxied)
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.NotNil(t, session(resp))
+	assert.True(t, session(resp).Secure, "behind an HTTPS proxy")
 
 	parts := strings.Split(c.Value, ".")
 	tampered := &http.Cookie{Name: sessionCookie, Value: parts[0] + "." + parts[1] + "9." + parts[2]} // later expiry, same signature

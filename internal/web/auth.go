@@ -77,14 +77,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			"error": "Please enter a correct username and password."})
 		return
 	}
+	// Secure behind an HTTPS proxy too: the browser then never sends the cookie
+	// over plain HTTP, also not to another port of the same host.
 	expires := time.Now().Add(sessionAge)
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: sessionValue(user, expires.Unix(), stored),
-		Path: "/", Expires: expires, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil})
+		Path: "/", Expires: expires, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: requestScheme(r) == "https"})
 	http.Redirect(w, r, next, http.StatusFound)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Secure: requestScheme(r) == "https"})
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
