@@ -12,6 +12,7 @@
         <th>Fee Limit</th>
         <th>Target PPM</th>
         <th>Fees Paid</th>
+        <th title="fees paid per amount moved">Paid PPM</th>
         <th>Last Hop</th>
         <th>Status</th>
         <th>Hash</th>
@@ -21,7 +22,7 @@
       </tbody>
       <tfoot id="loadMoreRebals_{{str $status}}">
         <tr style="background-color:transparent;cursor:pointer;">
-          <td colspan="13">
+          <td colspan="14">
             <a data-status="{{str $status}}" onclick="window['loadRebals_'+this.dataset.status]()">Load More</a>
           </td>
         </tr>

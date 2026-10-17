@@ -43,6 +43,9 @@ func TestHomePageIntegration(t *testing.T) {
 	require.Contains(t, html, "Channel Performance")
 	require.Contains(t, html, "Auto-Rebalancer")    // local_settings include
 	require.Contains(t, html, "Rebalance Requests") // rebalances_table include
+	require.Contains(t, html, `id="rebalances_div_2"`, "successful rebalances below the last requests")
+	require.Regexp(t, `status:\s*"2",\s*count:\s*"20"`, html)
+	require.Contains(t, html, "Paid PPM")
 	require.Contains(t, html, "Connect to a Peer")
 	require.Contains(t, html, "Sign a Message")
 	require.Contains(t, html, "/static/home.js")

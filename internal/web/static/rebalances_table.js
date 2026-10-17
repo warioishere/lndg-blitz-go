@@ -17,6 +17,7 @@ function initRebalancesTable(params) {
     'fee_limit': rebalance => ({innerHTML: Number(rebalance.fee_limit).toLocaleString()}),
     'ppm': rebalance => ({innerHTML: Math.round(rebalance.fee_limit*1000000/rebalance.value).toLocaleString()}),
     'fees_paid': rebalance => ({innerHTML: rebalance.status == 2 ? Number(rebalance.fees_paid).toLocaleString() : '---'}),
+    'paid_ppm': rebalance => ({innerHTML: rebalance.status == 2 && rebalance.value > 0 ? Math.round(rebalance.fees_paid*1000000/rebalance.value).toLocaleString() : '---'}),
     'target_alias': rebalance => ({innerHTML: rebalance.target_alias !== '' ? rebalance.target_alias : '---'}),
     'status': rebalance => ({innerHTML: statuses[rebalance.status], title: rebalance.status}),
     'payment_hash': rebalance => ({innerHTML: (rebalance.payment_hash || '').length == 0 ? '---' :

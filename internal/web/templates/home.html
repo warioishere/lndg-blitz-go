@@ -328,6 +328,7 @@
 </div>
 <script src="/static/rebalances_table.js"></script>
 {{template "rebalances_table.html" (dict "count" 10 "load_count" 10 "title" (safe "<a href=\"/rebalances\" target=\"_blank\">Rebalance Requests</a>"))}}
+{{template "rebalances_table.html" (dict "count" 20 "status" 2 "load_count" 20 "title" (safe "<a href=\"/rebalances\" target=\"_blank\">Rebalances</a>"))}}
 <div id="payments_container" style="display:none" class="w3-container w3-padding-small">
   <table id="paymentsTable" class="w3-table-all w3-centered w3-hoverable">
     <thead>
