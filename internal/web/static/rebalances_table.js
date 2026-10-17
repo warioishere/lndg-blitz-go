@@ -56,6 +56,8 @@ function initRebalancesTable(params) {
       return {innerHTML: input}
     }
   };
+  // Successful rebalances show the filled channel, which is the last hop.
+  if (params.status == 2) delete transformations.target_alias
   // fillChannels writes the source and the filled channel of the successful
   // rebalances among rows (/api/rebalance_channels/).
   function channelLink(id, alias) {

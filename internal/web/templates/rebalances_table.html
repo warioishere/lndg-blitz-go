@@ -13,7 +13,7 @@
         <th>Target PPM</th>
         <th>Fees Paid</th>
         <th title="fees paid per amount moved">Paid PPM</th>
-        <th>Last Hop</th>
+        {{if not (numEq $status 2)}}<th>Last Hop</th>{{end}}
         <th title="channel the rebalance left from (MPP: several)">Source</th>
         <th title="channel the rebalance filled">Filled</th>
         <th>Status</th>
@@ -24,7 +24,7 @@
       </tbody>
       <tfoot id="loadMoreRebals_{{str $status}}">
         <tr style="background-color:transparent;cursor:pointer;">
-          <td colspan="16">
+          <td colspan="{{if numEq $status 2}}15{{else}}16{{end}}">
             <a data-status="{{str $status}}" onclick="window['loadRebals_'+this.dataset.status]()">Load More</a>
           </td>
         </tr>
