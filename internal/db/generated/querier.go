@@ -272,6 +272,8 @@ type Querier interface {
 	UpdatePaymentHopResults(ctx context.Context, arg UpdatePaymentHopResultsParams) error
 	UpdatePeerAlias(ctx context.Context, arg UpdatePeerAliasParams) error
 	UpdatePeerData(ctx context.Context, arg UpdatePeerDataParams) error
+	// The refill price the route prober measured over the peer, on all its channels.
+	UpdatePeerRefillPrice(ctx context.Context, arg UpdatePeerRefillPriceParams) error
 	// rebalancer.py — Route-Record- und Purge-Queries.
 	// route_obj.save() (Full-Row der mutable Felder) in update_route. Gekeyt auf den
 	// unique_together-Schluessel (target_pubkey, outgoing_chan_id, route), damit nach

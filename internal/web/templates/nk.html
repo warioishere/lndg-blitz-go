@@ -41,6 +41,7 @@
           <th title="cap of the peer's channels in this mode">Cap</th>
           <th title="no decrease of the peer's fee until (UTC)">Lock until</th>
           <th title="NK rebalance budget of the peer before the source fee; for an LNDg channel the budget it would get in NK mode at its current fee">Budget ppm</th>
+          <th title="refill price the route prober measured over the peer: fee ppm of the cheapest route that carried a probe back to us, before the source fee (auto-rebalance channels)">Refill ppm</th>
           <th>Last decision (UTC)</th>
         </tr></thead>
         <tbody>
@@ -62,6 +63,7 @@
           <td>{{$c.cap | intcomma}}</td>
           <td>{{$c.lock_until}}</td>
           <td>{{$c.budget_ppm}}</td>
+          <td title="{{$c.refill_title}}">{{$c.refill}}</td>
           <td style="text-align:left"><a href="/nk/log/?chan={{$c.chan_id}}" target="_blank">{{$c.last}}</a></td>
         </tr>
         {{end}}

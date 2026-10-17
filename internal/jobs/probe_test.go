@@ -33,6 +33,7 @@ type fakeProbeQ struct {
 	updatedRR     []db.UpdateRebalanceRouteProbeParams
 	probeLogs     []db.InsertProbeLogParams
 	attempts      []db.InsertRouteAttemptParams
+	refills       []db.UpdatePeerRefillPriceParams
 	prunedOldLogs int
 }
 
@@ -91,6 +92,10 @@ func (f *fakeProbeQ) InsertProbeLog(ctx context.Context, arg db.InsertProbeLogPa
 	f.probeLogs = append(f.probeLogs, arg)
 	return nil
 }
+func (f *fakeProbeQ) UpdatePeerRefillPrice(ctx context.Context, arg db.UpdatePeerRefillPriceParams) error {
+	f.refills = append(f.refills, arg)
+	return nil
+}
 func (f *fakeProbeQ) DeleteOldProbeLogs(ctx context.Context) error {
 	f.prunedOldLogs++
 	return nil
@@ -146,9 +151,10 @@ func (r *fakeProbeRouter) SendToRouteV2(ctx context.Context, in *routerrpc.SendT
 // ---- Fake lightning client ----
 
 type fakeProbeLN struct {
-	selfPubkey string
-	routes     []*lnrpc.Route // returned by QueryRoutes
-	qrCalls    int
+	selfPubkey   string
+	routes       []*lnrpc.Route // returned by QueryRoutes
+	qrCalls      int
+	lastFeeLimit int64
 }
 
 func (c *fakeProbeLN) GetInfo(ctx context.Context, in *lnrpc.GetInfoRequest, opts ...grpc.CallOption) (*lnrpc.GetInfoResponse, error) {
@@ -156,6 +162,7 @@ func (c *fakeProbeLN) GetInfo(ctx context.Context, in *lnrpc.GetInfoRequest, opt
 }
 func (c *fakeProbeLN) QueryRoutes(ctx context.Context, in *lnrpc.QueryRoutesRequest, opts ...grpc.CallOption) (*lnrpc.QueryRoutesResponse, error) {
 	c.qrCalls++
+	c.lastFeeLimit = in.GetFeeLimit().GetFixed()
 	return &lnrpc.QueryRoutesResponse{Routes: c.routes}, nil
 }
 
@@ -232,15 +239,25 @@ func TestProbeWithBinarySearch_Converges(t *testing.T) {
 	assert.Empty(t, got.failFrom)
 }
 
-// A liquidity failure before the target peer ends the search with the failing
-// node pair instead of halving over the same path.
+// A liquidity failure before the target peer halves over the same path; when
+// nothing verifies down to the minimum, the failing node pair comes back.
 func TestProbeWithBinarySearch_FailureBeforeTargetReturnsPair(t *testing.T) {
 	r := &fakeProbeRouter{liquiditySat: 0, failHop: 1, feeMsat: 1000} // the source peer cannot forward to 0x02
 	got := probeWithBinarySearch(context.Background(), r, "12345", [][]byte{{0x01}, {0x02}, {0x03}}, 40, 100000, 1000, 2500, nil)
 	assert.Nil(t, got.routeHex)
-	assert.Equal(t, 1, r.sendCalls)
+	assert.Equal(t, 6, r.sendCalls, "100k down to 3125; 1562 is below the minimum")
 	assert.Equal(t, "01", got.failFrom)
 	assert.Equal(t, "02", got.failTo)
+}
+
+// A smaller amount gets past a hop before the target peer that lacks liquidity.
+func TestProbeWithBinarySearch_HalvesBeforeTarget(t *testing.T) {
+	r := &fakeProbeRouter{liquiditySat: 30000, failHop: 1, feeMsat: 1000}
+	got := probeWithBinarySearch(context.Background(), r, "12345", [][]byte{{0x01}, {0x02}, {0x03}}, 40, 100000, 1000, 2500, nil)
+	require.NotNil(t, got.routeHex)
+	assert.Greater(t, got.amountSat, int64(25000))
+	assert.LessOrEqual(t, got.amountSat, int64(30000))
+	assert.Empty(t, got.failFrom)
 }
 
 // Halving at the target peer stops below the minimum amount.
@@ -435,6 +452,7 @@ func TestProbeRoutesJob_QueryRoutesError(t *testing.T) {
 	assert.EqualValues(t, 1, details[0]["rpc_errors"])
 	assert.EqualValues(t, 0, details[0]["probe_failed"])
 	assert.EqualValues(t, 1, details[0]["out_chans_tried"])
+	assert.Empty(t, q.refills, "an RPC error leaves the refill price as it is")
 }
 
 func TestProbeSources(t *testing.T) {
@@ -450,30 +468,67 @@ func TestProbeSources(t *testing.T) {
 	channels := []db.GuiChannel{target, sourceChan("888", 100), sourceChan("777", 100), sourceChan("111", 50),
 		sourceChan("999", 600), arNoSource, lowOut, disabled, ownToTarget}
 
-	got, noBudget := probeSources(channels, target, budgetOf(target), 7000)
+	got := probeSources(channels, target, budgetOf(target), 7000)
 	var ids []string
 	for _, s := range got {
 		ids = append(ids, s.chanID)
 	}
-	assert.Equal(t, []string{"111", "777", "888"}, ids) // cheapest first, then chan_id
-	assert.Equal(t, 1, noBudget)                        // 999: 600 ppm eats the 520 ppm budget
+	assert.Equal(t, []string{"111", "777", "888"}, ids) // cheapest first, then chan_id; 999: 600 ppm eats the 520 ppm budget
 	assert.Equal(t, int64(47), got[0].feeLimitSat)      // (520 - 50) ppm of 100k
+
+	ids = nil
+	for _, s := range sourceCandidates(channels, target) {
+		ids = append(ids, s.chanID)
+	}
+	assert.Equal(t, []string{"111", "777", "888", "999"}, ids, "without a budget")
 }
 
-func TestProbeTargetsOnlyChannelsThatNeedRefill(t *testing.T) {
+// Every auto-rebalance channel the peer has not disabled gets a refill price,
+// also one that needs no refill now; a peer without a route gets a NULL price.
+func TestProbeTargetsAllAutoRebalanceChannels(t *testing.T) {
 	full := refillTarget("556", hopPubkey(0xdd))
 	full.RemoteBalance, full.LocalBalance = 300_000, 700_000 // inbound_can 30/50 = 0
 	remoteDisabled := refillTarget("557", hopPubkey(0xee))
 	remoteDisabled.RemoteDisabled = true
 	channels := []db.GuiChannel{refillTarget("555", peerPub), full, remoteDisabled, sourceChan("111", 50)}
 	ln := &fakeProbeLN{selfPubkey: "03self"}
-	_, _, _, details, err := probeTargets(context.Background(), ln, &fakeProbeRouter{}, newFakeProbeQ(), hopPubkey(0x03), channels, 7000, 10, 3, 2500)
+	q := newFakeProbeQ()
+	_, _, _, details, err := probeTargets(context.Background(), ln, &fakeProbeRouter{}, q, hopPubkey(0x03), channels, 7000, 10, 3, 2500)
 	require.NoError(t, err)
-	require.Len(t, details, 1)
+	require.Len(t, details, 2)
 	assert.Equal(t, peerPub, details[0].Pubkey)
+	assert.Equal(t, hopPubkey(0xdd), details[1].Pubkey)
 	assert.Equal(t, 1, details[0].Sources)
 	assert.Equal(t, 1, details[0].NoRoute) // fakeProbeLN without routes
 	assert.Equal(t, 0, details[0].OutChansTried)
+	assert.Nil(t, details[0].RefillPpm)
+	require.Len(t, q.refills, 2)
+	assert.Equal(t, peerPub, q.refills[0].RemotePubkey)
+	assert.False(t, q.refills[0].RefillPpm.Valid, "no route reached us")
+	assert.True(t, q.refills[0].RefillChecked.Valid)
+}
+
+// A verified route above the target's budget is the refill price but no stored route.
+func TestProbeTargetsRefillPriceOverBudget(t *testing.T) {
+	channels := []db.GuiChannel{refillTarget("555", peerPub), sourceChan("111", 50)} // budget 520 - 50 = 470 ppm
+	ln := &fakeProbeLN{selfPubkey: "03self", routes: []*lnrpc.Route{{Hops: []*lnrpc.Hop{
+		{PubKey: hopPubkey(0xaa), ChanId: 111}, {PubKey: hopPubkey(0xbb), ChanId: 222},
+	}}}}
+	r := &fakeProbeRouter{liquiditySat: 100000, feeMsat: 60_000} // 60 sat on 100k: ~600 ppm
+	q := newFakeProbeQ()
+	_, _, _, details, err := probeTargets(context.Background(), ln, r, q, hopPubkey(0x03), channels, 7000, 10, 3, 2500)
+	require.NoError(t, err)
+	assert.Empty(t, q.insertedRR)
+	d := details[0]
+	assert.Equal(t, 1, d.Verified)
+	assert.Equal(t, 1, d.OverBudget)
+	require.NotNil(t, d.RefillPpm)
+	assert.Equal(t, 600, *d.RefillPpm)
+	assert.Equal(t, int64(100000), d.RefillAmount)
+	require.Len(t, q.refills, 1)
+	assert.Equal(t, int32(600), q.refills[0].RefillPpm.Int32)
+	assert.Equal(t, int64(100000), q.refills[0].RefillAmountSat.Int64)
+	assert.Equal(t, int64(700), ln.lastFeeLimit, "AR-MaxFeeRate 7000 ppm of 100k, not the budget")
 }
 
 func TestProbeTargetsNoRouteDoesNotUseSlot(t *testing.T) {
@@ -568,7 +623,7 @@ func TestProbeTargetsTriesAnotherPath(t *testing.T) {
 	assert.Equal(t, 1, d.ProbeFailed)
 	assert.Equal(t, 1, d.Verified)
 	assert.Equal(t, 1, d.OutChansTried, "one source, two paths")
-	assert.Len(t, q.attempts, 2, "both probe HTLCs are recorded")
+	assert.Len(t, q.attempts, 7, "six halvings over 0xbb (100k down to 3125) and the verified probe over 0xdd are recorded")
 
 	// one path per source: no second QueryRoutes
 	ln = &pathLN{}

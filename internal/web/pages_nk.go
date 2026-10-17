@@ -9,9 +9,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	af "github.com/warioishere/lndg-blitz-go/internal/af"
 	db "github.com/warioishere/lndg-blitz-go/internal/db/generated"
 )
+
+// refillLabel is the refill price the route prober measured over a channel's
+// peer as table cell text, with the probe amount and time as its title.
+func refillLabel(ppm pgtype.Int4, amountSat pgtype.Int8, checked pgtype.Timestamptz) (text, title string) {
+	switch {
+	case !checked.Valid:
+		return "---", "not probed yet"
+	case !ppm.Valid:
+		return "none", "no probe reached us over the peer down to AR-MinAmount (" + nkTime(checked.Time) + " UTC)"
+	}
+	return intcomma(ppm.Int32), "route fee ppm before the source fee; " + intcomma(amountSat.Int64) + " sats got through (" + nkTime(checked.Time) + " UTC)"
+}
 
 // nkTime formats a time for the NK pages ("" for the zero time).
 func nkTime(t time.Time) string {
@@ -131,6 +145,7 @@ func (s *Server) handleNk(w http.ResponseWriter, r *http.Request) {
 			row["lock_until"] = nkTime(lock)
 		}
 		row["budget_ppm"] = v.nkBudget(ch)
+		row["refill"], row["refill_title"] = refillLabel(ch.RefillPpm, ch.RefillAmountSat, ch.RefillChecked)
 		if l, ok := lastBy[ch.ChanID]; ok {
 			t, _ := l["timestamp"].(time.Time)
 			mode := "shadow"
@@ -263,6 +278,13 @@ func (s *Server) handleNkBudgets(w http.ResponseWriter, r *http.Request) {
 			row.Set("nk_budget_ppm", b)
 		} else {
 			row.Set("nk_budget_ppm", nil)
+		}
+		text, title := refillLabel(ch.RefillPpm, ch.RefillAmountSat, ch.RefillChecked)
+		row.Set("refill", text).Set("refill_title", title)
+		if ch.RefillPpm.Valid {
+			row.Set("refill_ppm", ch.RefillPpm.Int32)
+		} else {
+			row.Set("refill_ppm", nil)
 		}
 		results = append(results, row)
 	}

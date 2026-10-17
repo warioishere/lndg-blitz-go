@@ -339,6 +339,10 @@ func (s *Server) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 	channel["open_block"] = openBlock
 	channel["out_rate"] = outRate
 	channel["rebal_ppm"] = rebalPpm
+	channel["refill"], channel["refill_title"] = "---", "not probed yet"
+	if c, err := s.queries.GetChannel(ctx, chanID); err == nil {
+		channel["refill"], channel["refill_title"] = refillLabel(c.RefillPpm, c.RefillAmountSat, c.RefillChecked)
+	}
 	channel["assisted_ratio"] = assistedRatio
 	channel["fee_ratio"] = feeRatio
 	channel["inbound_can"] = inboundCan

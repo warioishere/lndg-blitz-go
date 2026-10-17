@@ -290,7 +290,7 @@ function showProbeDetail(idx) {
   if (!log.details || log.details.length === 0) {
     const row = table.insertRow();
     const cell = row.insertCell();
-    cell.colSpan = 9;
+    cell.colSpan = 10;
     cell.innerText = 'No target details available';
     cell.className = 'w3-text-grey';
   } else {
@@ -306,13 +306,16 @@ function showProbeDetail(idx) {
       nameCell.appendChild(link);
       const opt = v => v != null ? v : '---';
       row.insertCell().innerText = opt(d.sources);
-      row.insertCell().innerText = opt(d.no_budget);
+      row.insertCell().innerText = opt(d.over_budget);
       row.insertCell().innerText = opt(d.no_route);
       row.insertCell().innerText = d.out_chans_tried;
       row.insertCell().innerText = d.new;
       row.insertCell().innerText = d.existing;
       row.insertCell().innerText = opt(d.probe_failed);
       row.insertCell().innerText = opt(d.rpc_errors);
+      const refill = row.insertCell();
+      refill.innerText = d.refill_ppm != null ? d.refill_ppm : '---';
+      if (d.refill_ppm != null) refill.title = d.refill_amount_sat.toLocaleString() + ' sats';
     });
   }
   panel.style.display = 'block';

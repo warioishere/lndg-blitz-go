@@ -187,6 +187,7 @@
           <th title="When AR is ENABLED for the channel, keep pulling IN to the channel until its inbound liquidity falls below the iTarget%." width=4%>iTarget%</th>
           <th title="When AR is ENABLED it will refill the channel with outbound liquidity." width=4%>AR</th>
           <th title="Most the rebalancer pays to refill the channel now (ppm, before the source fee): fee x AR max cost, or the NK budget for an NK channel. NK: the budget in NK mode at the current fee (auto-fee channels)." width=4% onclick="sortTable(event.target, 17, 'int')">AR Budget</th>
+          <th title="Refill price the route prober measured over the peer (ppm, before the source fee): fee of the cheapest route that carried a probe back to us; red above the AR budget. none: no probe got through." width=4% onclick="sortTable(event.target, 18, 'int')">Refill</th>
         </tr>
       </thead>
       <tbody id="active_channels"></tbody>

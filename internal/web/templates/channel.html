@@ -136,6 +136,7 @@
       <th title="The value represents net flow --> (routed out - routed in) / capacity">7Day Flow</th>
       <th title="The average rate earned outgoing on this channel">Out Rate</th>
       <th title="The average rate paid for rebalances to refill this channel">Rebal Rate</th>
+      <th title="Refill price the route prober measured over the peer: fee ppm of the cheapest route that carried a probe back to us, before the source fee">Refill Price</th>
       <th title="When revenue > 0 --> assisted revenue / revenue">Assisted Ratio</th>
       <th>Adjustment</th>
       <th title="A suggested fee rate based on the flow pattern over the last 7 days">Suggested Rate</th>
@@ -165,6 +166,7 @@
       <td>{{if gt .channel.net_routed_7day 0.0}}OUT{{else}}{{if lt .channel.net_routed_7day 0.0}}IN{{else}}---{{end}}{{end}}{{if ne .channel.net_routed_7day 0.0}} | {{str .channel.net_routed_7day}}{{end}}</td>
       <td>{{.channel.out_rate}}</td>
       <td>{{.channel.rebal_ppm}}</td>
+      <td title="{{.channel.refill_title}}">{{.channel.refill}}</td>
       <td>{{str .channel.assisted_ratio}}</td>
       <td>{{str .channel.adjustment}}</td>
       <td>{{intcomma .channel.new_rate}}</td>

@@ -250,7 +250,7 @@ func (q *Queries) ForwardsOutSumFee(ctx context.Context, forwardDate pgtype.Time
 
 const listOpenChannels = `-- name: ListOpenChannels :many
 
-SELECT remote_pubkey, chan_id, funding_txid, output_index, capacity, local_balance, remote_balance, unsettled_balance, initiator, alias, local_base_fee, local_fee_rate, is_active, is_open, auto_rebalance, remote_base_fee, remote_fee_rate, local_commit, local_chan_reserve, ar_in_target, num_updates, ar_amt_target, ar_out_target, ar_max_cost, last_update, local_disabled, remote_disabled, htlc_count, pending_inbound, pending_outbound, private, total_received, total_sent, fees_updated, auto_fees, local_cltv, remote_cltv, local_max_htlc_msat, local_min_htlc_msat, remote_max_htlc_msat, remote_min_htlc_msat, short_chan_id, notes, close_address, push_amt, local_inbound_base_fee, local_inbound_fee_rate, remote_inbound_base_fee, remote_inbound_fee_rate, ar_source, ar_source_ppm_diff, inbound_offset, offset_updated, maxhtlc_percent, maxhtlc_updated, mx_liq_threshold, mx_liq_value, mx_liq_upper, ep_target, ep_updated, ep_enabled, ep_inc_pct, ep_cooldown, ep_live_threshold, ep_live_inc_pct, flp_enabled, flp_safety, htlc_boost_checked, af_mode, nk_last_change, nk_last_publish, nk_shadow_fee, nk_shadow_inbound, nk_shadow_change FROM gui_channels WHERE is_open = true ORDER BY chan_id
+SELECT remote_pubkey, chan_id, funding_txid, output_index, capacity, local_balance, remote_balance, unsettled_balance, initiator, alias, local_base_fee, local_fee_rate, is_active, is_open, auto_rebalance, remote_base_fee, remote_fee_rate, local_commit, local_chan_reserve, ar_in_target, num_updates, ar_amt_target, ar_out_target, ar_max_cost, last_update, local_disabled, remote_disabled, htlc_count, pending_inbound, pending_outbound, private, total_received, total_sent, fees_updated, auto_fees, local_cltv, remote_cltv, local_max_htlc_msat, local_min_htlc_msat, remote_max_htlc_msat, remote_min_htlc_msat, short_chan_id, notes, close_address, push_amt, local_inbound_base_fee, local_inbound_fee_rate, remote_inbound_base_fee, remote_inbound_fee_rate, ar_source, ar_source_ppm_diff, inbound_offset, offset_updated, maxhtlc_percent, maxhtlc_updated, mx_liq_threshold, mx_liq_value, mx_liq_upper, ep_target, ep_updated, ep_enabled, ep_inc_pct, ep_cooldown, ep_live_threshold, ep_live_inc_pct, flp_enabled, flp_safety, htlc_boost_checked, af_mode, nk_last_change, nk_last_publish, nk_shadow_fee, nk_shadow_inbound, nk_shadow_change, refill_ppm, refill_amount_sat, refill_checked FROM gui_channels WHERE is_open = true ORDER BY chan_id
 `
 
 // Queries fuer den Auto-Fee-Lauf (af.py). Forwards-Aggregate, Rebalance-Payments
@@ -340,6 +340,9 @@ func (q *Queries) ListOpenChannels(ctx context.Context) ([]GuiChannel, error) {
 			&i.NkShadowFee,
 			&i.NkShadowInbound,
 			&i.NkShadowChange,
+			&i.RefillPpm,
+			&i.RefillAmountSat,
+			&i.RefillChecked,
 		); err != nil {
 			return nil, err
 		}

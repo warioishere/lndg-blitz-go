@@ -122,6 +122,9 @@ type GuiChannel struct {
 	NkShadowFee          pgtype.Int4        `json:"nk_shadow_fee"`
 	NkShadowInbound      pgtype.Int4        `json:"nk_shadow_inbound"`
 	NkShadowChange       pgtype.Timestamptz `json:"nk_shadow_change"`
+	RefillPpm            pgtype.Int4        `json:"refill_ppm"`
+	RefillAmountSat      pgtype.Int8        `json:"refill_amount_sat"`
+	RefillChecked        pgtype.Timestamptz `json:"refill_checked"`
 }
 
 type GuiClosure struct {

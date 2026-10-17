@@ -35,6 +35,12 @@
     const nk = b.af_mode != 'nk' && b.nk_budget_ppm != null ? ` <small class="w3-round w3-border-small w3-border-grey" title="NK budget at the current fee">NK ${b.nk_budget_ppm.intcomma()}</small>` : ''
     return {innerHTML: `${b.budget_ppm.intcomma()}${nk}`, style: {color: ch.auto_rebalance ? null : 'gray'}}
   }
+  detailed_ch_template.refill = ch => {
+    const b = nkBudgets[ch.chan_id]
+    if (!b) return {innerHTML: '---', style: {color: 'gray'}}
+    const over = b.refill_ppm != null && b.refill_ppm > b.budget_ppm
+    return {innerHTML: b.refill, title: b.refill_title, style: {color: over ? 'red' : b.refill_ppm == null ? 'gray' : null}}
+  }
   let {iRate, iBase, ar_in_target, auto_rebalance} = detailed_ch_template
   const inactive_ch_template = Object.assign({}, home_ch_base, {iRate, iBase}, {
     "local_commit": ch => ({innerHTML: ch.local_commit.intcomma()}),

@@ -28,3 +28,8 @@ VALUES ($1, $2, $3, $4, $5, $6, $7);
 DELETE FROM gui_probelog WHERE id IN (
     SELECT id FROM gui_probelog ORDER BY timestamp DESC OFFSET 100
 );
+
+-- name: UpdatePeerRefillPrice :exec
+-- The refill price the route prober measured over the peer, on all its channels.
+UPDATE gui_channels SET refill_ppm = $2, refill_amount_sat = $3, refill_checked = $4
+WHERE remote_pubkey = $1;

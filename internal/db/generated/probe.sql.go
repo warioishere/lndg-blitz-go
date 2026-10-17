@@ -122,6 +122,29 @@ func (q *Queries) InsertRebalanceRoute(ctx context.Context, arg InsertRebalanceR
 	return err
 }
 
+const updatePeerRefillPrice = `-- name: UpdatePeerRefillPrice :exec
+UPDATE gui_channels SET refill_ppm = $2, refill_amount_sat = $3, refill_checked = $4
+WHERE remote_pubkey = $1
+`
+
+type UpdatePeerRefillPriceParams struct {
+	RemotePubkey    string             `json:"remote_pubkey"`
+	RefillPpm       pgtype.Int4        `json:"refill_ppm"`
+	RefillAmountSat pgtype.Int8        `json:"refill_amount_sat"`
+	RefillChecked   pgtype.Timestamptz `json:"refill_checked"`
+}
+
+// The refill price the route prober measured over the peer, on all its channels.
+func (q *Queries) UpdatePeerRefillPrice(ctx context.Context, arg UpdatePeerRefillPriceParams) error {
+	_, err := q.db.Exec(ctx, updatePeerRefillPrice,
+		arg.RemotePubkey,
+		arg.RefillPpm,
+		arg.RefillAmountSat,
+		arg.RefillChecked,
+	)
+	return err
+}
+
 const updateRebalanceRouteProbe = `-- name: UpdateRebalanceRouteProbe :exec
 UPDATE gui_rebalanceroute SET route_hex = $2, last_fee_ppm = $3, last_probed = $4, probed_amount_sat = $5
 WHERE id = $1

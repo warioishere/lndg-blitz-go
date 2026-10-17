@@ -28,6 +28,10 @@ func TestNkPagesIntegration(t *testing.T) {
 			"auto_fees": true, "ar_in_target": 60, "ar_max_cost": 90, "capacity": 1000000, "local_balance": 300000,
 		})
 	}
+	// 700: the prober measured 640 ppm at 80k; 701: no probe got through
+	_, err0 := pool.Exec(ctx, `UPDATE gui_channels SET refill_ppm = CASE chan_id WHEN '700' THEN 640 END,
+		refill_amount_sat = CASE chan_id WHEN '700' THEN 80000 END, refill_checked = '2026-10-17 21:00:00+00'`)
+	require.NoError(t, err0)
 	insertRow(t, pool, "nk_fee_log", map[string]any{
 		"timestamp": time.Now(), "chan_id": "700", "peer_alias": "NKPeer700", "applied": false, "reason": "below target",
 		"local_pct": 30.0, "target_pct": 40, "fee_old": 800, "fee_new": 824, "cap_ppm": 1000,
@@ -52,6 +56,9 @@ func TestNkPagesIntegration(t *testing.T) {
 	require.Contains(t, html, `100 - iTarget; set iTarget on the main page or switch the channel to NK">40</span>`, "an LNDg channel's target is 100 - ar_in_target, read-only")
 	require.Contains(t, html, "below target: 800 → 824 (shadow)")
 	require.Contains(t, html, "NK-StepUp", "settings block")
+	require.Contains(t, html, `<td title="route fee ppm before the source fee; 80,000 sats got through (10-17 21:00 UTC)">640</td>`)
+	require.Contains(t, html, `<td title="no probe reached us over the peer down to AR-MinAmount (10-17 21:00 UTC)">none</td>`)
+	require.Contains(t, getPage(t, srv, "/channel?=700"), `80,000 sats got through (10-17 21:00 UTC)">640</td>`, "channel page")
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -66,6 +73,10 @@ func TestNkPagesIntegration(t *testing.T) {
 	nkBudget, ok := budgets[0]["nk_budget_ppm"].(float64)
 	require.True(t, ok)
 	require.True(t, nkBudget > 0 && nkBudget < 800, "min(fee, sold price) less the fill margin: %v", nkBudget)
+	require.EqualValues(t, 640, budgets[0]["refill_ppm"])
+	require.Equal(t, "640", budgets[0]["refill"])
+	require.Nil(t, budgets[1]["refill_ppm"])
+	require.Equal(t, "none", budgets[1]["refill"])
 
 	// a stored shadow: the mode change of 700 clears it, 701 keeps its own
 	_, err := pool.Exec(ctx, `UPDATE gui_channels SET nk_shadow_fee = 850, nk_shadow_inbound = 0, nk_shadow_change = now()`)

@@ -18,6 +18,7 @@ sql:
       - "internal/db/migrations/000012_scout_path.up.sql"
       - "internal/db/migrations/000013_nk_shadow.up.sql"
       - "internal/db/migrations/000014_nk_target_ar_in.up.sql"
+      - "internal/db/migrations/000015_refill_price.up.sql"
     queries: "internal/db/queries"
     gen:
       go:

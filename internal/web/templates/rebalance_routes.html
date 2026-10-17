@@ -112,13 +112,14 @@
           <tr>
             <th>Target</th>
             <th>Sources</th>
-            <th>No Budget</th>
+            <th title="verified routes above the target's budget: refill price only, not stored">Over Budget</th>
             <th>No Route</th>
             <th>Out Chans Tried</th>
             <th>New Routes</th>
             <th>Existing</th>
             <th>Probe Failed</th>
             <th>RPC Errors</th>
+            <th title="fee ppm of the cheapest verified route at the largest amount that got through">Refill ppm</th>
           </tr>
         </thead>
         <tbody id="probeDetailTable"></tbody>
@@ -190,7 +191,7 @@
       </div>
       <div class="w3-half">
         <div class="w3-card w3-padding w3-margin-bottom">
-          <h4>Probe Settings</h4>
+          <h4 title="Probes every auto-rebalance channel from its ar_amt_target down to AR-MinAmount (random payment hash, no payment settles), with AR-MaxFeeRate as the only fee limit: the cheapest route that got through is the refill price of the channel; routes within the budget are stored for the rebalancer.">Probe Settings</h4>
           <form class="w3-margin-bottom" action="/update_setting/" method="post">
             <label for="qr_enabled"><b>Enable Probing:</b></label>
             <select class="w3-select w3-border" id="qr_enabled" name="value">
@@ -213,7 +214,7 @@
             <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
           </form>
           <form class="w3-margin-top" action="/update_setting/" method="post">
-            <label for="qr_paths_per_src" title="When a probe fails before the target peer, the prober asks LND for another path without the failing node pair"><b>Paths per source</b> (1-10):</label>
+            <label for="qr_paths_per_src" title="When probes fail before the target peer down to AR-MinAmount, the prober asks LND for another path without the failing node pair"><b>Paths per source</b> (1-10):</label>
             <input class="w3-input w3-border" id="qr_paths_per_src" name="value" type="number" min="1" max="10" value="{{.qr_paths_per_src}}">
             <input type="hidden" name="key" value="QR-PathsPerSource">
             <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>

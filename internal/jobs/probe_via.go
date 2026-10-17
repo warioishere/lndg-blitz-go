@@ -56,7 +56,7 @@ func ProbeVia(ctx context.Context, stub ProbeLightningClient, routerstub ProbeRo
 	if err != nil {
 		return nil, err
 	}
-	sources, _ := probeSources(channels, target, targetBudgetPpm, maxFeeRate)
+	sources := probeSources(channels, target, targetBudgetPpm, maxFeeRate)
 
 	var attempts []ViaAttempt
 	for _, src := range sources {
