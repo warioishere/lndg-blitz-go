@@ -29,9 +29,9 @@
       <table class="w3-table-all w3-centered w3-hoverable w3-small">
         <tr>
           <th onclick="sortTable(event.target, 0, 'String', 0, 'a')">Channel</th>
-          <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Peer</th>
+          <th onclick="sortTable(event.target, 1, 'String')">Peer</th>
           <th title="checked: NK fee mode, unchecked: LNDg auto-fees">NK</th>
-          <th title="local liquidity target in %, empty: 100 - AR inbound target">Target %</th>
+          <th title="local liquidity target in %: 100 - iTarget, the level the rebalancer refills the channel to; set here for an NK channel, on the main page (iTarget) for the others">Target %</th>
           <th onclick="sortTable(event.target, 4, 'int')">Local %</th>
           <th onclick="sortTable(event.target, 5, 'int')">Fee</th>
           <th onclick="sortTable(event.target, 6, 'int')" title="inbound fee rate; * dynamic inbound checked">Inbound</th>
@@ -40,7 +40,7 @@
           <th onclick="sortTable(event.target, 9, 'int')" title="ppm the outbound flow paid in 72 h">Sold 72h</th>
           <th onclick="sortTable(event.target, 10, 'int')" title="cap of the peer's channels in this mode">Cap</th>
           <th title="no decrease of the peer's fee until (UTC)">Lock until</th>
-          <th onclick="sortTable(event.target, 12, 'int')" title="NK rebalance budget of the peer before the source fee">Budget ppm</th>
+          <th onclick="sortTable(event.target, 12, 'int')" title="NK rebalance budget of the peer before the source fee; for an LNDg channel the budget it would get in NK mode at its current fee">Budget ppm</th>
           <th>Last decision (UTC)</th>
         </tr>
         {{range $c := .channels}}
@@ -51,7 +51,7 @@
             <input type="hidden" name="channels" value="{{$c.chan_id}}">
             <input type="checkbox" class="nkbox" name="nk" value="{{$c.chan_id}}"{{if $c.nk}} checked{{end}}>
           </td>
-          <td><input type="number" min="0" max="100" style="width:60px" name="target_{{$c.chan_id}}" placeholder="{{$c.target}}"{{if $c.target_set}} value="{{$c.target}}"{{end}}></td>
+          <td>{{if $c.nk}}<input type="number" min="0" max="99" style="width:60px" name="target_{{$c.chan_id}}" value="{{$c.target}}">{{else}}<span title="100 - iTarget; set iTarget on the main page or switch the channel to NK">{{$c.target}}</span>{{end}}</td>
           <td>{{$c.local_pct}}</td>
           <td>{{$c.fee | intcomma}}</td>
           <td>{{$c.inbound | intcomma}}{{if $c.dynamic_inbound}}*{{end}}</td>

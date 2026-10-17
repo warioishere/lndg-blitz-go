@@ -14,7 +14,8 @@ import (
 // NK fee mode: a per-channel alternative to auto-fees (af_mode = 'nk'),
 // modelled on the fee algorithm a peer operator described in detail:
 //
-//   - each channel has a local liquidity target; below it the fee goes up,
+//   - each channel has a local liquidity target, 100 - ar_in_target (the level
+//     the rebalancer refills it to); below it the fee goes up,
 //     above it the fee goes down, in percent of the current fee (up faster than
 //     down);
 //   - the price the channel actually sold at (24 h, else 72 h) sets a target
@@ -366,11 +367,9 @@ func NkMaxHtlc(availSat, capacitySat, minMsat int64, step float64, empty bool) i
 	return max(int64(m), floor)
 }
 
-// NkTargetPct is the channel's NK local liquidity target in percent.
-func NkTargetPct(nkTarget pgtype.Int4, arInTarget int32) int {
-	if nkTarget.Valid {
-		return int(nkTarget.Int32)
-	}
+// NkTargetPct is the channel's NK local liquidity target in percent: 100 -
+// ar_in_target, the local level the rebalancer refills the channel to.
+func NkTargetPct(arInTarget int32) int {
 	return int(100 - arInTarget)
 }
 
@@ -413,7 +412,7 @@ func NkGroupInput(chs []db.GuiChannel, flows map[string]NkFlow) NkInput {
 	for _, ch := range chs {
 		local += ch.LocalBalance + ch.PendingOutbound
 		capacity += ch.Capacity
-		targetW += float64(NkTargetPct(ch.NkTarget, ch.ArInTarget)) * float64(ch.Capacity)
+		targetW += float64(NkTargetPct(ch.ArInTarget)) * float64(ch.Capacity)
 		in.Fee = max(in.Fee, int(ch.LocalFeeRate))
 		if ch.NkLastChange.Valid && ch.NkLastChange.Time.After(in.LastChange) {
 			in.LastChange = ch.NkLastChange.Time
@@ -438,7 +437,6 @@ type TargetChannel struct {
 	ArInTarget                      int32
 	Capacity, LocalBalance, PendOut int64
 	AfMode                          string
-	NkTarget                        pgtype.Int4
 }
 
 // TargetOf returns the TargetChannel of a channel row.
@@ -446,7 +444,7 @@ func TargetOf(ch db.GuiChannel) TargetChannel {
 	return TargetChannel{
 		ChanID: ch.ChanID, RemotePubkey: ch.RemotePubkey, LocalFeeRate: ch.LocalFeeRate, ArMaxCost: ch.ArMaxCost,
 		ArInTarget: ch.ArInTarget, Capacity: ch.Capacity, LocalBalance: ch.LocalBalance, PendOut: ch.PendingOutbound,
-		AfMode: ch.AfMode, NkTarget: ch.NkTarget,
+		AfMode: ch.AfMode,
 	}
 }
 
@@ -476,7 +474,7 @@ func TargetBudget(ctx context.Context, q NkBudgetQuerier, t TargetChannel, now t
 	}
 	if len(chs) == 0 {
 		chs = []db.GuiChannel{{ChanID: t.ChanID, LocalFeeRate: t.LocalFeeRate, ArInTarget: t.ArInTarget,
-			Capacity: t.Capacity, LocalBalance: t.LocalBalance, PendingOutbound: t.PendOut, NkTarget: t.NkTarget}}
+			Capacity: t.Capacity, LocalBalance: t.LocalBalance, PendingOutbound: t.PendOut}}
 	}
 	ids := make([]string, len(chs))
 	for i, ch := range chs {

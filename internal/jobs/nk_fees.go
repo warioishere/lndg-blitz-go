@@ -27,29 +27,67 @@ type nkQuerier interface {
 	NkForwardFlows(ctx context.Context, arg db.NkForwardFlowsParams) ([]db.NkForwardFlowsRow, error)
 	NkBalanceOutFlows(ctx context.Context, arg db.NkBalanceOutFlowsParams) ([]db.NkBalanceOutFlowsRow, error)
 	UpdateChannelNkPolicy(ctx context.Context, arg db.UpdateChannelNkPolicyParams) error
+	UpdateChannelNkShadow(ctx context.Context, arg db.UpdateChannelNkShadowParams) error
 	InsertNkFeeLog(ctx context.Context, arg db.InsertNkFeeLogParams) error
 	DeleteOldNkFeeLogs(ctx context.Context, timestamp pgtype.Timestamptz) error
 	InsertAutofee(ctx context.Context, arg db.InsertAutofeeParams) error
 	InsertInboundFeeLog(ctx context.Context, arg db.InsertInboundFeeLogParams) error
 }
 
-// nkShadow is the fee NK would run on a channel group that is not in NK mode,
-// carried from decision to decision.
-type nkShadow struct {
-	fee, inbound            int
-	lastChange, lastPublish time.Time
-}
-
-// nkRunner keeps what the NK job carries between runs: the shadow fees, the
-// last logged reason per channel (a decision is logged when it publishes or
-// its reason changes) and the run and purge times.
+// nkRunner keeps what the NK job carries between runs: the last logged reason
+// per channel (a decision is logged when it publishes or its reason changes)
+// and the run and purge times.
 type nkRunner struct {
 	lastRun, lastPurge time.Time
-	shadow             map[string]*nkShadow
 	reason             map[string]string
 }
 
-var nkState = &nkRunner{shadow: map[string]*nkShadow{}, reason: map[string]string{}}
+var nkState = &nkRunner{reason: map[string]string{}}
+
+// nkShadow is the fee NK would run on a channel group that is not in NK mode,
+// kept in gui_channels (nk_shadow_*) from decision to decision.
+type nkShadow struct {
+	fee, inbound int
+	lastChange   time.Time
+}
+
+// shadowOf is the shadow of a group: the one stored on its first channel that
+// has one, else the group's own fee and inbound rate.
+func shadowOf(chs []db.GuiChannel, in af.NkInput) nkShadow {
+	for _, ch := range chs {
+		if ch.NkShadowFee.Valid {
+			s := nkShadow{fee: int(ch.NkShadowFee.Int32), inbound: int(ch.NkShadowInbound.Int32)}
+			if ch.NkShadowChange.Valid {
+				s.lastChange = ch.NkShadowChange.Time
+			}
+			return s
+		}
+	}
+	return nkShadow{fee: in.Fee, inbound: in.Inbound}
+}
+
+// storeShadow writes the shadow to every channel of the group whose stored
+// one differs.
+func storeShadow(ctx context.Context, q nkQuerier, chs []db.GuiChannel, s nkShadow) {
+	var ids []string
+	for _, ch := range chs {
+		if !ch.NkShadowFee.Valid || int(ch.NkShadowFee.Int32) != s.fee || int(ch.NkShadowInbound.Int32) != s.inbound ||
+			ch.NkShadowChange.Valid != !s.lastChange.IsZero() || !ch.NkShadowChange.Time.Equal(s.lastChange) {
+			ids = append(ids, ch.ChanID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	arg := db.UpdateChannelNkShadowParams{ChanIds: ids, Fee: pgtype.Int4{Int32: int32(s.fee), Valid: true},
+		Inbound: pgtype.Int4{Int32: int32(s.inbound), Valid: true}}
+	if !s.lastChange.IsZero() {
+		arg.LastChange = ts(s.lastChange)
+	}
+	if err := q.UpdateChannelNkShadow(ctx, arg); err != nil {
+		dataLog(fmt.Sprintf("NK: error saving the shadow fee of %s: %s", chs[0].Alias, err))
+	}
+}
 
 // NkFees runs the NK fee mode: NK channels get their decisions applied, the
 // other auto-fee channels get shadow decisions when NK-Shadow is 1. Channels to
@@ -60,7 +98,6 @@ func NkFees(ctx context.Context, q nkQuerier, client policyClient) error {
 
 // nkGroup is the channels to one peer in one mode.
 type nkGroup struct {
-	key      string
 	nk       bool
 	channels []db.GuiChannel
 }
@@ -88,7 +125,7 @@ func (n *nkRunner) run(ctx context.Context, q nkQuerier, client policyClient, no
 		key := ch.RemotePubkey + "|" + ch.AfMode
 		g := groups[key]
 		if g == nil {
-			g = &nkGroup{key: key, nk: nk}
+			g = &nkGroup{nk: nk}
 			groups[key] = g
 		}
 		g.channels = append(g.channels, ch)
@@ -118,26 +155,20 @@ func (n *nkRunner) run(ctx context.Context, q nkQuerier, client policyClient, no
 			n.apply(ctx, q, client, g, in, d, p, inboundOK, now)
 			continue
 		}
-		s := n.shadow[g.key]
-		if s == nil {
-			s = &nkShadow{fee: in.Fee, inbound: in.Inbound}
-			n.shadow[g.key] = s
-		}
-		in.Fee, in.Inbound, in.LastChange, in.LastPublish = s.fee, s.inbound, s.lastChange, s.lastPublish
+		s := shadowOf(g.channels, in)
+		in.Fee, in.Inbound, in.LastChange = s.fee, s.inbound, s.lastChange
 		d := af.NkDecide(in, p, now)
 		changed := d.Fee != s.fee || d.Inbound != s.inbound
-		if d.Publish {
-			s.lastPublish = now
-		}
-		if changed {
-			s.lastChange = now
-		}
 		for _, ch := range g.channels {
 			if changed || n.reason[ch.ChanID] != d.Reason {
 				n.log(ctx, q, ch, false, in, d, s.fee, s.inbound, nkMaxHtlcFor(ch, d, p.MaxHtlcStep), now)
 			}
 		}
+		if changed {
+			s.lastChange = now
+		}
 		s.fee, s.inbound = d.Fee, d.Inbound
+		storeShadow(ctx, q, g.channels, s)
 	}
 	if now.Sub(n.lastPurge) >= time.Hour {
 		n.lastPurge = now

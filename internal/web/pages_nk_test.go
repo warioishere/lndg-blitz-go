@@ -49,27 +49,48 @@ func TestNkPagesIntegration(t *testing.T) {
 	require.Contains(t, html, "<td>900</td>", "sold price 24 h")
 	require.Contains(t, html, "<title>LNDg - NK Fee Mode</title>")
 	require.Contains(t, html, "NKPeer700")
-	require.Contains(t, html, `placeholder="40"`, "default target 100 - ar_in_target")
+	require.Contains(t, html, `100 - iTarget; set iTarget on the main page or switch the channel to NK">40</span>`, "an LNDg channel's target is 100 - ar_in_target, read-only")
 	require.Contains(t, html, "below target: 800 → 824 (shadow)")
 	require.Contains(t, html, "NK-StepUp", "settings block")
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
+
+	// rebalancer budget fee x max cost, NK budget below the fee
+	var budgets []map[string]any
+	getJSON(t, ts.URL+"/api/nk_budgets/", &budgets)
+	require.Len(t, budgets, 2)
+	require.Equal(t, "700", budgets[0]["chan_id"])
+	require.Equal(t, "lndg", budgets[0]["af_mode"])
+	require.EqualValues(t, 720, budgets[0]["budget_ppm"], "800 x 90 %")
+	nkBudget, ok := budgets[0]["nk_budget_ppm"].(float64)
+	require.True(t, ok)
+	require.True(t, nkBudget > 0 && nkBudget < 800, "min(fee, sold price) less the fill margin: %v", nkBudget)
+
+	// a stored shadow: the mode change of 700 clears it, 701 keeps its own
+	_, err := pool.Exec(ctx, `UPDATE gui_channels SET nk_shadow_fee = 850, nk_shadow_inbound = 0, nk_shadow_change = now()`)
+	require.NoError(t, err)
+
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.PostForm(ts.URL+"/nk/", url.Values{
-		"channels": {"700", "701"}, "nk": {"700"}, "target_700": {"5"}, "target_701": {""},
+		"channels": {"700", "701"}, "nk": {"700"}, "target_700": {"5"}, "target_701": {"20"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusFound, resp.StatusCode)
+	var shadow700, shadow701 *int32
+	require.NoError(t, pool.QueryRow(ctx, `SELECT nk_shadow_fee FROM gui_channels WHERE chan_id='700'`).Scan(&shadow700))
+	require.Nil(t, shadow700)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT nk_shadow_fee FROM gui_channels WHERE chan_id='701'`).Scan(&shadow701))
+	require.NotNil(t, shadow701)
+	require.EqualValues(t, 850, *shadow701)
 	var mode string
-	var target *int32
-	require.NoError(t, pool.QueryRow(ctx, `SELECT af_mode, nk_target FROM gui_channels WHERE chan_id='700'`).Scan(&mode, &target))
+	var arIn int32
+	require.NoError(t, pool.QueryRow(ctx, `SELECT af_mode, ar_in_target FROM gui_channels WHERE chan_id='700'`).Scan(&mode, &arIn))
 	require.Equal(t, "nk", mode)
-	require.NotNil(t, target)
-	require.EqualValues(t, 5, *target)
-	require.NoError(t, pool.QueryRow(ctx, `SELECT af_mode, nk_target FROM gui_channels WHERE chan_id='701'`).Scan(&mode, &target))
+	require.EqualValues(t, 95, arIn, "NK target 5 % local: iTarget 95")
+	require.NoError(t, pool.QueryRow(ctx, `SELECT af_mode, ar_in_target FROM gui_channels WHERE chan_id='701'`).Scan(&mode, &arIn))
 	require.Equal(t, "lndg", mode)
-	require.Nil(t, target)
+	require.EqualValues(t, 60, arIn, "an LNDg channel keeps its iTarget")
 
 	logHTML := getPage(t, srv, "/nk/log/?chan=700")
 	require.Contains(t, logHTML, "LNDg - NK Decision Log")

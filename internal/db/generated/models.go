@@ -117,9 +117,11 @@ type GuiChannel struct {
 	FlpSafety            int32              `json:"flp_safety"`
 	HtlcBoostChecked     pgtype.Timestamptz `json:"htlc_boost_checked"`
 	AfMode               string             `json:"af_mode"`
-	NkTarget             pgtype.Int4        `json:"nk_target"`
 	NkLastChange         pgtype.Timestamptz `json:"nk_last_change"`
 	NkLastPublish        pgtype.Timestamptz `json:"nk_last_publish"`
+	NkShadowFee          pgtype.Int4        `json:"nk_shadow_fee"`
+	NkShadowInbound      pgtype.Int4        `json:"nk_shadow_inbound"`
+	NkShadowChange       pgtype.Timestamptz `json:"nk_shadow_change"`
 }
 
 type GuiClosure struct {

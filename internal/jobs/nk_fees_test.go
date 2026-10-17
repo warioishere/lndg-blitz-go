@@ -18,6 +18,7 @@ type fakeNkJobQ struct {
 	channels []db.GuiChannel
 	fwd      []db.NkForwardFlowsRow
 	updates  []db.UpdateChannelNkPolicyParams
+	shadows  []db.UpdateChannelNkShadowParams
 	logs     []db.InsertNkFeeLogParams
 	autofees []db.InsertAutofeeParams
 	inbound  []db.InsertInboundFeeLogParams
@@ -44,6 +45,20 @@ func (f *fakeNkJobQ) NkBalanceOutFlows(ctx context.Context, arg db.NkBalanceOutF
 }
 func (f *fakeNkJobQ) UpdateChannelNkPolicy(ctx context.Context, arg db.UpdateChannelNkPolicyParams) error {
 	f.updates = append(f.updates, arg)
+	return nil
+}
+
+// UpdateChannelNkShadow stores the shadow on the channels, as the next
+// ListNkJobChannels returns them.
+func (f *fakeNkJobQ) UpdateChannelNkShadow(ctx context.Context, arg db.UpdateChannelNkShadowParams) error {
+	f.shadows = append(f.shadows, arg)
+	for i := range f.channels {
+		for _, id := range arg.ChanIds {
+			if f.channels[i].ChanID == id {
+				f.channels[i].NkShadowFee, f.channels[i].NkShadowInbound, f.channels[i].NkShadowChange = arg.Fee, arg.Inbound, arg.LastChange
+			}
+		}
+	}
 	return nil
 }
 func (f *fakeNkJobQ) InsertNkFeeLog(ctx context.Context, arg db.InsertNkFeeLogParams) error {
@@ -77,7 +92,7 @@ func TestNkFeesAppliesNkChannels(t *testing.T) {
 	q.channels[0].InboundOffset = -1
 	q.fwd = []db.NkForwardFlowsRow{{ChanID: "1", Amt6h: 1_000_000, Fee6h: 1000, Amt24h: 1_000_000, Fee24h: 1000, Amt72h: 1_000_000, Fee72h: 1000}}
 	client := &fakePolicyClient{version: "0.18.3-beta"}
-	n := &nkRunner{shadow: map[string]*nkShadow{}, reason: map[string]string{}}
+	n := &nkRunner{reason: map[string]string{}}
 	now := time.Unix(1_700_000_000, 0)
 	require.NoError(t, n.run(context.Background(), q, client, now))
 
@@ -106,7 +121,7 @@ func TestNkFeesAppliesNkChannels(t *testing.T) {
 func TestNkFeesShadow(t *testing.T) {
 	q := &fakeNkJobQ{settings: map[string]string{}, channels: []db.GuiChannel{nkChannel("1", "a", "lndg", 1000, 8_000_000)}}
 	client := &fakePolicyClient{version: "0.18.3-beta"}
-	n := &nkRunner{shadow: map[string]*nkShadow{}, reason: map[string]string{}}
+	n := &nkRunner{reason: map[string]string{}}
 	now := time.Unix(1_700_000_000, 0)
 	require.NoError(t, n.run(context.Background(), q, client, now))
 	assert.Empty(t, client.policyReqs, "a shadow channel is never changed")
@@ -121,10 +136,21 @@ func TestNkFeesShadow(t *testing.T) {
 	last := q.logs[len(q.logs)-1]
 	assert.Equal(t, int32(990), last.FeeOld)
 	assert.Equal(t, int32(980), last.FeeNew)
+	assert.Equal(t, int32(1000), q.channels[0].LocalFeeRate, "the channel's own fee stays")
+	assert.Equal(t, int32(980), q.channels[0].NkShadowFee.Int32)
+	shadowWrites := len(q.shadows)
+
+	// a restart keeps the shadow: a new runner waits on the stored change, then steps from 980
+	restarted := &nkRunner{reason: map[string]string{}}
+	require.NoError(t, restarted.run(context.Background(), q, client, now.Add(9*time.Minute)))
+	assert.Equal(t, int32(980), q.channels[0].NkShadowFee.Int32, "within 5 minutes of the stored change")
+	assert.Len(t, q.shadows, shadowWrites, "an unchanged shadow is not written again")
+	require.NoError(t, restarted.run(context.Background(), q, client, now.Add(12*time.Minute)))
+	assert.Equal(t, int32(970), q.channels[0].NkShadowFee.Int32)
 
 	// NK-Shadow 0: no shadow decisions
 	q2 := &fakeNkJobQ{settings: map[string]string{"NK-Shadow": "0"}, channels: q.channels}
-	n2 := &nkRunner{shadow: map[string]*nkShadow{}, reason: map[string]string{}}
+	n2 := &nkRunner{reason: map[string]string{}}
 	require.NoError(t, n2.run(context.Background(), q2, client, now))
 	assert.Empty(t, q2.logs)
 }

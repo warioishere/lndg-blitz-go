@@ -121,7 +121,7 @@ func TestMigrateTakesOverDjangoDatabase(t *testing.T) {
 	var version int
 	var dirty bool
 	require.NoError(t, conn.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty))
-	assert.Equal(t, 12, version)
+	assert.Equal(t, 14, version)
 	assert.False(t, dirty)
 	var value string
 	require.NoError(t, conn.QueryRow(ctx, `SELECT value FROM gui_localsettings WHERE key='AR-Enabled'`).Scan(&value))
@@ -159,4 +159,10 @@ func TestMigrateTakesOverDjangoDatabase(t *testing.T) {
 	var hasScout bool
 	require.NoError(t, conn.QueryRow(ctx, `SELECT to_regclass('public.scout_path') IS NOT NULL`).Scan(&hasScout))
 	assert.True(t, hasScout, "000012 applied")
+	var hasNkShadow bool
+	require.NoError(t, conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='gui_channels' AND column_name='nk_shadow_fee')`).Scan(&hasNkShadow))
+	assert.True(t, hasNkShadow, "000013 applied")
+	var hasNkTarget bool
+	require.NoError(t, conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='gui_channels' AND column_name='nk_target')`).Scan(&hasNkTarget))
+	assert.False(t, hasNkTarget, "000014 applied")
 }

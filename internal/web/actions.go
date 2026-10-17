@@ -22,6 +22,8 @@ func (s *Server) mountActions(api chi.Router) {
 	api.Get("/rebalance_stats", s.handleRebalanceStats)
 	api.Get("/pair_stats/", s.handlePairStats)
 	api.Get("/pair_stats", s.handlePairStats)
+	api.Get("/nk_budgets/", s.handleNkBudgets)
+	api.Get("/nk_budgets", s.handleNkBudgets)
 	api.Get("/forwards_summary/", s.handleForwardsSummary)
 	api.Get("/forwards_summary", s.handleForwardsSummary)
 	api.Get("/node_info/", s.handleNodeInfo)

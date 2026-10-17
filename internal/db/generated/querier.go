@@ -256,6 +256,9 @@ type Querier interface {
 	// auto_maxhtlc_job: targeted update (jobs.py:877-880).
 	UpdateChannelMaxHtlc(ctx context.Context, arg UpdateChannelMaxHtlcParams) error
 	UpdateChannelNkPolicy(ctx context.Context, arg UpdateChannelNkPolicyParams) error
+	// The shadow fee, inbound rate and last change of the given channels (the
+	// channels to one peer that the NK job decides together).
+	UpdateChannelNkShadow(ctx context.Context, arg UpdateChannelNkShadowParams) error
 	// LND state only. Our own policy goes through SyncChannelLocalPolicy and UI-owned
 	// settings are never written here, so a concurrent UI write is not reverted.
 	UpdateChannelSync(ctx context.Context, arg UpdateChannelSyncParams) error

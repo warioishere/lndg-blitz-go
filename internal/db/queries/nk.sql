@@ -55,6 +55,12 @@ UPDATE gui_channels SET local_fee_rate = $2, local_base_fee = $3, local_inbound_
     nk_last_change = $8, nk_last_publish = $9
 WHERE chan_id = $1;
 
+-- name: UpdateChannelNkShadow :exec
+-- The shadow fee, inbound rate and last change of the given channels (the
+-- channels to one peer that the NK job decides together).
+UPDATE gui_channels SET nk_shadow_fee = @fee, nk_shadow_inbound = @inbound, nk_shadow_change = @last_change
+WHERE chan_id = ANY(@chan_ids::varchar[]);
+
 -- name: InsertNkFeeLog :exec
 INSERT INTO nk_fee_log ("timestamp", chan_id, peer_alias, applied, reason, local_pct, target_pct,
     flow24_ppm, flow72_ppm, lock_until, fee_old, fee_new, cap_ppm, max_htlc_old, max_htlc_new,

@@ -5,6 +5,8 @@
   const now = new Date(),
     _1day_ago = new Date(new Date().setDate(now.getDate()-1)).getTime(),
     _7days_ago = new Date(new Date().setDate(now.getDate()-7)).toISOString().substring(0,19)
+  // per chan_id the rebalancer budget and the NK budget (/api/nk_budgets/)
+  let nkBudgets = {}
 
   const home_ch_base = Object.assign({}, base_ch_template, {
     "unsettled": ch => (ch.unsettled_balance > 0 ? {innerHTML: `${ch.unsettled_balance.intcomma()} <small class="w3-round w3-border-small w3-border-grey">${ch.htlc_count}</small>`} : {innerHTML: `${ch.unsettled_balance.intcomma()}`, style: {color: 'gray'} }),
@@ -27,6 +29,12 @@
       }
     }),
   })
+  detailed_ch_template.ar_budget = ch => {
+    const b = nkBudgets[ch.chan_id]
+    if (!b) return {innerHTML: '---', style: {color: 'gray'}}
+    const nk = b.af_mode != 'nk' && b.nk_budget_ppm != null ? ` <small class="w3-round w3-border-small w3-border-grey" title="NK budget at the current fee">NK ${b.nk_budget_ppm.intcomma()}</small>` : ''
+    return {innerHTML: `${b.budget_ppm.intcomma()}${nk}`, style: {color: ch.auto_rebalance ? null : 'gray'}}
+  }
   let {iRate, iBase, ar_in_target, auto_rebalance} = detailed_ch_template
   const inactive_ch_template = Object.assign({}, home_ch_base, {iRate, iBase}, {
     "local_commit": ch => ({innerHTML: ch.local_commit.intcomma()}),
@@ -466,6 +474,7 @@
     const closures_task = GET('closures', {data: {close_height__gte: (node_info.block.height - 1008) } })
     const invoices_task = GET('invoices', {data: {state__lt: 2, limit: 10} })
     const failedHTLCs_task = GET('failedhtlcs', {data: {wire_failure__lt: 99, limit:10} })
+    const nkBudgets_task = GET('nk_budgets', {data: {} })
 
     let [updates, pending_htlcs, active, inactive, private, public_capacity] = [0,0,[],[],[],0]
     for (ch of (await GET('channels', {data: {is_open:true} })).results){ //basic setup
@@ -489,6 +498,8 @@
 
     let [forwardsSummary, payments7d] = [(await forwardsSummary_task).results, (await payments_task).results]
     let [forwards_sum, forwards_summary] = process_forwards(forwardsSummary)
+    const budgets = await nkBudgets_task
+    nkBudgets = Object.fromEntries((Array.isArray(budgets) ? budgets : []).map(b => [b.chan_id, b]))
     let [activeSum, privateSum, inactiveSum] = [build_active(active, forwards_sum), build_private(private), build_inactive(inactive)]
     update_summary(node_info, payments7d, onchain_task, closures_task, activeSum, inactiveSum, privateSum, forwards_summary, inv_rev_task)
     build('Pending Open', pending_open_template, node_info.pending_open||[])

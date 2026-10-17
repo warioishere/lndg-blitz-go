@@ -65,7 +65,7 @@ WHERE chan_id = ANY($1::varchar[]);
 -- chan_id wie Djangos .first() (Primaerschluessel), sonst ist die Wahl bei mehreren
 -- Channels zum selben Peer zufaellig.
 SELECT chan_id, local_fee_rate, ar_max_cost, ar_in_target, capacity, local_balance, pending_outbound,
-    af_mode, nk_target
+    af_mode
 FROM gui_channels
 WHERE is_open = true AND auto_rebalance = true AND remote_pubkey = $1
 ORDER BY chan_id

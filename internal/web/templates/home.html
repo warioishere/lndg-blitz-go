@@ -186,6 +186,7 @@
           <th title="When AR is DISABLED for the channel, keep pushing OUT of the channel until its outbound liquidity falls below the oTarget%." width=4%>oTarget%</th>
           <th title="When AR is ENABLED for the channel, keep pulling IN to the channel until its inbound liquidity falls below the iTarget%." width=4%>iTarget%</th>
           <th title="When AR is ENABLED it will refill the channel with outbound liquidity." width=4%>AR</th>
+          <th title="Most the rebalancer pays to refill the channel now (ppm, before the source fee): fee x AR max cost, or the NK budget for an NK channel. NK: the budget in NK mode at the current fee (auto-fee channels)." width=4% onclick="sortTable(event.target, 17, 'int')">AR Budget</th>
         </tr>
       </thead>
       <tbody id="active_channels"></tbody>
