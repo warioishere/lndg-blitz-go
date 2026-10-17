@@ -26,23 +26,24 @@
       <span>{{.nk_count}} channel(s) in NK mode</span>
     </div>
     <div style="overflow-x:auto;max-height:900px">
-      <table class="w3-table-all w3-centered w3-hoverable w3-small">
-        <tr>
-          <th onclick="sortTable(event.target, 0, 'String', 0, 'a')">Channel</th>
-          <th onclick="sortTable(event.target, 1, 'String')">Peer</th>
+      <table id="nkTable" class="w3-table-all w3-centered w3-hoverable w3-small">
+        <thead><tr>
+          <th>Channel</th>
+          <th>Peer</th>
           <th title="checked: NK fee mode, unchecked: LNDg auto-fees">NK</th>
           <th title="local liquidity target in %: 100 - iTarget, the level the rebalancer refills the channel to; set here for an NK channel, on the main page (iTarget) for the others">Target %</th>
-          <th onclick="sortTable(event.target, 4, 'int')">Local %</th>
-          <th onclick="sortTable(event.target, 5, 'int')">Fee</th>
-          <th onclick="sortTable(event.target, 6, 'int')" title="inbound fee rate; * dynamic inbound checked">Inbound</th>
-          <th onclick="sortTable(event.target, 7, 'int')">max_htlc</th>
-          <th onclick="sortTable(event.target, 8, 'int')" title="ppm the outbound flow paid in 24 h">Sold 24h</th>
-          <th onclick="sortTable(event.target, 9, 'int')" title="ppm the outbound flow paid in 72 h">Sold 72h</th>
-          <th onclick="sortTable(event.target, 10, 'int')" title="cap of the peer's channels in this mode">Cap</th>
+          <th>Local %</th>
+          <th>Fee</th>
+          <th title="inbound fee rate; * dynamic inbound checked">Inbound</th>
+          <th>max_htlc</th>
+          <th title="ppm the outbound flow paid in 24 h">Sold 24h</th>
+          <th title="ppm the outbound flow paid in 72 h">Sold 72h</th>
+          <th title="cap of the peer's channels in this mode">Cap</th>
           <th title="no decrease of the peer's fee until (UTC)">Lock until</th>
-          <th onclick="sortTable(event.target, 12, 'int')" title="NK rebalance budget of the peer before the source fee; for an LNDg channel the budget it would get in NK mode at its current fee">Budget ppm</th>
+          <th title="NK rebalance budget of the peer before the source fee; for an LNDg channel the budget it would get in NK mode at its current fee">Budget ppm</th>
           <th>Last decision (UTC)</th>
-        </tr>
+        </tr></thead>
+        <tbody>
         {{range $c := .channels}}
         <tr{{if $c.nk}} class="w3-pale-green"{{end}}>
           <td><a href="/channel?={{$c.chan_id}}" target="_blank">{{$c.short_chan_id}}</a></td>
@@ -64,6 +65,7 @@
           <td style="text-align:left"><a href="/nk/log/?chan={{$c.chan_id}}" target="_blank">{{$c.last}}</a></td>
         </tr>
         {{end}}
+        </tbody>
       </table>
     </div>
   </form>
@@ -78,5 +80,60 @@
 function nkAll(sel, val){
   document.querySelectorAll(sel).forEach(cb => cb.checked = val);
 }
+
+// Every column sorts on a click of its header, the first click low to high;
+// the choice is kept in this browser (default: Local % low to high). A cell
+// sorts by its number input's value, a checkbox by checked, else its text;
+// empty cells go last.
+const NK_SORT_KEY = 'nk-sort';
+const NK_SORT_DEFAULT = {col: 4, asc: true};
+
+function nkCellValue(td) {
+  const num = td.querySelector('input[type=number]');
+  const box = td.querySelector('input[type=checkbox]');
+  const raw = num ? num.value : box ? (box.checked ? '1' : '0') : td.innerText.trim();
+  if (raw === '') return null;
+  const n = parseFloat(raw.replace(/,/g, '').replace(/\*$/, ''));
+  return isNaN(n) || !/^-?[\d,.]+\*?$/.test(raw) ? raw.toLowerCase() : n;
+}
+
+function nkSort(col, asc) {
+  const table = document.getElementById('nkTable');
+  if (!table) return;
+  const body = table.tBodies[0];
+  const rows = [...body.rows];
+  rows.sort((a, b) => {
+    const va = nkCellValue(a.cells[col]), vb = nkCellValue(b.cells[col]);
+    if (va === null || vb === null) return va === vb ? 0 : va === null ? 1 : -1;
+    const c = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb));
+    return asc ? c : -c;
+  });
+  rows.forEach(r => body.appendChild(r));
+  [...table.tHead.rows[0].cells].forEach((th, i) => {
+    const mark = th.querySelector('.nk-arrow');
+    mark.innerText = i === col ? (asc ? ' \u25B2' : ' \u25BC') : ' \u21C5';
+    mark.style.opacity = i === col ? '1' : '0.35';
+  });
+  try { localStorage.setItem(NK_SORT_KEY, JSON.stringify({col, asc})); } catch (e) {}
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const table = document.getElementById('nkTable');
+  if (!table) return;
+  let saved = NK_SORT_DEFAULT;
+  try { saved = JSON.parse(localStorage.getItem(NK_SORT_KEY)) || NK_SORT_DEFAULT; } catch (e) {}
+  const ths = [...table.tHead.rows[0].cells];
+  if (!(saved.col >= 0 && saved.col < ths.length)) saved = NK_SORT_DEFAULT;
+  let current = saved;
+  ths.forEach((th, i) => {
+    th.style.cursor = 'pointer';
+    th.insertAdjacentHTML('beforeend', '<span class="nk-arrow"></span>');
+    th.addEventListener('click', () => {
+      current = {col: i, asc: current.col === i ? !current.asc : true};
+      nkSort(current.col, current.asc);
+    });
+  });
+  nkSort(current.col, !!current.asc);
+});
 </script>
 {{end}}
