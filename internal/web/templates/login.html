@@ -1,0 +1,16 @@
+{{define "title"}}LNDg - Login{{end}}
+{{define "meta"}}<meta name="viewport" content="width=device-width, initial-scale=1">{{end}}
+{{define "content"}}
+<div class="w3-container w3-padding-small">
+  <center>
+    <h2>Login</h2>
+    {{if .error}}<p class="w3-text-red">{{.error}}</p>{{end}}
+    <form method="post" action="/lndg-admin/login/">
+      <input type="hidden" name="next" value="{{.next}}">
+      <p><input type="text" name="username" value="{{.username}}" placeholder="Username" autocomplete="username" autocapitalize="none" required autofocus></p>
+      <p><input type="password" name="password" placeholder="Password" autocomplete="current-password" required></p>
+      <p><input type="submit" value="Log in"></p>
+    </form>
+  </center>
+</div>
+{{end}}

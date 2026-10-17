@@ -2,8 +2,11 @@ package web
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,7 +26,7 @@ func TestCheckDjangoPassword(t *testing.T) {
 	assert.False(t, checkDjangoPassword("correct horse", ""), "empty")
 }
 
-func TestDjangoBasicAuthIntegration(t *testing.T) {
+func TestDjangoAuthIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping container-based test in -short mode")
 	}
@@ -42,6 +45,31 @@ func TestDjangoBasicAuthIntegration(t *testing.T) {
 	}
 	ts := httptest.NewServer(NewServer(&config.Settings{LOGIN_REQUIRED: true}, pool).Handler())
 	defer ts.Close()
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	login := func(user, pass, next string) *http.Response {
+		resp, err := noRedirect.PostForm(ts.URL+loginPath, url.Values{"username": {user}, "password": {pass}, "next": {next}})
+		require.NoError(t, err)
+		resp.Body.Close()
+		return resp
+	}
+	get := func(path string, c *http.Cookie) *http.Response {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+		if c != nil {
+			req.AddCookie(c)
+		}
+		resp, err := noRedirect.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+		return resp
+	}
+	session := func(resp *http.Response) *http.Cookie {
+		for _, c := range resp.Cookies() {
+			if c.Name == sessionCookie {
+				return c
+			}
+		}
+		return nil
+	}
 
 	// the Go schema has no auth_user (a Django table): refuse instead of opening up
 	assert.Equal(t, 401, status(ts, "lndg-admin", "correct horse"), "no auth_user table")
@@ -57,10 +85,49 @@ func TestDjangoBasicAuthIntegration(t *testing.T) {
 	assert.Equal(t, 200, status(ts, "lndg-admin", "correct horse"), "cached")
 	assert.Equal(t, 401, status(ts, "old", "correct horse"), "inactive user")
 
+	// browsers: a page without session goes to the form, the API answers 401 without a Basic challenge
+	resp := get("/channels?x=1", nil)
+	assert.Equal(t, http.StatusFound, resp.StatusCode)
+	assert.Equal(t, loginPath+"?next="+url.QueryEscape("/channels?x=1"), resp.Header.Get("Location"))
+	resp = get("/api/channels/", nil)
+	assert.Equal(t, 401, resp.StatusCode)
+	assert.Empty(t, resp.Header.Get("WWW-Authenticate"))
+	assert.Equal(t, 200, get("/static/w3style.css", nil).StatusCode, "static without login")
+	formResp, err := http.Get(ts.URL + loginPath + "?next=/channels")
+	require.NoError(t, err)
+	form, _ := io.ReadAll(formResp.Body)
+	formResp.Body.Close()
+	assert.Contains(t, string(form), `name="next" value="/channels"`)
+
+	resp = login("lndg-admin", "wrong", "/channels")
+	assert.Equal(t, 200, resp.StatusCode, "form again")
+	assert.Nil(t, session(resp))
+	assert.Nil(t, session(login("old", "correct horse", "/")), "inactive user")
+	resp = login("lndg-admin", "correct horse", "/channels")
+	assert.Equal(t, http.StatusFound, resp.StatusCode)
+	assert.Equal(t, "/channels", resp.Header.Get("Location"))
+	c := session(resp)
+	require.NotNil(t, c)
+	assert.True(t, c.HttpOnly)
+	assert.Equal(t, http.SameSiteLaxMode, c.SameSite)
+	assert.Equal(t, 200, get("/api/channels/", c).StatusCode)
+	assert.Equal(t, "/", login("lndg-admin", "correct horse", "//evil.example").Header.Get("Location"), "next stays on site")
+
+	parts := strings.Split(c.Value, ".")
+	tampered := &http.Cookie{Name: sessionCookie, Value: parts[0] + "." + parts[1] + "9." + parts[2]} // later expiry, same signature
+	assert.Equal(t, 401, get("/api/channels/", tampered).StatusCode)
+	expired := &http.Cookie{Name: sessionCookie, Value: sessionValue("lndg-admin", 1, testDjangoHash)}
+	assert.Equal(t, 401, get("/api/channels/", expired).StatusCode)
+
+	resp = get("/logout/", c)
+	assert.Equal(t, http.StatusFound, resp.StatusCode)
+	assert.Equal(t, -1, session(resp).MaxAge)
+
 	// a password change (new hash) invalidates the remembered login
 	_, err = pool.Exec(ctx, `UPDATE auth_user SET password = 'pbkdf2_sha256$1000$other$aGFzaA==' WHERE username = 'lndg-admin'`)
 	require.NoError(t, err)
 	assert.Equal(t, 401, status(ts, "lndg-admin", "correct horse"), "old password after change")
+	assert.Equal(t, 401, get("/api/channels/", c).StatusCode, "session after password change")
 
 	// static Basic Auth credentials take precedence
 	static := httptest.NewServer(NewServer(&config.Settings{LOGIN_REQUIRED: true, WEB_BASIC_AUTH_USER: "u", WEB_BASIC_AUTH_PASS: "p"}, pool).Handler())

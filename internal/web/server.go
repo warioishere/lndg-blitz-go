@@ -75,8 +75,11 @@ func (s *Server) routes() chi.Router {
 	case s.basicAuthEnabled():
 		r.Use(s.basicAuth)
 	case s.cfg.LOGIN_REQUIRED:
-		r.Use(s.djangoBasicAuth)
+		r.Use(s.djangoAuth)
+		r.Get(loginPath, s.handleLoginForm)
+		r.Post(loginPath, s.handleLogin)
 	}
+	r.Get("/logout/", s.handleLogout)
 
 	// Static assets served under /static/.
 	sub, err := fs.Sub(staticFS, "static")
