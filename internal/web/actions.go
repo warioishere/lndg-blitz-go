@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,6 +24,8 @@ func (s *Server) mountActions(api chi.Router) {
 	api.Get("/pair_stats/", s.handlePairStats)
 	api.Get("/pair_stats", s.handlePairStats)
 	api.Get("/nk_budgets/", s.handleNkBudgets)
+	api.Get("/rebalance_channels/", s.handleRebalanceChannels)
+	api.Get("/rebalance_channels", s.handleRebalanceChannels)
 	api.Get("/nk_budgets", s.handleNkBudgets)
 	api.Get("/forwards_summary/", s.handleForwardsSummary)
 	api.Get("/forwards_summary", s.handleForwardsSummary)
@@ -243,6 +246,52 @@ func (s *Server) handleRebalanceStats(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := rows.Err(); err != nil {
 		writeAPIError(w, "Unable to fetch stats! Error: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
+}
+
+// handleRebalanceChannels returns for the payment hashes in ?hashes= (comma
+// separated, at most 100) the channels of the rebalance payment: chan_out (the
+// source, "MPP" for several) and rebal_chan (the channel it filled), with
+// their aliases.
+func (s *Server) handleRebalanceChannels(w http.ResponseWriter, r *http.Request) {
+	var hashes []string
+	for _, h := range strings.Split(r.URL.Query().Get("hashes"), ",") {
+		if h = strings.TrimSpace(h); h != "" && len(hashes) < 100 {
+			hashes = append(hashes, h)
+		}
+	}
+	results := make([]any, 0, len(hashes))
+	if len(hashes) == 0 {
+		writeJSON(w, http.StatusOK, results)
+		return
+	}
+	rows, err := s.db.Query(r.Context(),
+		`SELECT p.payment_hash, p.chan_out, p.chan_out_alias, p.rebal_chan, c.alias
+		 FROM gui_payments p LEFT JOIN gui_channels c ON c.chan_id = p.rebal_chan
+		 WHERE p.payment_hash = ANY($1)`, hashes)
+	if err != nil {
+		writeAPIError(w, "Unable to fetch rebalance channels! Error: "+err.Error())
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hash string
+		var chanOut, chanOutAlias, rebalChan, rebalAlias pgtype.Text
+		if err := rows.Scan(&hash, &chanOut, &chanOutAlias, &rebalChan, &rebalAlias); err != nil {
+			writeAPIError(w, "Unable to fetch rebalance channels! Error: "+err.Error())
+			return
+		}
+		results = append(results, newOrderedMap().
+			Set("payment_hash", hash).
+			Set("chan_out", chanOut).
+			Set("chan_out_alias", chanOutAlias).
+			Set("rebal_chan", rebalChan).
+			Set("rebal_chan_alias", rebalAlias))
+	}
+	if err := rows.Err(); err != nil {
+		writeAPIError(w, "Unable to fetch rebalance channels! Error: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, results)

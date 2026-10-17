@@ -184,6 +184,39 @@ func TestPairStatsIntegration(t *testing.T) {
 	require.EqualValues(t, 1, byFrom["pkB"]["successes"])
 }
 
+func TestRebalanceChannelsIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping container-based test in -short mode")
+	}
+	pool, cleanup := setupDB(t)
+	defer cleanup()
+
+	insertRow(t, pool, "gui_channels", map[string]any{"chan_id": "222", "alias": "filled", "remote_pubkey": "02f", "funding_txid": "f2", "is_open": true})
+	insertRow(t, pool, "gui_payments", map[string]any{"creation_date": time.Now(), "payment_hash": "h1", "value": 1000.0, "fee": 1.0,
+		"status": 2, "index": 1, "cleaned": false, "chan_out": "111", "chan_out_alias": "source", "rebal_chan": "222"})
+	insertRow(t, pool, "gui_payments", map[string]any{"creation_date": time.Now(), "payment_hash": "h2", "value": 1000.0, "fee": 1.0,
+		"status": 2, "index": 2, "cleaned": false, "chan_out": "MPP", "chan_out_alias": "MPP"})
+
+	ts := httptest.NewServer(NewServer(&config.Settings{}, pool).Handler())
+	defer ts.Close()
+	var got []map[string]any
+	getJSON(t, ts.URL+"/api/rebalance_channels/?hashes=h1,h2,unknown", &got)
+	require.Len(t, got, 2)
+	byHash := map[string]map[string]any{}
+	for _, c := range got {
+		byHash[c["payment_hash"].(string)] = c
+	}
+	require.Equal(t, "111", byHash["h1"]["chan_out"])
+	require.Equal(t, "source", byHash["h1"]["chan_out_alias"])
+	require.Equal(t, "222", byHash["h1"]["rebal_chan"])
+	require.Equal(t, "filled", byHash["h1"]["rebal_chan_alias"])
+	require.Equal(t, "MPP", byHash["h2"]["chan_out"])
+	require.Nil(t, byHash["h2"]["rebal_chan"])
+
+	getJSON(t, ts.URL+"/api/rebalance_channels/", &got)
+	require.Empty(t, got)
+}
+
 func TestProbeLogViewSetIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping container-based test in -short mode")

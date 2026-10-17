@@ -19,6 +19,8 @@ function initRebalancesTable(params) {
     'fees_paid': rebalance => ({innerHTML: rebalance.status == 2 ? Number(rebalance.fees_paid).toLocaleString() : '---'}),
     'paid_ppm': rebalance => ({innerHTML: rebalance.status == 2 && rebalance.value > 0 ? Math.round(rebalance.fees_paid*1000000/rebalance.value).toLocaleString() : '---'}),
     'target_alias': rebalance => ({innerHTML: rebalance.target_alias !== '' ? rebalance.target_alias : '---'}),
+    'chan_out': rebalance => ({innerHTML: rebalance.status == 2 ? '...' : '---'}),
+    'rebal_chan': rebalance => ({innerHTML: rebalance.status == 2 ? '...' : '---'}),
     'status': rebalance => ({innerHTML: statuses[rebalance.status], title: rebalance.status}),
     'payment_hash': rebalance => ({innerHTML: (rebalance.payment_hash || '').length == 0 ? '---' :
          `<a href="/route?=${rebalance.payment_hash}" target="_blank">${rebalance.payment_hash.substring(0,7)}</a>`}),
@@ -54,6 +56,28 @@ function initRebalancesTable(params) {
       return {innerHTML: input}
     }
   };
+  // fillChannels writes the source and the filled channel of the successful
+  // rebalances among rows (/api/rebalance_channels/).
+  function channelLink(id, alias) {
+    if (!id) return '---'
+    if (id === 'MPP') return 'MPP'
+    return `<a href="/channel?=${id}" target="_blank">${alias || id}</a>`
+  }
+  async function fillChannels(tbody, rebalances){
+    const hashOf = {}
+    rebalances.filter(r => r.status == 2 && r.payment_hash).forEach(r => hashOf[r.id] = r.payment_hash)
+    const hashes = Object.values(hashOf)
+    if (hashes.length == 0) return
+    const res = await GET('rebalance_channels', {data: {hashes: hashes.join(',')}})
+    if (!Array.isArray(res)) return
+    const byHash = Object.fromEntries(res.map(c => [c.payment_hash, c]))
+    for (const tr of tbody.rows) {
+      if (!(tr.objId in hashOf)) continue
+      const c = byHash[hashOf[tr.objId]]
+      tr.querySelector('td[name=chan_out]').innerHTML = c ? channelLink(c.chan_out, c.chan_out_alias) : '---'
+      tr.querySelector('td[name=rebal_chan]').innerHTML = c ? channelLink(c.rebal_chan, c.rebal_chan_alias) : '---'
+    }
+  }
   async function buildTable(){
     const res = await GET('rebalancer', {data: {limit: params.count, status: params.status, payment_hash: params.payment_hash, last_hop_pubkey: params.last_hop_pubkey }})
     if(res.errors) return
@@ -65,6 +89,7 @@ function initRebalancesTable(params) {
     const table = document.getElementById("rebalances_"+params.status), template = use(transformations)
     table.innerHTML = null
     res.results.forEach(rebalance => table.append(template.render(rebalance)));
+    fillChannels(table, res.results)
 
     await auto_refresh(buildTable)
   }
@@ -86,5 +111,6 @@ function initRebalancesTable(params) {
     }
     const tableBody = rebalsTable.tBodies[1]
     next_rebals.forEach(rebalance => tableBody.append(use(transformations).render(rebalance)))
+    fillChannels(tableBody, next_rebals)
   }
 }
